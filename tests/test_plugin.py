@@ -91,6 +91,38 @@ class PluginTests(unittest.TestCase):
             result,error=self.m.provider_quotas_cached()
         self.assertEqual(self.m.deepseek_balance({'provider_quotas':result})[1],-0.12)
 
+    def deepseek_entry(self, payload, error=None):
+        with patch.object(self.m,'module_enabled',side_effect=lambda key:key=='deepseek'), \
+             patch.object(self.m,'connection_ready',return_value=True), \
+             patch.object(self.m,'deepseek_logo_image',return_value=None):
+            return self.m.panel_entries(self.m.resource_lines({'provider_quotas':payload,'provider_quotas_error':error}))[0]
+
+    def test_deepseek_refresh_keeps_home_balance_stable_and_reports_status_in_flyout(self):
+        payload={'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥2.00'}]}}]}
+        self.record('provider_quotas',payload)
+        ttl=self.m.EXTERNAL_TTLS['provider_quotas']
+        before=self.deepseek_entry(*self.m.cache_result(self.m.read_cache('provider_quotas'),ttl))
+        self.m.invalidate_caches(['provider_quotas'])
+        during=self.deepseek_entry(*self.m.cache_result(self.m.read_cache('provider_quotas'),ttl))
+        self.assertEqual(before['value'],during['value']);self.assertEqual(during['value'],'¥2.00')
+        state=next(row for row in during['children'] if row['label']=='余额更新')
+        self.assertEqual(state['value'],'正在刷新')
+        after=self.deepseek_entry(*self.m.cached_fetch('provider_quotas',lambda:(payload,None),ttl))
+        self.assertEqual(after['value'],'¥2.00')
+        self.assertEqual(next(row for row in after['children'] if row['label']=='余额更新')['value'],'刚刚更新')
+
+    def test_deepseek_initial_loading_and_refresh_failure_remain_distinct(self):
+        ttl=self.m.EXTERNAL_TTLS['provider_quotas']
+        pending=self.deepseek_entry(*self.m.cache_result({},ttl))
+        self.assertEqual(pending['value'],'正在读取')
+        self.assertNotIn('失败',str(pending))
+        self.record('provider_quotas',{'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥2.00'}]}}]},age=3600)
+        failed=self.deepseek_entry(*self.m.cached_fetch('provider_quotas',lambda:(None,(0,'timeout',None)),ttl))
+        self.assertEqual(failed['value'],'¥2.00')
+        state=next(row for row in failed['children'] if row['label']=='余额更新')
+        self.assertEqual(state['value'],'刷新失败');self.assertIn('保留最近余额',state['detail'])
+        self.assertNotIn('timeout',str(failed))
+
     def test_atomic_cache_is_private_and_complete(self):
         self.record('badge',{'latestVersion':'3.0'})
         p=Path(self.m.cache_path('badge'))

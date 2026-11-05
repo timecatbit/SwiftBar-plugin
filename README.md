@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.3.0**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.5.3**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude Code 用量、账户余额和更新提示">
@@ -10,7 +10,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 
 ## 主页与模块
 
-左键星星打开主页。Summary 保留在最上方，下方依次为 **Harness、订阅、API、其他**；未启用的类别不占位。模块管理也使用相同分类。右键星星提供“主页模块…”、“自动检测”和 SwiftBar 自身管理入口，不重复主页的操作。
+左键星星打开主页。Summary 保留在最上方，下方依次为 **Harness Token 用量、订阅用量、API 余额、其他**；未启用的类别不占位。模块管理也使用相同分类。右键星星提供“主页模块…”、“自动检测”和 SwiftBar 自身管理入口，不重复主页的操作。
 
 “主页模块…”会打开 280pt 宽的紧凑面板：修改自动保存，支持快速连续点击，点击“完成”或面板外部才关闭。也可以直接在主页内右键进入模块管理。数据目录和外观设置收在列表底部的悬停侧栏。
 
@@ -83,7 +83,7 @@ SwiftBar 插件目录/
 
 ## 本机配置
 
-**右键星星 → 主页模块** 同时管理显示与连接，按 **Harness、订阅、API、其他** 分组。左侧勾选决定是否显示，右侧圆点与文字表示配置状态；悬停名称或点击箭头直接展开该模块的连接设置，取消勾选后仍可配置。点击复选框或名称可连续多选，鼠标停在复选框上不会弹出侧栏。
+**右键星星 → 主页模块** 同时管理显示与连接，按 **Harness Token 用量、订阅用量、API 余额、其他** 分组。左侧勾选决定是否显示，右侧圆点与文字表示配置状态；悬停名称或点击箭头直接展开该模块的连接设置，取消勾选后仍可配置。点击复选框或名称可连续多选，鼠标停在复选框上不会弹出侧栏。
 
 每项连接明确显示“已配置”或“未配置”；配置状态不等于连接验证结果。通用外观、自动检测、高级配置文件和恢复默认集中放在底部“外观与设置”：
 
@@ -128,7 +128,8 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 按系统时区统计，可通过 `OCX_TIMEZONE` 覆盖。周从周一开始；近 24 小时为滚动窗口，近 7/30 天含当天。
 - 本机日志只索引用量元数据，不保存对话正文；数据库只读，增量索引和设置仅当前用户可读。余额和订阅额度不加入费用汇总。
 - ChatGPT 额度通过客户端已有的 ChatGPT 登录查询，不自动登录、不调用模型；API-key-only 登录不能提供该订阅额度。此模块不声称覆盖 ChatGPT 网页所有聊天限额。
-- 应用更新跟随 Harness 分组的勾选：OpenCodex 对应自动更新，Claude Code 对应命令行客户端，ChatGPT 本机用量对应 ChatGPT 桌面客户端。另有一项联动：已配置 OpenCodex 时，无论其主页模块是否勾选，都会把 ChatGPT 纳入更新检查；不改变主页勾选。没有 OpenCodex 配置时只按 Harness 勾选，订阅/API 勾选不触发应用更新。移出检查范围的应用立即移除其更新条目和数量。
+- 应用更新跟随 Harness 分组的勾选：OpenCodex 对应自动更新，Claude Code 用量模块对应 **Claude 桌面 App** 的更新检查，ChatGPT 本机用量对应 ChatGPT 桌面客户端。Claude 不再检查命令行版本；未安装桌面 App 时明确显示未安装。另有一项联动：已配置 OpenCodex 时，无论其主页模块是否勾选，都会把 ChatGPT 纳入更新检查；不改变主页勾选。没有 OpenCodex 配置时只按 Harness 勾选，订阅/API 勾选不触发应用更新。移出检查范围的应用立即移除其更新条目和数量。
+- DeepSeek 余额刷新期间保留主页金额，不追加“上次”；刷新进度、成功更新时间与失败状态放在余额侧栏。失败时明确说明正在保留最近余额。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 
 接口与格式依据：[Apple 原生玻璃](https://developer.apple.com/documentation/appkit/nsglasseffectview)、[Codex App Server](https://learn.chatgpt.com/docs/app-server)、[DeepSeek 余额](https://api-docs.deepseek.com/api/get-user-balance/)、[DeepSeek Harness 存储](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/session/session-persistence-jsonl)、[OpenCode 数据目录](https://opencode.ai/docs/troubleshooting/)、[Gemini 会话格式](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingTypes.ts)、[xAI 账单接口](https://docs.x.ai/developers/rest-api-reference/management/billing)、[MiniMax 官方额度解析](https://github.com/MiniMax-AI/cli/blob/main/src/utils/quota.ts)。

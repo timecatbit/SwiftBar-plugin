@@ -9,8 +9,9 @@ class UpdateTests(unittest.TestCase):
   env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OS_APPEARANCE':'Dark','OCX_CACHE_DIR':self.tmp.name,'SWIFTBAR_PLUGIN_DATA_PATH':self.tmp.name,'OCX_PLUGIN_PATH':str(SOURCE.resolve())});env.start();self.addCleanup(env.stop)
   self.m=types.ModuleType('updates_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
   configured=patch.object(self.m,'ocx_configured',return_value=False);configured.start();self.addCleanup(configured.stop)
- def row(self,version='2.1.318'):
-  return {'id':'claude-code','name':'Claude Code','latest':version,'current':'2.1.308','available':True,'checkedAt':time.time()}
+  installed=patch.object(self.m,'app_info',return_value={});installed.start();self.addCleanup(installed.stop)
+ def row(self,version='4.16336.0'):
+  return {'id':'claude','name':'Claude','latest':version,'current':'4.4212.0','available':True,'checkedAt':time.time()}
  def test_numeric_versions_and_unknown_values(self):
   self.assertTrue(self.m.newer_release('4.16336.0','4.4212.0'))
   self.assertFalse(self.m.newer_release('2.1.99','2.1.308'))
@@ -20,9 +21,9 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'send_update_notification',return_value=True) as send:
    self.m.notify_app_updates([self.row()]);self.m.notify_app_updates([self.row()])
    send.assert_called_once()
-   self.m.notify_app_updates([self.row('2.1.319')]);self.assertEqual(send.call_count,2)
+   self.m.notify_app_updates([self.row('4.16337.0')]);self.assertEqual(send.call_count,2)
   state=json.loads(Path(self.tmp.name,'updates-notified.json').read_text())
-  self.assertEqual(state['claude-code'],['2.1.318','2.1.319'])
+  self.assertEqual(state['claude'],['4.16336.0','4.16337.0'])
   with patch.object(self.m,'send_update_notification') as send:
    self.m.notify_app_updates([self.row()]);send.assert_not_called()
  def test_failed_delivery_is_retryable(self):
@@ -36,6 +37,23 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}),patch.object(self.m,'release_body',side_effect=TimeoutError):
    row=self.m.app_update_probe('claude')
   self.assertFalse(row['available']);self.assertIn('失败',row['status'])
+ def test_claude_checks_the_desktop_app_and_official_desktop_feed(self):
+  with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}) as info,patch.object(self.m,'release_body',return_value=b'{"currentRelease":"4.16336.0"}') as release,patch.object(self.m.subprocess,'run') as command:
+   row=self.m.app_update_probe('claude')
+  info.assert_called_once_with('Claude');command.assert_not_called()
+  self.assertIn('/api/desktop/darwin/universal/squirrel/update?',release.call_args.args[0])
+  self.assertEqual(row['name'],'Claude');self.assertEqual(row['current'],'4.4212.0');self.assertTrue(row['available'])
+ def test_missing_claude_app_does_not_fall_back_to_cli(self):
+  with patch.object(self.m,'release_body') as release,patch.object(self.m.subprocess,'run') as command:
+   row=self.m.app_update_probe('claude')
+  self.assertEqual(row['status'],'未安装');release.assert_not_called();command.assert_not_called()
+ def test_legacy_claude_code_update_is_not_shown_or_notified(self):
+  self.select('claude')
+  legacy=dict(self.row(),id='claude-code',name='Claude Code')
+  rows=self.m.update_rows({'app_updates':{'apps':[legacy]}})
+  self.assertEqual([r['id'] for r in rows],['claude']);self.assertEqual(self.m.update_attention_count(rows),0)
+  with patch.object(self.m,'send_update_notification') as send:
+   self.m.notify_app_updates([legacy]);send.assert_not_called()
  def test_sparkle_uses_build_and_filters_other_architecture(self):
   xml=b'''<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><s:shortVersionString>26.1029.61003</s:shortVersionString><s:version>24614</s:version><s:hardwareRequirements>arm64</s:hardwareRequirements></item><item><s:shortVersionString>99.0.0</s:shortVersionString><s:version>99999</s:version><s:hardwareRequirements>x64</s:hardwareRequirements></item></channel></rss>'''
   with patch.object(self.m.platform,'machine',return_value='arm64'):
@@ -59,15 +77,15 @@ class UpdateTests(unittest.TestCase):
   settings['visible']=list(harnesses)+(['updates'] if updates else [])
   self.m.preferences.write(self.m.STATE_DIR,settings)
  def test_default_updates_follow_only_selected_harnesses(self):
-  self.assertEqual(self.m.selected_update_ids(),['opencodex','claude-code'])
-  self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude-code'])
+  self.assertEqual(self.m.selected_update_ids(),['opencodex','claude'])
+  self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude'])
  def test_configured_opencodex_also_checks_chatgpt_without_changing_home_selection(self):
   self.select('claude')
   before=self.m.preferences.read(self.m.STATE_DIR)
   with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'app_info',return_value={}),patch.object(self.m,'app_update_probe',side_effect=lambda key:dict(self.row(),id=key,href=self.m.UPDATE_LINKS[key],status='有新版本')) as probe:
-   self.assertEqual(self.m.selected_update_ids(),['claude-code','chatgpt'])
+   self.assertEqual(self.m.selected_update_ids(),['claude','chatgpt'])
    self.m.app_updates_cached()
-   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude-code','chatgpt'])
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','chatgpt'])
    self.assertNotIn('badge',self.m.external_loaders())
    self.assertIn('OpenCodex 联动 ChatGPT','\n'.join(self.m.app_update_lines({})))
   self.assertEqual(self.m.preferences.read(self.m.STATE_DIR),before)
@@ -85,7 +103,7 @@ class UpdateTests(unittest.TestCase):
    configured.return_value=True
    self.assertEqual(self.m.read_cache('app_updates'),{})
    self.m.app_updates_cached()
-   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude-code','claude-code','chatgpt'])
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude','chatgpt'])
    payload=self.m.read_cache('app_updates')['payload']
    linked=[r for r in payload['apps'] if r['id']=='chatgpt']
    with patch.object(self.m,'send_update_notification',return_value=True) as send:
@@ -93,7 +111,7 @@ class UpdateTests(unittest.TestCase):
    configured.return_value=False
    self.assertEqual(self.m.read_cache('app_updates'),{})
    rows=self.m.update_rows({'app_updates':payload})
-   self.assertEqual([r['id'] for r in rows],['claude-code'])
+   self.assertEqual([r['id'] for r in rows],['claude'])
    self.assertEqual(self.m.update_attention_count(rows),1)
    with patch.object(self.m,'send_update_notification') as send:
     self.m.notify_app_updates([dict(linked[0],latest='99.0.0')]);send.assert_not_called()
@@ -110,13 +128,13 @@ class UpdateTests(unittest.TestCase):
   self.select('claude')
   with patch.object(self.m,'app_update_probe',return_value=self.row()) as probe:
    self.m.app_updates_cached()
-  probe.assert_called_once_with('claude-code')
+  probe.assert_called_once_with('claude')
  def test_switching_harness_invalidates_recent_update_cache(self):
   self.select('claude')
   def row(key):return dict(self.row(),id=key)
   with patch.object(self.m,'app_update_probe',side_effect=row) as probe:
    self.m.app_updates_cached();self.select('codex');self.m.app_updates_cached()
-  self.assertEqual([c.args[0] for c in probe.call_args_list],['claude-code','chatgpt'])
+  self.assertEqual([c.args[0] for c in probe.call_args_list],['claude','chatgpt'])
  def test_deselected_cached_update_is_hidden_from_list_badge_and_notification(self):
   self.select('codex')
   with patch.object(self.m,'app_info',return_value={}):rows=self.m.update_rows({'app_updates':{'apps':[self.row()]}})

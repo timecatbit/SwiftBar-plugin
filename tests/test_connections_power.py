@@ -142,10 +142,10 @@ class PowerTests(unittest.TestCase):
         for row in rows:
             if row.get('section'):current=row['label'];groups[current]=[]
             elif (row.get('action') or [''])[0]=='set-module':groups[current].append(row['label'])
-        self.assertEqual(list(groups),['概览','Harness','订阅','API','其他'])
-        self.assertIn('Claude Code',groups['Harness']);self.assertIn('OpenCodex',groups['Harness'])
-        self.assertEqual(groups['API'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
-        self.assertEqual(groups['订阅'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
+        self.assertEqual(list(groups),['概览','Harness Token 用量','订阅用量','API 余额','其他'])
+        self.assertIn('Claude Code',groups['Harness Token 用量']);self.assertIn('OpenCodex',groups['Harness Token 用量'])
+        self.assertEqual(groups['API 余额'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
+        self.assertEqual(groups['订阅用量'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
         self.assertEqual(groups['其他'],['Komari 监控','应用更新'])
         self.assertFalse(any(r['label']=='连接与数据' for r in rows))
     def test_hidden_modules_keep_configuration_and_native_fallback_can_toggle(self):
@@ -166,9 +166,9 @@ class PowerTests(unittest.TestCase):
         for row in rows:
             if row.get('section'):current=row['label'];groups[current]=[]
             elif not row.get('separator') and row['label'] not in ('刷新数据','SwiftBar 管理'):groups[current].append(row['label'])
-        self.assertEqual(list(groups),['订阅','API','其他'])
-        self.assertIn('ChatGPT 订阅',groups['订阅']);self.assertIn('MiniMax 订阅',groups['订阅'])
-        self.assertIn('DeepSeek API',groups['API']);self.assertIn('Grok API',groups['API'])
+        self.assertEqual(list(groups),['订阅用量','API 余额','其他'])
+        self.assertIn('ChatGPT 订阅',groups['订阅用量']);self.assertIn('MiniMax 订阅',groups['订阅用量'])
+        self.assertIn('DeepSeek API',groups['API 余额']);self.assertIn('Grok API',groups['API 余额'])
         self.assertTrue(any(x.startswith('Komari') for x in groups['其他']))
     def test_client_configuration_actions_are_visible_and_whitelisted(self):
         choices=self.m.module_options()

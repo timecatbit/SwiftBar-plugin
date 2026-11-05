@@ -153,7 +153,7 @@ final class DashboardView:FlippedView {
     override func draw(_ dirtyRect:NSRect){
         let left:CGFloat=12,right=bounds.width-12,width=right-left
         let valid=summaryProviders.filter{$0.available},costs=valid.compactMap{$0.cost}
-        text(data.showSummary==false ? "Harness" : "Summary",x:left,y:10,w:150,size:14,weight:.semibold)
+        text(data.showSummary==false ? "Harness Token 用量" : "Summary",x:left,y:10,w:150,size:14,weight:.semibold)
         if data.showSummary != false {
         let partial=valid.count != summaryProviders.count || valid.contains{$0.unpriced>0}
         let columns:[CGFloat]=[width*0.38,width*0.38,width*0.24]
@@ -163,7 +163,7 @@ final class DashboardView:FlippedView {
         drawSummaryChart(left:left,right:right)
         }
         var y:CGFloat=Self.summaryHeight(data)
-        if Self.harnessHeaderHeight(data)>0{text("Harness",x:left,y:y+5,w:width,size:10.5,color:.secondaryLabelColor,weight:.medium);y+=Self.harnessHeaderHeight(data)}
+        if Self.harnessHeaderHeight(data)>0{text("Harness Token 用量",x:left,y:y+5,w:width,size:10.5,color:.secondaryLabelColor,weight:.medium);y+=Self.harnessHeaderHeight(data)}
         for p in data.providers {if data.allowCollapse==true{drawCollapsibleProvider(p,y:y,left:left,right:right)}else{drawProvider(p,y:y,left:left,right:right)};y+=Self.providerHeight(p,data)}
         if !data.providers.isEmpty{text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)}
     }

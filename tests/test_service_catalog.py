@@ -73,7 +73,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn(key,self.m.external_loaders())
                 self.assertNotIn('PRIVATE-KEY',json.dumps(self.m.service_connection_entry(key)))
             network.assert_not_called()
-        self.assertEqual([e['label'] for e in rows if e.get('section')],['订阅','API','其他'])
+        self.assertEqual([e['label'] for e in rows if e.get('section')],['订阅用量','API 余额','其他'])
     def test_key_file_reference_is_private_and_shown_without_contents(self):
         key=self.root/'provider-key';key.write_text('SECRET-NEVER-DISPLAY')
         with patch.dict(os.environ,{'MOONSHOT_API_KEY_FILE':str(key)}):

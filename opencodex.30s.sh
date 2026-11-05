@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.5.2</xbar.version>
+# <xbar.version>5.5.3</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -996,12 +996,11 @@ def claude_usage_cached():
 # Official feeds verified against the installed apps and Claude's installer.
 # Only public version metadata is fetched; no account credentials or real device IDs.
 UPDATE_LINKS = {'opencodex': RELEASES_URL, 'claude': 'https://claude.ai/download',
-                'chatgpt': 'https://chatgpt.com/download',
-                'claude-code': 'https://github.com/anthropics/claude-code/releases'}
-UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT', 'claude-code':'Claude Code'}
+                'chatgpt': 'https://chatgpt.com/download'}
+UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT'}
 # Harness selections control application updates, with one explicit exception:
 # a configured OpenCodex also checks ChatGPT. Subscription/API choices do not opt in.
-HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude-code', 'codex':'chatgpt',
+HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude', 'codex':'chatgpt',
                    'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'gemini':'gemini'}
 MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
                   'deepseek-harness':('DeepSeek Harness','https://github.com/deepseek-ai/deepseek-harness/releases'),
@@ -1066,29 +1065,22 @@ def sparkle_release(body):
 def app_update_probe(key):
     row={'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'checkedAt':time.time()}
     try:
-        if key=='claude-code':
-            binary=shutil.which('claude')
-            if not binary:row['status']='未安装';return row
-            run=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=4)
-            row['current']=(run.stdout.strip().split() or [''])[0]
-            row['latest']=release_body('https://downloads.claude.ai/claude-code-releases/latest').decode().strip()
+        info=app_info('Claude' if key=='claude' else 'ChatGPT')
+        if not info:row['status']='未安装';return row
+        row['current']=info['CFBundleShortVersionString']
+        # A constant anonymous checker ID meets the public feed schema without sending a device ID.
+        ident=str(uuid.uuid5(uuid.NAMESPACE_URL,'opencodex-swiftbar-update-check'))
+        if key=='claude':
+            query=urllib.parse.urlencode({'device_id':ident,'version':row['current'],'os_version':platform.mac_ver()[0]})
+            raw=release_body('https://api.anthropic.com/api/desktop/darwin/universal/squirrel/update?'+query)
+            row['latest']=json.loads(raw)['currentRelease'] if raw else row['current']
         else:
-            info=app_info('Claude' if key=='claude' else 'ChatGPT')
-            if not info:row['status']='未安装';return row
-            row['current']=info['CFBundleShortVersionString']
-            # A constant anonymous checker ID meets the public feed schema without sending a device ID.
-            ident=str(uuid.uuid5(uuid.NAMESPACE_URL,'opencodex-swiftbar-update-check'))
-            if key=='claude':
-                query=urllib.parse.urlencode({'device_id':ident,'version':row['current'],'os_version':platform.mac_ver()[0]})
-                raw=release_body('https://api.anthropic.com/api/desktop/darwin/universal/squirrel/update?'+query)
-                row['latest']=json.loads(raw)['currentRelease'] if raw else row['current']
-            else:
-                if info['CFBundleIdentifier']!='com.openai.codex':
-                    row['status']='更新渠道待确认';return row
-                query=urllib.parse.urlencode({'installation_id':ident,'arch':platform.machine(),'app_version':row['current'],
-                    'beta':'false','os-version':platform.mac_ver()[0],'plan_type':'unknown'})
-                latest,build=sparkle_release(release_body('https://updates.oaistatic.com/codex/app/appcast?'+query))
-                row.update(latest=latest or row['current'],build=build,currentBuild=info['CFBundleVersion'])
+            if info['CFBundleIdentifier']!='com.openai.codex':
+                row['status']='更新渠道待确认';return row
+            query=urllib.parse.urlencode({'installation_id':ident,'arch':platform.machine(),'app_version':row['current'],
+                'beta':'false','os-version':platform.mac_ver()[0],'plan_type':'unknown'})
+            latest,build=sparkle_release(release_body('https://updates.oaistatic.com/codex/app/appcast?'+query))
+            row.update(latest=latest or row['current'],build=build,currentBuild=info['CFBundleVersion'])
         if release_version(row.get('latest')) is None or release_version(row.get('current')) is None:raise ValueError('invalid version')
         row['available']=newer_release(row['latest'],row['current'])
         if row.get('build'):row['available']=newer_release(row['build'],row['currentBuild'])
@@ -1300,9 +1292,16 @@ def resource_lines(data):
         elif key=='deepseek':
             balance,value=deepseek_balance(data);logo=deepseek_logo_image()
             options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
-            balance=(balance or ('正在读取' if connection_ready(key) else '未配置'))+(' · 上次' if (data.get('provider_quotas') or {}).get('_stale') else '')
-            lines.append(item(service.label,badge=balance,**options))
-            lines.append(item('配置状态',badge='已配置' if connection_ready(key) else '未配置',level=1,color=MUTED,size=10))
+            configured=connection_ready(key);payload=data.get('provider_quotas') or {}
+            error=data.get('provider_quotas_error')
+            failed=bool(error and error[1]!='正在后台读取')
+            badge=balance or (('暂不可用' if failed else '正在读取') if configured else '未配置')
+            lines.append(item(service.label,badge=badge,**options))
+            lines.append(item('配置状态',badge='已配置' if configured else '未配置',level=1,color=MUTED,size=10))
+            if configured:
+                state='刷新失败' if failed else '正在刷新' if payload.get('_stale') or not payload else freshness(payload)
+                detail='保留最近余额 · '+freshness(payload) if failed and balance else None
+                lines.append(item('余额更新',badge=state,paneldetail=detail,level=1,color=WARN if failed else MUTED,size=10))
             lines.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
         elif key in ('grok','minimax'):lines.extend(provider_account_lines(key,data))
         else:lines.extend(portal_service_lines(key))
@@ -1890,7 +1889,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.5.2',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.5.3',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2158,7 +2157,7 @@ def module_options():
     settings=view_settings();connections=module_connections();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
     for key,label,category in preferences.MODULES:
         if category!=group:
-            options.append({'label':category,'section':True,'children':[]});group=category
+            options.append({'label':catalog.GROUP_LABELS.get(category,category),'section':True,'children':[]});group=category
         enabled=key in settings['visible']
         connection=connections.get(key,{})
         row={'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':connection.get('children',[])}
@@ -2679,7 +2678,7 @@ def resource_panel_entries(data):
         groups[service.category if service else '其他'].append(entry)
     result=[]
     for label,items in groups.items():
-        if items:result.append({'label':label,'section':True,'children':[]});result.extend(items)
+        if items:result.append({'label':catalog.GROUP_LABELS.get(label,label),'section':True,'children':[]});result.extend(items)
     if result and footer:result.append({'label':'','separator':True,'children':[]})
     return result+footer
 
