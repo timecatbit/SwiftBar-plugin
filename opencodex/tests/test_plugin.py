@@ -16,7 +16,7 @@ class PluginTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.env = patch.dict(os.environ, {'KOMARI_BASE_URL':'https://komari.example.test','OS_APPEARANCE':'Dark', 'OCX_CACHE_DIR':self.temp.name,
-                                          'OCX_PLUGIN_PATH':str(SOURCE.resolve())})
+                                          'OCX_PLUGIN_PATH':str(SOURCE.resolve()), 'OCX_BASE_URL':'http://127.0.0.1:10100'})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.m = types.ModuleType('plugin_test')
