@@ -1,0 +1,81 @@
+"""First-install module discovery. Never parse conversation bodies or make requests."""
+import json
+import os
+from pathlib import Path
+import shutil
+import swiftbar_accounts as accounts
+import swiftbar_preferences as preferences
+
+
+def read_object(path):
+    try:
+        value=json.loads(Path(path).read_text())
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError):return {}
+
+
+def has_records(root, patterns=('*.jsonl',)):
+    if not root:return False
+    root=Path(root).expanduser()
+    if not root.is_dir():return False
+    try:return any(path.is_file() and path.stat().st_size>0 for pattern in patterns for path in root.rglob(pattern))
+    except OSError:return False
+
+
+def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=()):
+    home=Path(home or Path.home());found={'summary','updates'}
+    if configured_proxy:found.update(('opencodex','codex-quota'))
+    for source,binary in (('claude','claude'),('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
+        if which(binary):found.add(source)
+    if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
+    for source in ('claude','codex'):
+        root=Path(paths.get(source) or home/('.claude/projects' if source=='claude' else '.codex'))
+        folders=[root]
+        if source=='codex':folders=[root/'sessions',root/'archived_sessions'] if any((root/k).is_dir() for k in ('sessions','archived_sessions')) else [root]
+        if any(has_records(folder) for folder in folders):found.add(source)
+    root=Path(paths.get('opencode') or home/'.local/share/opencode')
+    try:
+        database=root/'opencode.db' if root.is_dir() else root
+        if database.is_file() and database.stat().st_size>0:found.add('opencode')
+    except OSError:pass
+    if has_records(paths.get('deepseek-harness'),('session*.jsonl','session*.jsonl.zstd')):found.add('deepseek-harness')
+    root=Path(paths.get('gemini') or home/'.gemini')
+    if has_records(root/'tmp' if (root/'tmp').is_dir() else root,('session-*.json','session-*.jsonl','chats/**/*.jsonl')):found.add('gemini')
+    root=Path(paths.get('workbuddy') or home)
+    roots=[root/n/'projects' for n in ('.workbuddy-ai','.workbuddy') if (root/n/'projects').is_dir()]
+    if not roots and root!=home:roots=[root/'projects' if (root/'projects').is_dir() else root]
+    if any(has_records(folder) for folder in roots):found.add('workbuddy')
+    auth_root=Path(os.environ.get('CODEX_HOME') or home/'.codex')
+    auth=read_object(auth_root/'auth.json')
+    if which('codex') and (auth.get('auth_mode') in ('chatgpt','chatgptAuthTokens') or isinstance(auth.get('tokens'),dict) and auth['tokens'].get('access_token')):
+        found.add('chatgpt')
+    config=read_object(Path(paths.get('opencodex') or home/'.opencodex')/'config.json')
+    providers=config.get('providers') or {}
+    provider=providers.get('deepseek') if isinstance(providers,dict) else {}
+    provider=provider if isinstance(provider,dict) else {}
+    official=str(provider.get('baseUrl') or '').rstrip('/') in ('https://api.deepseek.com','https://api.deepseek.com/v1')
+    if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
+    if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
+    if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
+    if komari_url:found.add('komari')
+    return [key for key,label,group in preferences.MODULES if key in found]
+
+
+def initialize(directory, detected, add=False):
+    """Existing choices survive upgrades. Explicit rescan only adds discovered modules."""
+    root=Path(directory);target=root/'preferences.json'
+    if target.exists() and not add:return False
+    current=preferences.read(directory)
+    chosen=set(current['visible']) if add else set()
+    chosen.update(detected)
+    current['visible']=[key for key,label,group in preferences.MODULES if key in chosen]
+    if add:preferences.write(directory,current);return True
+    root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    import tempfile
+    fd,temporary=tempfile.mkstemp(prefix='.discovery-',dir=root)
+    try:
+        with os.fdopen(fd,'w') as out:json.dump(current,out,ensure_ascii=False)
+        try:os.link(temporary,target)
+        except FileExistsError:return False  # Don't overwrite a concurrent manual choice.
+        return True
+    finally:os.unlink(temporary)

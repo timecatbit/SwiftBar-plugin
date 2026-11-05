@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.0.0</xbar.version>
+# <xbar.version>5.0.1</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -113,6 +113,7 @@ for _lib in (os.path.join(PLUGIN_DIR, '.opencodex-panel', 'lib'), os.path.join(P
 import swiftbar_preferences as preferences
 import swiftbar_sources as sources
 import swiftbar_accounts as accounts
+import swiftbar_discovery as discovery
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
      os.path.join(HOME, 'Library', 'Application Support', 'SwiftBarToken')))
@@ -1267,6 +1268,24 @@ def external_loaders():
     return loaders
 
 
+# Only these visible resources can request an immediate read from a flyout.
+RESOURCE_CACHES={'deepseek':'provider_quotas','chatgpt':'chatgpt','grok':'grok','minimax':'minimax','komari':'komari','updates':'app_updates'}
+
+def refresh_resource(source):
+    if source not in RESOURCE_CACHES or not module_enabled(source):raise ValueError('invalid resource')
+    checks=read_cache('resource-checks');now=time.time();last=checks.get(source,0)
+    if isinstance(last,(int,float)) and 0<=now-last<5:return
+    checks[source]=now;checks['schema']=1;write_json_cache(cache_path('resource-checks'),checks)
+    name=RESOURCE_CACHES[source]
+    invalidate_caches([name])
+    loader=external_loaders().get(name)
+    if loader:loader()
+
+def refresh_swiftbar():
+    try:subprocess.run(['/usr/bin/open','-g','swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))],capture_output=True,timeout=4)
+    except (OSError,subprocess.SubprocessError):pass
+
+
 def background_refresh():
     """One worker at a time, even when the menu is refreshed repeatedly."""
     try:
@@ -1286,6 +1305,7 @@ def background_refresh():
             if cache_due(read_cache(range_cache_name()),60):range_usage_cached()
             if ocx_configured():auto_update_opencodex()
             if module_enabled('updates'):notify_app_updates(update_rows({}))
+        if futures:refresh_swiftbar()
         return 0
     except OSError:
         return 0
@@ -1754,6 +1774,10 @@ def chatgpt_lines(data):
     return lines
 
 
+def detected_modules():
+    return discovery.detect({key:source_path(key) for key in preferences.USAGE},HOME,ocx_configured(),KOMARI_BASE_URL,app_roots=[os.path.join(HOME,'Applications'),'/Applications'])
+
+
 def module_options():
     settings=view_settings();options=[];group=None
     for key,label,category in preferences.MODULES:
@@ -1765,7 +1789,7 @@ def module_options():
     paths=[{'label':label+' 记录目录…','symbol':'folder','action':['choose-source',key],'children':[]} for key,label,category in preferences.MODULES if key in preferences.USAGE and key!='opencodex']
     options.append({'label':'数据来源','symbol':'folder','children':paths})
     settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
-    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'恢复默认模块','action':['reset-modules'],'children':[]},{'label':'打开本机配置','action':['open-settings'],'children':[]}])
+    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'检测并添加模块','symbol':'sparkle.magnifyingglass','action':['detect-modules'],'children':[]},{'label':'恢复默认模块','action':['reset-modules'],'children':[]},{'label':'打开本机配置','action':['open-settings'],'children':[]}])
     options.append({'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows})
     return options
 
@@ -2261,6 +2285,15 @@ def native_menu_line(line):
     return label+separator+' '.join(as_option(k,v) for k,v in options.items())
 
 
+def resource_panel_entries(data):
+    entries=panel_entries(management_lines(data))
+    mapping={'ChatGPT 额度':'chatgpt','Grok API 余额':'grok','MiniMax 套餐额度':'minimax','Komari 监控':'komari','应用更新':'updates'}
+    for entry in entries:
+        source=next((source for prefix,source in mapping.items() if entry['label'].startswith(prefix)),None)
+        if source and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
+    return entries
+
+
 def render(data):
     dashboard=dashboard_payload(data)
     options=module_options()
@@ -2277,7 +2310,7 @@ def render(data):
             overview.append(item(provider['name']+' · '+(fmt_tokens(provider['tokens'])+' Token' if provider['available'] else provider['status'])))
         return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data,include_swiftbar=False)+['---']+module_menu_lines()])
     write_json_cache(cache_path("panel-view"), {"schema":1,"dashboard":dashboard,
-        "entries":panel_entries(management_lines(data)),"rangeOptions":range_options(),
+        "entries":resource_panel_entries(data),"rangeOptions":range_options(),
         "moduleOptions":options,"appearance":view_settings()['appearance'],
         "updateCount":update_attention_count(update_rows(data))})
     return "\n".join([panel_title(title(data)),'---']+[native_menu_line(line) for line in native_rows])
@@ -2388,7 +2421,13 @@ def run_action(name, extra):
         if name=='set-module':preferences.update(STATE_DIR,'module',extra[0] if extra else '',extra[1] if len(extra)>1 else '')
         elif name=='set-appearance':preferences.update(STATE_DIR,'appearance',extra[0] if extra else '')
         else:preferences.update(STATE_DIR,'reset')
+        if name=='set-module' and len(extra)==2 and extra[1]=='true' and extra[0] in RESOURCE_CACHES:
+            invalidate_caches([RESOURCE_CACHES[extra[0]]])
         schedule_background_refresh()
+    elif name == 'detect-modules':
+        discovery.initialize(STATE_DIR,detected_modules(),add=True);schedule_background_refresh()
+    elif name == 'refresh-source':
+        refresh_resource(extra[0] if len(extra)==1 else '')
     elif name == 'open-settings':
         path=os.path.join(STATE_DIR,'config.local.sh')
         if not os.path.exists(path):
@@ -2531,6 +2570,8 @@ def consume_panel_action():
         allowed = []
         while nodes:
             node = nodes.pop()
+            if node.get("onOpenAction"):
+                allowed.append(node["onOpenAction"])
             if node.get("action"):
                 allowed.append(node["action"])
                 # A persistent picker may queue another click before the previous refresh.
@@ -2558,6 +2599,13 @@ def consume_panel_action():
 
 def main():
     argv = sys.argv[1:]
+    if argv and argv[0] == "--initialize-modules":
+        if os.path.exists(os.path.join(STATE_DIR,'preferences.json')):
+            print('保留已有模块选择');return 0
+        detected=detected_modules()
+        created=discovery.initialize(STATE_DIR,detected)
+        print('已自动选择模块：'+', '.join(detected) if created else '保留已有模块选择')
+        return 0
     if argv and argv[0] == "--background-refresh":
         return background_refresh()
     if argv and argv[0] == "--action":

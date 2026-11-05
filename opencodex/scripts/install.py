@@ -65,6 +65,12 @@ def main():
     shutil.copyfile(ROOT / 'opencodex.30s.sh', temporary)
     temporary.chmod(0o755)
     os.replace(temporary, destination / 'opencodex.30s.sh')
+    detected = subprocess.run(['/bin/bash', str(destination / 'opencodex.30s.sh'), '--initialize-modules'],
+                              capture_output=True, text=True, timeout=30)
+    if detected.returncode:
+        print('Module detection could not finish; choose modules from the right-click menu.')
+    else:
+        print(detected.stdout.strip())
     if not args.no_refresh:
         subprocess.run(['open', '-g', 'swiftbar://refreshplugin?name=opencodex.30s.sh'], check=True)
     print('Installed:', destination / 'opencodex.30s.sh')

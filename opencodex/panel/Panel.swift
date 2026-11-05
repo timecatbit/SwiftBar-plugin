@@ -3,7 +3,7 @@ import CoreGraphics
 
 struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
-    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var href:String?;var action:[String]?;var children:[Entry]
+    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
     var actionable:Bool { !children.isEmpty || href != nil || action != nil }
     var key:String {action?.joined(separator:"\u{001F}") ?? href ?? label.components(separatedBy:" · ").first ?? label}
 }
@@ -340,7 +340,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var timer:Timer?;private var monitors:[Any]=[];private var pendingAction:String?;private var running=false
-    private var activePreference:[String]?;private var queuedPreferences:[[String]]=[]
+    private var activePreference:[String]?;private var queuedActions:[[String]]=[];private var sourceChecks:[String:Date]=[:]
     private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private var hoverTask:DispatchWorkItem?;private var closeTask:DispatchWorkItem?
     private func setup(_ window:Panel){window.backgroundColor = .clear;window.isOpaque=false;window.hasShadow=true;window.level = .popUpMenu;window.hidesOnDeactivate=false;window.isReleasedWhenClosed=false;window.acceptsMouseMovedEvents=true;window.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.transient,.ignoresCycle];window.escape={[weak self] in self?.hide()}}
     func applicationDidFinishLaunching(_ notification:Notification){
@@ -390,7 +390,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil)}
     private func hide(){rangePicker?.menu?.cancelTracking();hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil)}
-    private func reload(force:Bool=false){guard !rangeMenuOpen else{return};let date=(try? FileManager.default.attributesOfItem(atPath:snapshotPath)[.modificationDate]) as? Date;guard force || date != modified else{return};guard let data=try? Data(contentsOf:URL(fileURLWithPath:snapshotPath)),let value=try? JSONDecoder().decode(Snapshot.self,from:data) else{return};modified=date;var current=value;if let activePreference{applyPreference(activePreference,to:&current)};for queued in queuedPreferences{applyPreference(queued,to:&current)};snapshot=current;layout()}
+    private func reload(force:Bool=false){guard !rangeMenuOpen else{return};let date=(try? FileManager.default.attributesOfItem(atPath:snapshotPath)[.modificationDate]) as? Date;guard force || date != modified else{return};guard let data=try? Data(contentsOf:URL(fileURLWithPath:snapshotPath)),let value=try? JSONDecoder().decode(Snapshot.self,from:data) else{return};modified=date;var current=value;if let activePreference{applyPreference(activePreference,to:&current)};for queued in queuedActions{applyPreference(queued,to:&current)};snapshot=current;layout()}
     private func fillRows(_ entries:[Entry],in content:NSView,y start:CGFloat,width:CGFloat,depth:Int)->CGFloat {
         while rows.count<=depth{rows.append([:])};rows[depth]=[:];var y=start
         for original in entries {var entry=original;if running,let name=entry.action?.first,["refresh","refresh-monitor","check-app-updates","set-range"].contains(name){entry.label="正在刷新…"}
@@ -434,7 +434,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         scroll.documentView=content;scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
         panel.setFrame(NSRect(x:x,y:screen.visibleFrame.maxY-height-4,width:width,height:height),display:true)
-        for (depth,key) in opened.enumerated(){guard rows.indices.contains(depth),let row=rows[depth][key] else{break};openFlyout(row.entry,row:row,depth:depth)}
+        for (depth,key) in opened.enumerated(){guard rows.indices.contains(depth),let row=rows[depth][key] else{break};openFlyout(row.entry,row:row,depth:depth,checkSource:false)}
         DispatchQueue.main.async{[weak self] in self?.checkPointer()}
     }
     private func rowRect(_ row:Row)->NSRect{guard let window=row.window else{return .zero};return window.convertToScreen(row.convert(row.bounds,to:nil))}
@@ -444,7 +444,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.rowRect(row).contains(NSEvent.mouseLocation) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
         hoverTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task)
     }
-    private func openFlyout(_ entry:Entry,row:Row,depth:Int){
+    private func openFlyout(_ entry:Entry,row:Row,depth:Int,checkSource:Bool=true){
         guard !entry.children.isEmpty,let parent=row.window else{return}
         if flyouts.indices.contains(depth),flyouts[depth].key==entry.key{return}
         closeFlyouts(from:depth);row.expanded=true
@@ -458,6 +458,13 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         x=max(screen.visibleFrame.minX+4,min(x,screen.visibleFrame.maxX-width-4))
         let rect=rowRect(row),y=max(screen.visibleFrame.minY+4,min(rect.maxY+6-height,screen.visibleFrame.maxY-height-4))
         window.setFrame(NSRect(x:x,y:y,width:width,height:height),display:true);parent.addChildWindow(window,ordered:.above);window.orderFront(nil);flyouts.append(Flyout(panel:window,key:entry.key,row:row))
+        if checkSource,let action=entry.onOpenAction,action.count==2 {
+            let key=action[1],now=Date()
+            if now.timeIntervalSince(sourceChecks[key] ?? .distantPast)>=5 {
+                sourceChecks[key]=now
+                DispatchQueue.main.async{[weak self] in self?.performAction(action)}
+            }
+        }
     }
     private func closeFlyouts(from depth:Int){
         guard depth<flyouts.count else{return}
@@ -512,11 +519,11 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         guard let data=try? Data(contentsOf:receipt),let value=try? JSONSerialization.jsonObject(with:data) as? [String:Any],value["id"] as? String==pendingAction else{return}
         self.pendingAction=nil;activePreference=nil;running=false
         if value["status"] as? String != "done" {
-            queuedPreferences=[];reload(force:true)
+            queuedActions=[];reload(force:true)
             let alert=NSAlert();alert.messageText="操作未完成";alert.informativeText="请重新打开菜单后重试。";alert.addButton(withTitle:"好");alert.runModal();return
         }
         reload(force:true)
-        if !queuedPreferences.isEmpty {let next=queuedPreferences.removeFirst();performAction(next)}
+        if !queuedActions.isEmpty {let next=queuedActions.removeFirst();performAction(next)}
     }
     private func activate(_ entry:Entry,row:Row,depth:Int){
         if !entry.children.isEmpty{openFlyout(entry,row:row,depth:depth);return}
@@ -529,19 +536,23 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
-        pendingAction=nil;activePreference=nil;queuedPreferences=[];running=false
+        pendingAction=nil;activePreference=nil;queuedActions=[];running=false
         try? FileManager.default.removeItem(at:URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json"))
         reload(force:true);NSSound.beep()
     }
     private func performAction(_ action:[String]){
         guard !action.isEmpty else{return}
-        let preference=["set-module","set-appearance","reset-modules"].contains(action[0])
+        let preference=["set-module","set-appearance","reset-modules","detect-modules"].contains(action[0])
+        let passive=action[0]=="refresh-source"
         if running {
-            if preference,queuedPreferences.count<64 {queuedPreferences.append(action);if var value=snapshot{applyPreference(action,to:&value);snapshot=value};layout()}
+            if (preference || passive),queuedActions.count<64 {
+                if !passive || !queuedActions.contains(action) {queuedActions.append(action)}
+                if preference {if var value=snapshot{applyPreference(action,to:&value);snapshot=value};layout()}
+            }
             return
         }
         if preference {activePreference=action;if var value=snapshot{applyPreference(action,to:&value);snapshot=value}}
-        let keepOpen=["refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules"].contains(action[0]);if !keepOpen{hide()};running=true;if keepOpen{layout()}
+        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","detect-modules"].contains(action[0]);if !keepOpen{hide()};running=true;if keepOpen && !passive{layout()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
         do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id
             var url=URLComponents();url.scheme="swiftbar";url.host="refreshplugin";url.queryItems=[URLQueryItem(name:"name",value:URL(fileURLWithPath:pluginPath).lastPathComponent)]

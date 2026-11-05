@@ -1,6 +1,6 @@
 # OpenCodex Token 面板
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.0.0**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.0.1**。
 
 ## 主页与模块
 
@@ -26,9 +26,9 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
 | 应用更新 | OpenCodex 稳定版自动更新；Claude、ChatGPT、Claude Code 只提示 |
 
-默认保留升级前的主页模块。新增的用量与账户模块默认关闭，可自行开启。未安装、未配置、日志格式不支持或无权限时会显示状态，不会当成零用量。
+首次安装自动检测常见客户端命令、WorkBuddy 应用、记录目录和已配置 API 凭据，勾选找到的模块。升级保留已有选择，不会重新打开手动关闭的模块；“外观与设置 → 检测并添加模块”可随时补选新发现的来源。未安装、未配置、日志格式不支持或无权限时会显示状态，不会当成零用量。
 
-统计默认当天，可下拉选择近 24 小时、近 7 天、近 30 天、本周、本月或全部。其他子菜单悬停在旁边展开，判定延迟为 80 毫秒。
+统计默认当天，可下拉选择近 24 小时、近 7 天、近 30 天、本周、本月或全部。其他子菜单悬停在旁边展开，判定延迟为 80 毫秒。打开 Grok、MiniMax、ChatGPT 额度、Komari 或应用更新侧栏时立即检查对应来源，结果就地更新；5 秒内重复打开会去重。启用账户模块后也会立即检查，不必等待 30 秒轮询。
 
 ## 外观
 
@@ -51,7 +51,7 @@ python3 scripts/install.py
 python3 scripts/install.py --plugin-dir '/你的/SwiftBar插件目录'
 ```
 
-脚本会编译、签名、备份并复制运行所需文件，然后刷新 SwiftBar。**安装后可移动或删除源码仓库，插件不依赖仓库路径。** 没有写死用户名或个人 Documents 目录。
+脚本会编译、签名、备份并复制运行所需文件，首次安装自动选择模块，然后刷新 SwiftBar。**安装后可移动或删除源码仓库，插件不依赖仓库路径。** 没有写死用户名或个人 Documents 目录。
 
 SwiftBar 只执行一个入口，但完整的原生界面需要配套运行文件：
 
@@ -86,6 +86,8 @@ export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"
 Claude Code、Codex、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“数据来源”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
+
+自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 Codex 登录状态。不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效，实际状态在打开模块时查询。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
 
 ## 统计口径与隐私
 

@@ -112,3 +112,30 @@ class ModuleTests(unittest.TestCase):
         lines='\n'.join(self.m.resource_lines({'grok':{'balance':12.3},'minimax':{'windows':[{'name':'text','remaining':65}]}}))
         self.assertIn('Grok API 余额',lines);self.assertIn('$12.30',lines);self.assertIn('65% 可用',lines)
         self.assertIn('grok',self.m.external_loaders());self.assertIn('minimax',self.m.external_loaders())
+    def test_resource_open_forces_one_target_and_debounces(self):
+        self.toggle('grok',True)
+        loader=unittest.mock.Mock()
+        with patch.object(self.m,'external_loaders',return_value={'grok':loader,'minimax':unittest.mock.Mock()}),patch.object(self.m,'invalidate_caches') as invalidate:
+            self.m.refresh_resource('grok');self.m.refresh_resource('grok')
+        loader.assert_called_once();invalidate.assert_called_once_with(['grok'])
+        with self.assertRaises(ValueError):self.m.refresh_resource('minimax')
+    def test_flyout_checks_use_visible_action_whitelist(self):
+        self.toggle('grok',True)
+        entries=self.m.resource_panel_entries({})
+        grok=next(e for e in entries if e['label']=='Grok API 余额')
+        self.assertEqual(grok['onOpenAction'],['refresh-source','grok'])
+        self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'entries':entries})
+        self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':'on-open','action':['refresh-source','grok'],'createdAt':self.m.time.time()})
+        with patch.object(self.m,'refresh_resource') as refresh:self.m.consume_panel_action()
+        refresh.assert_called_once_with('grok');self.assertEqual(self.m.read_cache('panel-action-receipt')['status'],'done')
+    def test_enable_account_invalidates_recent_unconfigured_cache(self):
+        with patch.object(self.m,'invalidate_caches') as invalidate,patch.object(self.m,'schedule_background_refresh') as schedule:
+            self.m.run_action('set-module',['grok','true'])
+        invalidate.assert_called_once_with(['grok']);schedule.assert_called_once()
+    def test_background_completion_republishes_without_waiting_for_interval(self):
+        name=self.m.range_cache_name()
+        self.m.write_json_cache(self.m.cache_path(name),{'schema':1,'payload':{'range':'today'},'fetchedAt':self.m.time.time()})
+        loader=unittest.mock.Mock()
+        with patch.object(self.m,'external_loaders',return_value={'grok':loader}),patch.object(self.m,'ocx_configured',return_value=False),patch.object(self.m,'notify_app_updates'),patch.object(self.m,'refresh_swiftbar') as refresh:
+            self.m.background_refresh()
+        loader.assert_called_once();refresh.assert_called_once()
