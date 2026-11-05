@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.4.0</xbar.version>
+# <xbar.version>5.5.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -1845,7 +1845,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.4.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.5.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -1958,10 +1958,10 @@ def client_connection_entry(key):
     return {'label':'OpenCodex' if proxy else 'ChatGPT 订阅','value':'已配置' if configured else '未配置','symbol':'network' if proxy else 'person.crop.circle','children':children}
 
 
-def connection_options():
+def module_connections():
     scope=hashlib.sha256(json.dumps([(k,source_path(k)) for k in preferences.USAGE]).encode()).hexdigest()[:12]
     detected,_=cached_fetch('configured-sources-'+scope,lambda:({'modules':detected_modules()},None),300)
-    found=set((detected or {}).get('modules',[]));groups={k:[] for k in ('本机 Harness','API','订阅套餐','其他')}
+    found=set((detected or {}).get('modules',[]));connections={}
     for key,label,_ in preferences.MODULES:
         if key in preferences.USAGE and key!='opencodex':
             custom=bool(view_settings()['paths'].get(key))
@@ -1972,17 +1972,14 @@ def connection_options():
                 locations=source_locations(key)
                 if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
                 if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
-            groups['本机 Harness'].append({'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children})
+            connections[key]={'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children}
     for service in catalog.SERVICES:
         if service.key=='chatgpt':row=client_connection_entry('chatgpt')
         else:row=service_connection_entry(service.key)
-        groups['订阅套餐' if service.category=='订阅' else 'API'].append(row)
-    groups['其他'].extend([client_connection_entry('opencodex'),service_connection_entry('komari')])
-    rows=[]
-    for label,entries in groups.items():
-        rows.append({'label':label,'section':True,'children':[]});rows.extend(entries)
-    rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]}])
-    return rows
+        connections[service.key]=row
+    connections['opencodex']=client_connection_entry('opencodex')
+    connections['komari']=service_connection_entry('komari')
+    return connections
 
 
 def service_connection_entry(key):
@@ -2113,16 +2110,18 @@ def configure_connection(key,clear=False):
 
 
 def module_options():
-    settings=view_settings();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
+    settings=view_settings();connections=module_connections();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
     for key,label,category in preferences.MODULES:
         if category!=group:
             options.append({'label':category,'section':True,'children':[]});group=category
         enabled=key in settings['visible']
-        options.append({'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':[]})
+        connection=connections.get(key,{})
+        row={'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':connection.get('children',[])}
+        if connection.get('value'):row['value']=connection['value']
+        options.append(row)
     options.append({'label':'','separator':True,'children':[]})
-    options.append({'label':'连接与数据','symbol':'link','children':connection_options()})
     settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
-    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
+    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
     options.append({'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows})
     return options
 
@@ -2134,7 +2133,9 @@ def module_menu_lines():
             if entry.get('separator'):rows.append('-'*(2*level+3))
             elif entry.get('section'):rows.append(item(entry['label'],level=level,color=MUTED,size=10))
             elif entry.get('children'):
-                rows.append(item(entry['label']+(' · '+entry['value'] if entry.get('value') else ''),level=level));append(entry['children'],level+1)
+                rows.append(item(entry['label']+(' · '+entry['value'] if entry.get('value') else ''),level=level))
+                if (entry.get('action') or [''])[0]=='set-module':rows.append(item('显示在主页',level=level+1,checked=entry['checked'],**act(*entry['action'])))
+                append(entry['children'],level+1)
             elif entry.get('action'):rows.append(item(entry['label'],level=level,checked=entry.get('checked',False),**act(*entry['action'])))
             else:rows.append(item(entry['label'],level=level,size=11))
     append(module_options(),1)

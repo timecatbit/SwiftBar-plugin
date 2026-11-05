@@ -102,7 +102,7 @@ class PowerTests(unittest.TestCase):
 
     def test_connection_rows_use_explicit_status_labels(self):
         with patch.object(self.m,'detected_modules',return_value=['claude']),patch.object(self.m,'connection_ready',return_value=False),patch.object(self.m,'chatgpt_configured',return_value=False):
-            rows=self.m.connection_options()
+            rows=self.m.module_options()
         for row in rows:
             if row.get('value'):self.assertIn(row['value'],('已配置','未配置'))
         by_name={r['label']:r for r in rows}
@@ -120,7 +120,7 @@ class PowerTests(unittest.TestCase):
         folder=Path(self.temp.name)/'custom projects';folder.mkdir()
         self.m.preferences.update(self.m.STATE_DIR,'path','claude',str(folder))
         with patch.object(self.m,'detected_modules',return_value=[]):
-            row=next(r for r in self.m.connection_options() if r['label']=='Claude Code')
+            row=next(r for r in self.m.module_options() if r['label']=='Claude Code')
         self.assertEqual(row['value'],'已配置')
         self.assertTrue(any(c.get('detail')==str(folder.resolve()) for c in row['children']))
         self.assertTrue(any(c.get('action')==['reveal-source','claude'] for c in row['children']))
@@ -132,21 +132,31 @@ class PowerTests(unittest.TestCase):
     def test_key_file_path_is_shown_without_credential_contents(self):
         path=Path(self.temp.name)/'provider.key';path.write_text('PRIVATE-TEST-KEY')
         with patch.dict(os.environ,{'DEEPSEEK_API_KEY_FILE':str(path)}),patch.object(self.m,'detected_modules',return_value=[]):
-            row=next(r for r in self.m.connection_options() if r['label']=='DeepSeek API')
+            row=next(r for r in self.m.module_options() if r['label']=='DeepSeek API')
         text=json.dumps(row)
         self.assertIn(str(path),text);self.assertNotIn('PRIVATE-TEST-KEY',text)
 
-    def test_connection_groups_are_flat_and_correct(self):
-        with patch.object(self.m,'detected_modules',return_value=[]):rows=self.m.connection_options()
+    def test_configuration_is_merged_into_module_rows_in_the_same_groups(self):
+        with patch.object(self.m,'detected_modules',return_value=[]):rows=self.m.module_options()
         groups={};current=None
         for row in rows:
             if row.get('section'):current=row['label'];groups[current]=[]
-            elif row.get('value'):groups[current].append(row['label'])
-        self.assertEqual(list(groups),['本机 Harness','API','订阅套餐','其他'])
-        self.assertIn('Claude Code',groups['本机 Harness'])
+            elif (row.get('action') or [''])[0]=='set-module':groups[current].append(row['label'])
+        self.assertEqual(list(groups),['概览','Harness','订阅','API','其他'])
+        self.assertIn('Claude Code',groups['Harness']);self.assertIn('OpenCodex',groups['Harness'])
         self.assertEqual(groups['API'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
-        self.assertEqual(groups['订阅套餐'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
-        self.assertEqual(groups['其他'],['OpenCodex','Komari 监控'])
+        self.assertEqual(groups['订阅'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
+        self.assertEqual(groups['其他'],['Komari 监控','应用更新'])
+        self.assertFalse(any(r['label']=='连接与数据' for r in rows))
+    def test_hidden_modules_keep_configuration_and_native_fallback_can_toggle(self):
+        self.m.preferences.update(self.m.STATE_DIR,'module','chatgpt','false')
+        rows=self.m.module_options();chatgpt=next(r for r in rows if r.get('action',[])[:2]==['set-module','chatgpt'])
+        self.assertFalse(chatgpt['checked']);self.assertTrue(chatgpt['children'])
+        self.assertIn(['choose-client-home','chatgpt'],[c.get('action') for c in chatgpt['children']])
+        native=self.m.module_menu_lines()
+        self.assertTrue(any('显示在主页' in row and 'param3=set-module' in row and 'param4=chatgpt' in row for row in native))
+        settings=next(r for r in rows if r['label']=='外观与设置')
+        self.assertIn(['open-settings'],[r.get('action') for r in settings['children']])
     def test_home_resource_groups_omit_empty_sections(self):
         for key in self.m.preferences.KNOWN:self.m.preferences.update(self.m.STATE_DIR,'module',key,'false')
         rows=self.m.resource_panel_entries({})
@@ -161,7 +171,7 @@ class PowerTests(unittest.TestCase):
         self.assertIn('DeepSeek API',groups['API']);self.assertIn('Grok API',groups['API'])
         self.assertTrue(any(x.startswith('Komari') for x in groups['其他']))
     def test_client_configuration_actions_are_visible_and_whitelisted(self):
-        choices=self.m.connection_options()
+        choices=self.m.module_options()
         for label,action in [('ChatGPT 订阅',['choose-client-home','chatgpt']),('OpenCodex',['set-proxy-address'])]:
             row=next(r for r in choices if r['label']==label)
             self.assertIn(action,[c.get('action') for c in row['children']])

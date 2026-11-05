@@ -1,5 +1,5 @@
 # Optional local configuration. No user-specific path is required.
-# Examples only. Use “主页模块 → 连接与数据” for guided setup, or its “高级配置文件”.
+# Examples only. Hover a source in “主页模块” for guided setup; “外观与设置” contains “高级配置文件”.
 # This file is never automatically loaded or copied during installation.
 # export KOMARI_BASE_URL="https://komari.example.com"
 # export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"

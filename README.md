@@ -35,7 +35,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
 | 应用更新 | OpenCodex 稳定版自动更新；Claude、ChatGPT、Claude Code 只提示 |
 
-订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块目录、主页和连接设置共用同一分类。
+订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块选择与连接设置合并在同一列表，分类与主页一致。
 
 “已配置”旁为绿色实心圆点，“未配置”旁为灰色空心圆点，文字始终保留。圆点只说明存在配置引用或用户保存的手动标记，不代表已验证凭据或付费状态。尚未接入查询的模块显示“官网查看”，不显示伪造的零余额；未设置则显示“未配置”。订阅手动标记保存在本机偏好文件，不复制登录信息。API 官网入口模块不会发送密钥请求。MiniMax API 使用独立的 `MINIMAX_PLATFORM_API_KEY_FILE`，不复用订阅的 `MINIMAX_API_KEY_FILE`。
 
@@ -83,11 +83,13 @@ SwiftBar 插件目录/
 
 ## 本机配置
 
-常用设置在 **右键星星 → 主页模块 → 连接与数据**，按 **本机 Harness、API、订阅套餐、其他** 分组，不增加菜单层级，也不需要修改脚本。每项明确显示“已配置”或“未配置”；自动读取或手动指定是配置来源，不代替状态，已配置也不等于网络验证成功：
+**右键星星 → 主页模块** 同时管理显示与连接，按 **Harness、订阅、API、其他** 分组。左侧勾选决定是否显示，右侧圆点与文字表示配置状态；悬停名称或点击箭头直接展开该模块的连接设置，取消勾选后仍可配置。点击复选框或名称可连续多选，鼠标停在复选框上不会弹出侧栏。
+
+每项连接明确显示“已配置”或“未配置”；配置状态不等于连接验证结果。通用外观、自动检测、高级配置文件和恢复默认集中放在底部“外观与设置”：
 
 - 本机客户端自动读取标准记录目录；已配置项在下一级显示实际读取目录，可在 Finder 中打开、手动选择或恢复自动查找。API 只显示配置/密钥文件路径，不显示密钥内容。
 - ChatGPT 订阅支持自动、本机登录和 OpenCodex 账户三种来源选择；支持选择含 `auth.json` 的配置目录、恢复自动读取及在 Finder 中打开；默认使用 `CODEX_HOME` 或 `~/.codex`。只改变插件读取位置，不修改客户端登录文件，也不影响 ChatGPT 本机用量目录。
-- OpenCodex 位于“其他”：可选择配置目录、修改管理地址、选择管理令牌文件及恢复自动读取。选择配置目录时改为读取该目录内的端口和令牌，不保留上一个目录的连接覆盖。
+- OpenCodex 位于 Harness 分组：可选择配置目录、修改管理地址、选择管理令牌文件及恢复自动读取。选择配置目录时改为读取该目录内的端口和令牌，不保留上一个目录的连接覆盖。
 - DeepSeek 优先使用明确指定的密钥文件，否则读取 OpenCodex 的官方 DeepSeek 连接。
 - Komari 必须明确提供实际面板地址；空值、注释和示例地址不算配置，不会自动启用。
 - Grok 选择管理密钥文件并填写 Team ID；MiniMax 选择套餐密钥文件和地区。全部确认后才保存，任一步取消都不改变设置。
@@ -106,7 +108,7 @@ SwiftBar 插件目录/
 
 `config.local.sh` 是唯一的插件用户配置。注释只作说明，不是已启用的设置。安装器不会再自动复制仓库中的私有配置；旧运行目录配置仅在用户配置不存在时迁移一次，已存在的用户配置（即使只有注释）始终优先，旧文件备份后移出。首次安装需要显式导入时可传 `--config /path/to/config.local.sh`；已有用户配置时拒绝覆盖。
 
-Claude Code、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“连接与数据”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
+Claude Code、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“主页模块”中悬停对应客户端后选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
 

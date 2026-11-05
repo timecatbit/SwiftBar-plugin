@@ -6,7 +6,9 @@ struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
     var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
     var actionable:Bool { !children.isEmpty || href != nil || action != nil }
-    var key:String {action?.joined(separator:"\u{001F}") ?? href ?? label.components(separatedBy:" · ").first ?? label}
+    var isModule:Bool {action?.first=="set-module"}
+    var key:String {if isModule,let action{return action.prefix(2).joined(separator:"\u{001F}")}
+        return action?.joined(separator:"\u{001F}") ?? href ?? label.components(separatedBy:" · ").first ?? label}
 }
 struct ModelUsage:Decodable {var name:String;var tokens:Double;var share:Double}
 struct ProviderUsage:Decodable {
@@ -313,6 +315,10 @@ final class DashboardView:FlippedView {
 
 }
 enum MenuLayout {
+    static func configurationClick(_ e:Entry,x:CGFloat,width:CGFloat)->Bool {
+        e.isModule && !e.children.isEmpty && x>=width-32 && x<=width
+    }
+    static func configurationHover(_ e:Entry,x:CGFloat)->Bool { !e.isModule || x>=36 }
     static func hasIcon(_ e:Entry)->Bool {e.image != nil || e.symbol != nil || e.checked != nil}
     static func column(_ entries:[Entry])->CGFloat {entries.contains(where:hasIcon) ? 36 : 12}
     static func labelFont(_ e:Entry)->NSFont {.systemFont(ofSize:e.section==true ? 10.5 : (e.actionable ? 12 : 10.5),weight:e.section==true ? .medium : .regular)}
@@ -369,11 +375,13 @@ final class Row:NSButton {
     let entry:Entry;var pointerAllowed:(()->Bool)?;var invoke:((Entry,Row)->Void)?;var hover:((Entry,Row)->Void)?
     var expanded=false {didSet{needsDisplay=true}}
     var columnInset:CGFloat=12
+    private(set) var configurationClick=false
     private var hovering=false;private var tracking:NSTrackingArea?;private var glyph:NSImage?
     init(_ entry:Entry,frame:NSRect){
         self.entry=entry;super.init(frame:frame);title=entry.label;isBordered=false;setButtonType(.momentaryChange)
         target=self;action=#selector(activate);isEnabled=entry.actionable
         setAccessibilityLabel(entry.label+(entry.value.map{", "+$0} ?? "")+(entry.detail.map{", "+$0} ?? ""))
+        if entry.isModule && !entry.children.isEmpty{setAccessibilityHelp("点击切换主页显示；悬停或点击右侧箭头配置连接") }
         if let raw=entry.image,let data=Data(base64Encoded:raw),let img=NSImage(data:data){glyph=img;glyph?.isTemplate=entry.template ?? false}
         else if let symbol=entry.symbol{glyph=NSImage(systemSymbolName:symbol,accessibilityDescription:nil)}
     }
@@ -381,7 +389,12 @@ final class Row:NSButton {
     @objc private func activate(){invoke?(entry,self)}
     override func viewDidChangeEffectiveAppearance(){super.viewDidChangeEffectiveAppearance();needsDisplay=true}
     override func updateTrackingAreas(){super.updateTrackingAreas();if let tracking{removeTrackingArea(tracking)};tracking=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(tracking!)}
-    override func mouseDown(with event:NSEvent){guard pointerAllowed?() ?? true else{return};super.mouseDown(with:event)}
+    override func mouseDown(with event:NSEvent){
+        guard pointerAllowed?() ?? true else{return}
+        configurationClick=MenuLayout.configurationClick(entry,x:convert(event.locationInWindow,from:nil).x,width:bounds.width)
+        defer{configurationClick=false}
+        super.mouseDown(with:event)
+    }
     override func mouseEntered(with event:NSEvent){guard pointerAllowed?() ?? true else{return};hovering=true;needsDisplay=true;hover?(entry,self)}
     override func mouseExited(with event:NSEvent){hovering=false;needsDisplay=true}
     override func draw(_ dirtyRect:NSRect){
@@ -658,7 +671,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         if managerOnly {
             let heading=NSTextField(labelWithString:"主页模块");heading.font = .systemFont(ofSize:14,weight:.semibold);heading.frame=NSRect(x:12,y:7,width:inner-85,height:20);content.addSubview(heading)
             let count=entries.filter{$0.action?.first=="set-module" && $0.checked==true}.count
-            let hint=NSTextField(labelWithString:"已启用 \(count) 项 · 可连续选择");hint.font = .systemFont(ofSize:10);hint.textColor = .secondaryLabelColor;hint.frame=NSRect(x:12,y:29,width:inner-24,height:15);content.addSubview(hint)
+            let hint=NSTextField(labelWithString:"已启用 \(count) 项 · 悬停配置");hint.font = .systemFont(ofSize:10);hint.textColor = .secondaryLabelColor;hint.frame=NSRect(x:12,y:29,width:inner-24,height:15);content.addSubview(hint)
             let done=NSButton(title:"完成",target:self,action:#selector(finishModules));done.bezelStyle = .rounded;done.controlSize = .small;done.frame=NSRect(x:inner-65,y:8,width:53,height:25);content.addSubview(done)
         } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);view.toggleProvider={[weak self] id,expanded in self?.performAction(["set-expanded",id,expanded ? "true" : "false"])};content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
         let divider=NSBox(frame:NSRect(x:8,y:top-5,width:inner-16,height:1));divider.boxType = .separator;content.addSubview(divider)
@@ -689,10 +702,17 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         return windows[index]
     }
     private func pointerHits(_ row:Row)->Bool {topPanel(at:NSEvent.mouseLocation) === row.window && rowRect(row).contains(NSEvent.mouseLocation)}
+    private func allowsConfigurationHover(_ row:Row)->Bool {
+        guard let window=row.window else{return false}
+        return MenuLayout.configurationHover(row.entry,x:row.convert(window.convertPoint(fromScreen:NSEvent.mouseLocation),from:nil).x)
+    }
     private func hover(_ entry:Entry,row:Row,depth:Int){
         guard !rangeMenuOpen,pointerHits(row) else{return}
         closeTask?.cancel();hoverTask?.cancel()
-        let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.pointerHits(row) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
+        // A left-opening flyout is reached through the checkbox column.
+        // Suppress new hover requests here, but retain the already open panel.
+        guard allowsConfigurationHover(row) else{return}
+        let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.pointerHits(row),self.allowsConfigurationHover(row) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
         hoverTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task)
     }
     private func openFlyout(_ entry:Entry,row:Row,depth:Int,checkSource:Bool=true){
@@ -729,6 +749,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         for depth in rows.indices.reversed(){
             if let row=rows[depth].values.first(where:{$0.window === top && rowRect($0).contains(p)}) {
                 closeTask?.cancel()
+                if !allowsConfigurationHover(row){hoverTask?.cancel();return}
                 if row.entry.children.isEmpty {
                     if flyouts.count>depth{hover(row.entry,row:row,depth:depth)}
                 }else if !flyouts.indices.contains(depth) || flyouts[depth].key != row.entry.key {
@@ -760,6 +781,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         if let next=interaction.next(){dispatchAction(next)}
     }
     private func activate(_ entry:Entry,row:Row,depth:Int){
+        if entry.isModule,!row.configurationClick,let action=entry.action{performAction(action);return}
         if !entry.children.isEmpty{openFlyout(entry,row:row,depth:depth);return}
         if let href=entry.href,let url=URL(string:href),["http","https","swiftbar"].contains(url.scheme ?? ""){hide();NSWorkspace.shared.open(url);return}
         if let action=entry.action{performAction(action)}
