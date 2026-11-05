@@ -7,6 +7,8 @@
 # export OCX_HOME="$HOME/.opencodex"
 # export OCX_TOKEN_FILE="$HOME/.opencodex/admin-api-token"
 # export CLAUDE_APP_DATA_DIR="$HOME/Library/Application Support/Claude"  # Desktop registry and subscription snapshot.
+# Optional shared transcript roots; only App-registered sessions are counted.
+# export CLAUDE_CONFIG_DIR="$HOME/.claude,$HOME/.config/claude"
 # export OCX_CHATGPT_HOME="$HOME/.codex"  # Subscription login source; does not change ChatGPT local usage.
 # export CODEX_USAGE_DIR="$HOME/.codex"
 # export OPENCODE_DATA_DIR="$HOME/.local/share/opencode"

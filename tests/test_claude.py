@@ -49,4 +49,67 @@ class ClaudeTests(unittest.TestCase):
   other=Path(self.temp.name)/'other';other.mkdir()
   second=self.m.claude_usage_records(other,now=self.now)[0]
   self.assertEqual(first['summary']['requests'],1);self.assertEqual(second['summary']['requests'],0)
+ def test_cache_duration_breakdown_is_authoritative(self):
+  row=self.row();u=row['message']['usage'];u['cache_creation_input_tokens']=999;u['cache_creation']={'ephemeral_5m_input_tokens':2,'ephemeral_1h_input_tokens':3}
+  self.write('one.jsonl',[row]);result=self.stats()['summary']
+  self.assertEqual(result['totalTokens'],1125);self.assertEqual(result['cacheCreationInputTokens'],5)
+  self.assertAlmostEqual(result['estimatedCostUsd'],self.m.claude_price('claude-opus-5-5',(100,20,2,3,1000)))
+ def test_missing_request_id_does_not_merge_gateway_sessions_or_timestamps(self):
+  one=self.row();one.pop('requestId');one['message']['id']='gateway-placeholder'
+  two=json.loads(json.dumps(one));two['sessionId']='another'
+  three=json.loads(json.dumps(one));three['timestamp']='2026-11-04T02:00:00Z'
+  self.write('one.jsonl',[one,two,three]);self.assertEqual(self.stats()['summary']['requests'],3)
+ def test_requestless_response_content_blocks_use_complete_usage(self):
+  one=self.row(id='msg_unique',output=1);one.pop('requestId')
+  two=json.loads(json.dumps(one));two['timestamp']='2026-11-04T01:00:01Z';two['message']['usage']['output_tokens']=20
+  two['message']['usage']['cache_read_input_tokens']=995
+  self.write('one.jsonl',[one,two]);result=self.stats()['summary']
+  self.assertEqual(result['requests'],1);self.assertEqual(result['totalTokens'],1315)
+ def test_sidechain_replay_keeps_parent_even_if_replay_has_larger_counters(self):
+  parent=self.row();replay=json.loads(json.dumps(parent));replay.update(isSidechain=True,requestId='replay');replay['message']['usage']['cache_read_input_tokens']=9999
+  answer=self.row(id='msg_sidechain');answer['isSidechain']=True
+  for rows in ([replay,parent,answer],[parent,replay,answer]):
+   self.write('one.jsonl',rows);result=self.stats()['summary']
+   self.assertEqual(result['requests'],2);self.assertEqual(result['totalTokens'],2640)
+ def test_copied_session_alias_still_matches_sidechain_replay(self):
+  parent=self.row();copy=json.loads(json.dumps(parent));copy['sessionId']='copy-session'
+  replay=json.loads(json.dumps(copy));replay.update(isSidechain=True,requestId='replay')
+  self.write('one.jsonl',[parent,copy,replay]);self.assertEqual(self.stats()['summary']['requests'],1)
+ def test_advisor_iterations_are_separate_models_and_other_iterations_are_not_added(self):
+  row=self.row();row['message']['usage']['iterations']=[{'type':'advisor_message','model':'claude-fable-5-1','input_tokens':30,'output_tokens':5},{'type':'model_message','model':'claude-opus-5-5','input_tokens':99999,'output_tokens':99999}]
+  self.write('one.jsonl',[row,row]);result=self.stats()
+  self.assertEqual(result['summary']['totalTokens'],1355);self.assertEqual(result['summary']['requests'],2)
+  self.assertEqual({r['model'] for r in result['models']},{'claude-opus-5-5','claude-fable-5-1'})
+ def test_recorded_cost_is_preferred_including_zero_and_unknown_models(self):
+  one=self.row(model='custom-model');one['costUSD']=.25
+  two=self.row('m2');two['costUSD']=0
+  self.write('one.jsonl',[one,two]);result=self.stats()['summary']
+  self.assertEqual(result['estimatedCostUsd'],.25);self.assertEqual(result['unpricedRequests'],0);self.assertEqual(result['recordedCostRequests'],2)
+ def test_invalid_recorded_cost_does_not_turn_unknown_price_into_zero(self):
+  for value in (True,-1,float('nan'),float('inf')):
+   row=self.row(model='custom-model');row['costUSD']=value;self.write('one.jsonl',[row])
+   self.assertEqual(self.stats()['summary']['unpricedRequests'],1)
+ def test_replaced_removed_and_same_size_rewritten_files_do_not_keep_old_usage(self):
+  self.write('one.jsonl',[self.row(),self.row('m2')]);self.assertEqual(self.stats()['summary']['requests'],2)
+  self.write('one.jsonl',[self.row()]);self.assertEqual(self.stats()['summary']['requests'],1)
+  self.write('one.jsonl',[self.row(output=21)]);self.assertEqual(self.stats()['summary']['outputTokens'],21)
+  (self.root/'one.jsonl').unlink();self.assertEqual(self.stats()['summary']['requests'],0)
+ def test_warm_read_uses_index_and_never_persists_message_text_or_raw_ids(self):
+  row=self.row(id='PRIVATE-RESPONSE-ID');row['message']['content']=[{'type':'text','text':'PRIVATE-CONVERSATION'}]
+  self.write('one.jsonl',[row]);self.stats()
+  with patch.object(Path,'open',side_effect=AssertionError('unchanged log was reread')),patch.object(self.m.claude_records,'deduplicate',side_effect=AssertionError('unchanged index was deduplicated again')):
+   self.assertEqual(self.stats()['summary']['requests'],1)
+  raw=Path(self.db).read_bytes()
+  for value in (b'PRIVATE-CONVERSATION',b'PRIVATE-RESPONSE-ID',str(self.root).encode()):self.assertNotIn(value,raw)
+ def test_deduplication_precedes_range_filter_and_retains_original_day(self):
+  original=self.row(timestamp='2026-11-03T15:00:00Z');copy=self.row()
+  self.write('one.jsonl',[copy,original])
+  self.assertEqual(self.stats()['summary']['requests'],0)
+  self.assertEqual(self.m.claude_usage_records(self.root,self.db,self.now,'all')[0]['summary']['requests'],1)
+ def test_interrupted_reindex_cannot_leave_new_offsets_with_old_canonical_data(self):
+  self.write('one.jsonl',[self.row(),self.row('m2')]);self.assertEqual(self.stats()['summary']['requests'],2)
+  self.write('one.jsonl',[self.row()])
+  with patch.object(self.m.claude_records,'deduplicate',side_effect=RuntimeError('interrupted')):
+   with self.assertRaises(RuntimeError):self.stats()
+  self.assertEqual(self.stats()['summary']['requests'],1)
 if __name__=='__main__':unittest.main(verbosity=2)

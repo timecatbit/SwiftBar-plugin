@@ -48,6 +48,16 @@ class DesktopTests(unittest.TestCase):
   self.transcript(OTHER)
   data,_=self.m.claude_usage_live(self.root,now=self.now)
   self.assertIn('暂无可读取',data['error']);self.assertNotIn('summary',data)
+ def test_multiple_config_roots_keep_only_app_registered_sessions(self):
+  self.register();owned=self.transcript(SESSION);cli=self.transcript(OTHER)
+  xdg=self.home/'.config/claude/projects';xdg.mkdir(parents=True)
+  (xdg/owned.name).write_bytes(owned.read_bytes());(xdg/cli.name).write_bytes(cli.read_bytes())
+  files,_=desktop.transcript_files(self.root,self.home)
+  self.assertEqual(len(files),2)
+  with patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':str(xdg)+','+str(xdg.parent)}):
+   files,_=desktop.transcript_files(self.root,self.home);self.assertEqual(files,[xdg/owned.name])
+  data,_=self.m.claude_usage_live(self.root,now=self.now)
+  self.assertEqual(data['summary']['requests'],1)
  def test_legacy_cli_path_does_not_override_app_path(self):
   prefs=preferences.read(self.m.STATE_DIR);prefs['paths']['claude']=str(self.home/'.claude/projects');preferences.write(self.m.STATE_DIR,prefs)
   self.assertEqual(self.m.source_path('claude'),str(self.root))

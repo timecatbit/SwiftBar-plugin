@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.5.5**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.7.0**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -21,7 +21,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Summary | 汇总当前显示的用量来源；共用趋势图显示总量及各来源 |
 | OpenCodex | 本机或自定义管理接口的 Token、请求、费用、模型分布；附代理管理 |
 | Claude | Claude 桌面 App 登记的可读取会话用量；排除未登记的独立 CLI 会话，未知价格显示未计价 |
-| ChatGPT 本机用量 | Codex 会话与归档会话的用量事件；不会把缓存或 reasoning 再加一次 |
+| ChatGPT 本机用量 | Codex 普通/归档会话，支持 `.jsonl` 和 `.jsonl.zst`；优先单次用量，兼容仅累计计数，不重复加缓存或 reasoning |
 | OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用 |
 | DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志 |
 | WorkBuddy | 当前与旧版 `projects` JSONL；按响应 ID 去重，缓存与 reasoning 不重复计数，Credit 不视作美元 |
@@ -113,6 +113,8 @@ Claude App、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的�
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
 
+Claude App 的会话仍由桌面 App 登记决定；用量记录同时查找 `~/.claude/projects` 和 `${XDG_CONFIG_HOME:-~/.config}/claude/projects`，或 `CLAUDE_CONFIG_DIR` 指定的逗号分隔目录（配置根目录或 `projects` 目录均可）。不同目录的副本会去重，独立 CLI 会话不会因此混入 App 模块。
+
 自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 ChatGPT 编程客户端登录状态；也保留已手动配置的订阅入口。自动检测本身不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效；已接入自动查询的模块在打开时检查，官网入口模块不发请求。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
 
 ## 后台开销
@@ -124,6 +126,8 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 ## 统计口径与隐私
 
 - 费用是已知价格的 API 等值估算，或客户端记录的费用，不是订阅账单。没有价格的数据会保留 Token 并标记未计价。
+- Claude 缓存写入区分 5 分钟/1 小时时长，存在明细时以明细为准。有效 `costUSD` 优先作为客户端记录费用，缺失时再按已知价格估算；未知价格不伪造零费用。`advisor_message` 按自身模型单独计入，普通迭代不重复相加。
+- 响应优先按 message/request ID 去重；缺少 request ID 时限制到会话和时间，真实响应 ID 跨流式内容块合并。侧链重放保留父响应，独立侧链回答正常统计。文件替换、删减、压缩或归档迁移会更新索引，避免残留旧统计。去重先于范围过滤，切换日期范围不重复解析日志。
 - 同时显示 OpenCodex 和 ChatGPT 本机用量时，OpenCodex 有可用数据则作为 Summary 的统计来源；ChatGPT 保留独立明细，避免同一调用跨代理和客户端重复相加。关闭 OpenCodex 后，ChatGPT 会计入 Summary。
 - 其他客户端会排除明确标记为 `opencodex`/`ocx` 的代理记录。自定义路由名及跨工具导入的历史可能仍重叠，使用共享代理时应选择合适的统计来源。
 - 按系统时区统计，可通过 `OCX_TIMEZONE` 覆盖。周从周一开始；近 24 小时为滚动窗口，近 7/30 天含当天。
@@ -137,6 +141,14 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 
 接口与格式依据：[Apple 原生玻璃](https://developer.apple.com/documentation/appkit/nsglasseffectview)、[Codex App Server](https://learn.chatgpt.com/docs/app-server)、[DeepSeek 余额](https://api-docs.deepseek.com/api/get-user-balance/)、[DeepSeek Harness 存储](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/session/session-persistence-jsonl)、[OpenCode 数据目录](https://opencode.ai/docs/troubleshooting/)、[Gemini 会话格式](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingTypes.ts)、[xAI 账单接口](https://docs.x.ai/developers/rest-api-reference/management/billing)、[MiniMax 官方额度解析](https://github.com/MiniMax-AI/cli/blob/main/src/utils/quota.ts)。
+
+## 参考实现与许可
+
+本版参考并适配了 [ccusage](https://github.com/ccusage/ccusage) 的采集逻辑，固定参考版本为 [`615bd802`](https://github.com/ccusage/ccusage/tree/615bd802bc5c50246b84e98406f20ab048e27cf6)。重点采用其 [Claude 响应去重与 advisor 规则](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/claude/src/lib.rs)、[缓存计费](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/crates/ccusage-core/src/cost.rs)、[Codex 单次/累计用量解析](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/codex/src/parser.rs)和压缩日志选择逻辑，改为适合菜单栏刷新的 Python/SQLite 增量实现。
+
+ccusage 为 MIT 许可，版权声明及完整许可证保存在 [lib/CCUSAGE_LICENSE](lib/CCUSAGE_LICENSE)，安装时一并复制。运行插件不需要安装 ccusage、Node 或 Rust；读取压缩日志仍需要 `zstd` 或具备 Zstandard 支持的 Node.js。
+
+这些本机日志规则提供 Token 和费用统计，不提供账号订阅的实时用量百分比或余额。Claude App 的账户用量仍使用独立的授权查询入口；不会从 API 等值费用推算订阅额度。
 
 ## 开发维护
 

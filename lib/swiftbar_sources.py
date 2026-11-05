@@ -1,4 +1,7 @@
-"""Read-only local harness adapters. Persist only usage counters, never message bodies."""
+"""Read-only local harness adapters. Persist only usage counters, never message bodies.
+
+Codex delta/rollout rules adapted from ccusage (MIT), 615bd802. See CCUSAGE_LICENSE.
+"""
 import hashlib
 import json
 import math
@@ -48,22 +51,22 @@ def codex_event(row, state):
     elif kind == 'event_msg' and data.get('type') == 'token_count':
         info = data.get('info') or {}; total = info.get('total_token_usage') or {}
         last = info.get('last_token_usage') or {}
-        if not total or not last:
+        if not total and not last:
             return None
         previous = state.get('total')
-        state['total'] = total
-        if previous == total:
+        if total:state['total'] = total
+        if total and previous == total:
             return None
         fields = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens']
-        # A copied/forked history may start with inherited cumulative counters.
-        # The first sample contributes only its last request, never that inheritance.
-        values = last if not previous or number(total.get('total_tokens')) < number(previous.get('total_tokens')) else {
-            key: max(0, number(total.get(key)) - number(previous.get(key))) for key in fields}
+        # A recorded request delta avoids charging inherited cumulative counters.
+        # ccusage prefers a recorded request delta; cumulative totals are a fallback.
+        # Their jump can include inherited/compacted context, not just this request.
+        values = last or {key:max(0,number(total.get(key))-number((previous or {}).get(key))) for key in fields}
         inputs = number(values.get('input_tokens')); cached = min(inputs, number(values.get('cached_input_tokens')))
         result = metrics(state.get('model'), inputs - cached, values.get('output_tokens'), cached)
         if inputs + result['output'] <= 0:
             return None
-        result.update(id=identity('codex', state['session'], total), session=identity(state['session']),
+        result.update(id=identity('codex', state['session'], total or [row['timestamp'],last]), session=identity(state['session']),
                       timestamp=stamp(row['timestamp']), provider=state.get('provider', ''))
         return result
     return None
@@ -109,7 +112,14 @@ def deepseek_event(row, state):
 def _jsonl_files(root, source):
     if source == 'codex':
         roots = [root/name for name in ('sessions', 'archived_sessions') if (root/name).is_dir()]
-        return sorted(path for folder in (roots or [root]) for path in folder.rglob('*.jsonl'))
+        chosen={}
+        # Active copy wins over archive; plain copy wins over compressed in each root.
+        for folder in roots or [root]:
+            for path in sorted(folder.rglob('*.jsonl*')):
+                if not path.name.endswith(('.jsonl','.jsonl.zst')):continue
+                relative=str(path.relative_to(folder)).removesuffix('.zst')
+                chosen.setdefault(relative,path)
+        return list(chosen.values())
     if source == 'workbuddy':
         roots = [root/name/'projects' for name in ('.workbuddy-ai','.workbuddy') if (root/name/'projects').is_dir()]
         if not roots and root==Path.home():return []
@@ -127,7 +137,7 @@ def _jsonl_files(root, source):
 
 
 def _stream(path):
-    if path.suffix != '.zstd':
+    if path.suffix not in ('.zstd','.zst'):
         return path.open('rb'), None, None
     binary = shutil.which('zstd')
     if binary:
@@ -145,7 +155,7 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
     root = Path(root).expanduser()
     if not root.is_dir():
         return {'error': '未找到记录目录'}
-    db = Path(cache) / ('harness-' + source + '-' + identity(str(root.resolve()))[:12] + '.sqlite3')
+    db = Path(cache) / ('harness-v2-' + source + '-' + identity(str(root.resolve()))[:12] + '.sqlite3')
     db.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     conn = sqlite3.connect(db, timeout=10); os.chmod(db, 0o600)
     try:
@@ -153,16 +163,19 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
         parser = {'codex':codex_event,'deepseek-harness':deepseek_event,'workbuddy':workbuddy_event}[source]
         errors = 0
         paths = _jsonl_files(root, source)
+        active={identity(str(path)) for path in paths}
+        if any(key not in active for (key,) in conn.execute('SELECT path FROM files')):
+            # Events are deduplicated across files. Rebuild after a source disappears
+            # so a surviving copy can take ownership, including archive/compression moves.
+            conn.execute('DELETE FROM events');conn.execute('DELETE FROM files')
         for path in paths:
             try:
                 st = path.stat(); file_key = identity(str(path))
                 previous = conn.execute('SELECT inode,size,mtime,offset,state FROM files WHERE path=?', (file_key,)).fetchone()
-                if not previous and st.st_mtime < start:
-                    continue
                 if previous and previous[:3] == (st.st_ino, st.st_size, st.st_mtime_ns):
                     continue
-                incremental = previous and previous[0] == st.st_ino and previous[1] <= st.st_size and path.suffix != '.zstd'
-                state = json.loads(previous[4]) if incremental else {'session': path.stem}
+                incremental = previous and previous[0] == st.st_ino and previous[1] < st.st_size and path.suffix not in ('.zstd','.zst')
+                state = json.loads(previous[4]) if incremental else {'session': path.name.removesuffix('.zst').removesuffix('.jsonl')}
                 offset = previous[3] if incremental else 0
                 stream, process, timer = _stream(path)
                 conn.execute('SAVEPOINT source_file')
@@ -188,7 +201,7 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
                             event = parser(row, state)
                             if event:
                                 conn.execute('INSERT OR REPLACE INTO events VALUES (?,?,?,?)', (event['id'], file_key, event['timestamp'], json.dumps(event)))
-                        except (KeyError, TypeError, json.JSONDecodeError):
+                        except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
                             continue
                     if process and process.wait(timeout=2) != 0:
                         raise RuntimeError('压缩日志读取失败')

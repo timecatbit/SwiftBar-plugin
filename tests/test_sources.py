@@ -48,6 +48,33 @@ class SourceTests(unittest.TestCase):
         result=self.read(exclude=True)
         self.assertEqual(result['summary']['totalTokens'],0);self.assertEqual(result['excludedProxyRequests'],1)
         self.assertEqual(self.read(exclude=False)['summary']['totalTokens'],150)
+    def test_cumulative_only_and_delta_only_records_are_not_dropped(self):
+        one=self.codex(150,150,100);one['payload']['info'].pop('last_token_usage')
+        two=self.codex(300,150,200);two['payload']['info'].pop('last_token_usage')
+        three=self.codex(450,150,300);three['payload']['info'].pop('total_token_usage')
+        self.write(self.root/'one.jsonl',[one,two,two,three,three])
+        self.assertEqual(self.read()['summary']['totalTokens'],450)
+        self.assertEqual(self.read()['summary']['requests'],3)
+    def test_explicit_request_delta_wins_over_inherited_cumulative_jump(self):
+        self.write(self.root/'one.jsonl',[self.codex(1000,150,100),self.codex(9000,150,200)])
+        self.assertEqual(self.read()['summary']['totalTokens'],300)
+    def test_old_file_mtime_does_not_hide_usage_in_requested_window(self):
+        import os
+        path=self.root/'one.jsonl';self.write(path,[self.codex(150,150,200)]);os.utime(path,(1,1))
+        self.assertEqual(self.read(start=100,end=300)['summary']['totalTokens'],150)
+    @unittest.skipUnless(shutil.which('zstd'),'zstd not installed')
+    def test_compressed_codex_prefers_active_and_plain_copies_then_survives_moves(self):
+        active=self.root/'sessions/day/rollout.jsonl';archive=self.root/'archived_sessions/day/rollout.jsonl'
+        rows=[{'type':'session_meta','payload':{'id':'same'}},self.codex(150,150,100)]
+        self.write(active,rows);self.write(archive,rows+[self.codex(300,150,200)])
+        compressed=Path(str(active)+'.zst');compressed.write_bytes(subprocess.run(['zstd','-q','-c'],input=active.read_bytes(),capture_output=True,check=True).stdout)
+        self.assertEqual(self.read()['summary']['totalTokens'],150)
+        active.unlink();self.assertEqual(self.read()['summary']['totalTokens'],150)
+        compressed.unlink();self.assertEqual(self.read()['summary']['totalTokens'],300)
+    def test_same_size_rewrite_and_removal_rebuild_usage(self):
+        path=self.root/'one.jsonl';self.write(path,[self.codex(150,150,100)]);self.read()
+        self.write(path,[self.codex(151,151,100)]);self.assertEqual(self.read()['summary']['totalTokens'],151)
+        path.unlink();self.assertIn('error',self.read())
     def dsh(self,seq=2,inputs=80,kind='assistant/message'):
         return {'type':kind,'seq':seq,'time':1730800000000,'data':{'turn':1,'step':1,'message':{'model':'deepseek-flash','provider':'deepseek'},'usage':{'inputTokens':inputs,'outputTokens':10,'cacheReadTokens':20},'stream':[]}}
     def test_harness_uses_latest_generation_and_latest_settlement(self):

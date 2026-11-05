@@ -1,6 +1,7 @@
 """Read Claude Desktop's own registry and quota snapshots; never read credentials."""
 import json
 import math
+import os
 from pathlib import Path
 import re
 import time
@@ -46,11 +47,23 @@ def registered_ids(root):
     return ids
 
 
+def project_roots(home):
+    """ccusage-compatible paths, still restricted to App-registered sessions."""
+    home=Path(home);configured=os.environ.get('CLAUDE_CONFIG_DIR','').strip()
+    if configured:
+        roots=[Path(raw.strip()).expanduser() for raw in configured.split(',') if raw.strip()]
+    else:
+        xdg=Path(os.environ.get('XDG_CONFIG_HOME') or home/'.config')
+        roots=[home/'.claude',xdg/'claude']
+    projects=[p if p.name=='projects' else p/'projects' for p in roots]
+    return list(dict.fromkeys(projects))
+
+
 def transcript_files(root, home):
     """The app uses shared transcript storage; only its registered sessions qualify."""
     root=Path(root);ids=registered_ids(root);paths=[]
     if not ids:return paths,ids
-    for base in (Path(home)/'.claude/projects',root/'claude-code-sessions'):
+    for base in [*project_roots(home),root/'claude-code-sessions']:
         if not base.is_dir():continue
         for path in base.rglob('*.jsonl'):
             if path.is_file() and (path.stem in ids or any(part in ids for part in path.relative_to(base).parts[:-1])):

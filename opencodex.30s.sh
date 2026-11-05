@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.6.0</xbar.version>
+# <xbar.version>5.7.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -113,6 +113,7 @@ import swiftbar_accounts as accounts
 import swiftbar_discovery as discovery
 import swiftbar_config as connections
 import swiftbar_claude as claude_desktop
+import swiftbar_claude_usage as claude_records
 import swiftbar_claude_live as claude_live
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
@@ -151,7 +152,8 @@ def local_zone():
 
 def range_cache_name(key=None):
     settings = view_settings()
-    scope = [(k, source_path(k)) for k in preferences.USAGE if k in settings['visible']]
+    scope = [('collector','ccusage-v1')] + [(k, source_path(k)) for k in preferences.USAGE if k in settings['visible']]
+    if 'claude' in settings['visible']:scope.append(('claude-projects',[str(p) for p in claude_desktop.project_roots(HOME)]))
     fingerprint = hashlib.sha256(json.dumps(scope).encode()).hexdigest()[:12]
     return 'range_usage_' + (key or selected_range()) + '_' + fingerprint
 
@@ -930,91 +932,38 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
 
 
 def claude_usage_records(root, db_path=None, now=None, range_key="today", files=None, allowed_sessions=None):
-    import sqlite3
     from pathlib import Path
-    from zoneinfo import ZoneInfo
-    zone = local_zone()
-    now = now or datetime.now(zone)
-    zone = now.tzinfo
-    window_start,window_end=range_bounds(range_key,now)
-    root = Path(root or source_path('claude'))
-    if not root.is_dir(): return None,(0,'未找到 Claude App 用量记录',None)
-    db_path = db_path or os.path.join(CACHE_DIR,'claude-app-usage-v1-'+hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:12]+'.sqlite3')
-    os.makedirs(os.path.dirname(db_path),mode=0o700,exist_ok=True)
-    conn=sqlite3.connect(db_path,timeout=10)
-    os.chmod(db_path,0o600)
-    try:
-        conn.executescript('''
-        CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, inode INTEGER, offset INTEGER, mtime INTEGER);
-        CREATE TABLE IF NOT EXISTS usage (key TEXT PRIMARY KEY, day TEXT, model TEXT, i INTEGER, o INTEGER,
-          w5 INTEGER, w1 INTEGER, r INTEGER, speed TEXT, geo TEXT, tier TEXT, session TEXT, ts REAL);
-        CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
-        ''')
-        upsert='''INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET
-          day=CASE WHEN excluded.ts<ts THEN excluded.day ELSE day END,ts=MIN(ts,excluded.ts),
-          i=excluded.i,o=excluded.o,w5=excluded.w5,w1=excluded.w1,r=excluded.r
-          WHERE excluded.o>=usage.o AND excluded.i+excluded.w5+excluded.w1+excluded.r>=usage.i+usage.w5+usage.w1+usage.r'''
-        for path in (files if files is not None else root.rglob('*.jsonl')):
-            try: st=path.stat()
-            except OSError: continue
-            key=hashlib.sha256(str(path).encode()).hexdigest()
-            previous=conn.execute('SELECT inode,offset,mtime FROM files WHERE path=?',(key,)).fetchone()
-            if previous and previous==(st.st_ino,st.st_size,st.st_mtime_ns):continue
-            offset=previous[1] if previous and previous[0]==st.st_ino and previous[1]<=st.st_size else 0
-            with path.open('rb') as handle:
-                handle.seek(offset)
-                while True:
-                    start=handle.tell();line=handle.readline()
-                    if not line:break
-                    if not line.endswith(b'\n'):
-                        handle.seek(start);break
-                    if b'"usage"' not in line or b'"assistant"' not in line:continue
-                    try:
-                        row=json.loads(line)
-                        if row.get('type')!='assistant':continue
-                        if allowed_sessions is not None and row.get('sessionId') not in allowed_sessions:continue
-                        msg=row.get('message') or {};u=msg.get('usage') or {};model=str(msg.get('model') or '')
-                        if not u or not model or model in ('<synthetic>','synthetic') or not msg.get('id'):continue
-                        ts=datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))
-                        day=ts.astimezone(zone).date().isoformat()
-                        def n(k):return max(0,int(u.get(k) or 0))
-                        writes=u.get('cache_creation') or {}
-                        w1=max(0,int(writes.get('ephemeral_1h_input_tokens') or 0))
-                        w5=max(0,int(writes.get('ephemeral_5m_input_tokens') or 0))
-                        w5+=max(0,n('cache_creation_input_tokens')-w1-w5)
-                        identity=hashlib.sha256((str(row.get('requestId') or '')+'\n'+str(msg['id'])).encode()).hexdigest()
-                        session=hashlib.sha256(str(row.get('sessionId') or path.stem).encode()).hexdigest()
-                        conn.execute(upsert,(identity,day,model,n('input_tokens'),n('output_tokens'),w5,w1,n('cache_read_input_tokens'),str(u.get('speed') or 'standard'),str(u.get('inference_geo') or 'global'),str(u.get('service_tier') or 'standard'),session,ts.timestamp()))
-                    except (ValueError,TypeError,KeyError,AttributeError):continue
-                offset=handle.tell()
-            conn.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?)',(key,st.st_ino,offset,st.st_mtime_ns))
-        conn.commit()
-        days={};hours={};models={};sessions=set();today=now.date().isoformat();unknown=0
-        def empty():return dict(totalTokens=0,inputTokens=0,outputTokens=0,cacheReadInputTokens=0,requests=0,estimatedCostUsd=0,unpricedRequests=0)
-        summary=empty();first_activity=None
-        query='SELECT day,model,i,o,w5,w1,r,speed,geo,tier,session,ts FROM usage WHERE ts>=? AND ts<=?';params=[window_start,window_end]
-        if allowed_sessions is not None:
-            hashes=[hashlib.sha256(s.encode()).hexdigest() for s in allowed_sessions]
-            query+=' AND session IN ('+','.join('?' for _ in hashes)+')';params.extend(hashes)
-        for day,model,i,o,w5,w1,r,speed,geo,tier,session,stamp in conn.execute(query,params):
-            first_activity=stamp if first_activity is None else min(first_activity,stamp)
-            day=datetime.fromtimestamp(stamp,zone).date().isoformat()
-            cost=claude_price(model,(i,o,w5,w1,r),speed,geo,tier)
-            targets=[days.setdefault(day,empty()),summary,models.setdefault(model,empty())]
-            sessions.add(session)
-            if range_key in ('today','24h'):targets.append(hours.setdefault(int(stamp//3600)*3600,empty()))
-            for target in targets:
-                target['totalTokens']+=i+o+w5+w1+r;target['inputTokens']+=i+w5+w1+r
-                target['outputTokens']+=o;target['cacheReadInputTokens']+=r;target['requests']+=1
-                if cost is None:target['unpricedRequests']+=1
-                else:target['estimatedCostUsd']+=cost
-        summary['coverageRatio']=(summary['requests']-summary['unpricedRequests'])/max(1,summary['requests'])
-        summary['sessions']=len(sessions)
-        return {'summary':summary,'models':[dict(value,model=model) for model,value in models.items()],
-                'days':[dict(value,date=day) for day,value in sorted(days.items())],
-                'hours':[dict(value,timestamp=stamp) for stamp,value in sorted(hours.items())],
-                'firstActivityAt':first_activity,'source':'Claude App · 已登记会话','pricingDate':'2026-11-04','day':today},None
-    finally:conn.close()
+    root=Path(root)
+    if not root.is_dir():return None,(0,'未找到 Claude App 用量记录',None)
+    now=now or datetime.now(local_zone());zone=now.tzinfo
+    start,end=range_bounds(range_key,now)
+    db_path=db_path or os.path.join(CACHE_DIR,'claude-app-usage-v2-'+hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:12]+'.sqlite3')
+    events,failures=claude_records.read_events(files if files is not None else root.rglob('*.jsonl'),db_path,allowed_sessions,start,end)
+    days={};hours={};models={};sessions=set();first_activity=None
+    def empty():return dict(totalTokens=0,inputTokens=0,outputTokens=0,cacheReadInputTokens=0,cacheCreationInputTokens=0,requests=0,estimatedCostUsd=0,unpricedRequests=0,recordedCostRequests=0)
+    summary=empty()
+    for row in events:
+        stamp=row['ts']
+        if not start<=stamp<=end:continue
+        i,o,w5,w1,r=row['metrics'];model=row['model']
+        cost=row['cost'] if row['cost'] is not None else claude_price(model,row['metrics'],row['speed'] or 'standard',row['geo'],row['tier'])
+        first_activity=stamp if first_activity is None else min(first_activity,stamp)
+        day=datetime.fromtimestamp(stamp,zone).date().isoformat();sessions.add(row['session'])
+        targets=[summary,models.setdefault(model,empty()),days.setdefault(day,empty())]
+        if range_key in ('today','24h'):targets.append(hours.setdefault(int(stamp//3600)*3600,empty()))
+        for target in targets:
+            target['totalTokens']+=i+o+w5+w1+r;target['inputTokens']+=i+w5+w1+r
+            target['outputTokens']+=o;target['cacheReadInputTokens']+=r;target['cacheCreationInputTokens']+=w5+w1;target['requests']+=1
+            if cost is None:target['unpricedRequests']+=1
+            else:target['estimatedCostUsd']+=cost
+            if row['cost'] is not None:target['recordedCostRequests']+=1
+    summary['sessions']=len(sessions);summary['coverageRatio']=(summary['requests']-summary['unpricedRequests'])/max(1,summary['requests'])
+    result={'summary':summary,'models':[dict(v,model=k) for k,v in models.items()],
+            'days':[dict(v,date=k) for k,v in sorted(days.items())],
+            'hours':[dict(v,timestamp=k) for k,v in sorted(hours.items())],
+            'firstActivityAt':first_activity,'source':'Claude App · 已登记会话','pricingDate':'2026-11-04','day':now.date().isoformat()}
+    if failures:result.update(partial=True,warning='部分记录无法读取')
+    return result,None
 
 
 def claude_usage_cached():
@@ -1971,7 +1920,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.6.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.7.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2045,7 +1994,7 @@ def detection_menu_lines():
 def source_locations(key):
     """The actual collector roots, not merely the application installation path."""
     root=source_path(key)
-    if key=='claude':return [root,os.path.join(HOME,'.claude','projects')]
+    if key=='claude':return [root]+[str(p) for p in claude_desktop.project_roots(HOME)]
     if key=='workbuddy':
         roots=[os.path.join(root,n,'projects') for n in ('.workbuddy-ai','.workbuddy') if os.path.isdir(os.path.join(root,n,'projects'))]
         if roots:return roots

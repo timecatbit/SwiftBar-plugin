@@ -38,7 +38,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
         root=Path(paths.get(source) or home/'.codex')
         folders=[root]
         if source=='codex':folders=[root/'sessions',root/'archived_sessions'] if any((root/k).is_dir() for k in ('sessions','archived_sessions')) else [root]
-        if any(has_records(folder) for folder in folders):found.add(source)
+        if any(has_records(folder,('*.jsonl','*.jsonl.zst')) for folder in folders):found.add(source)
     root=Path(paths.get('opencode') or home/'.local/share/opencode')
     try:
         database=root/'opencode.db' if root.is_dir() else root
