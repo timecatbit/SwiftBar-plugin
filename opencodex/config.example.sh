@@ -1,6 +1,19 @@
-# Copy to config.local.sh, then run scripts/install.py.
-# This local configuration is excluded from Git.
-export KOMARI_BASE_URL="https://komari.example.com"
-# Optional: otherwise the plugin detects the running OpenCodex port.
+# Optional local configuration. No user-specific path is required.
+# Use “主页模块… → 外观与设置 → 打开本机配置” to edit the persistent user configuration.
+# export KOMARI_BASE_URL="https://komari.example.com"
+# export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"
 # export OCX_BASE_URL="http://127.0.0.1:10100"
-# export OCX_PYTHON="/opt/homebrew/bin/python3"
+# export OCX_HOME="$HOME/.opencodex"
+# export OCX_TOKEN_FILE="$HOME/.opencodex/admin-api-token"
+# export CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
+# export CODEX_USAGE_DIR="$HOME/.codex"
+# export OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
+# export DSH_SESSIONS_DIR="/path/to/your/harness/session-logs"
+# export OCX_TIMEZONE="Asia/Taipei"  # Default: system timezone.
+# export OCX_PYTHON="/path/to/python3"
+# export WORKBUDDY_USAGE_DIR="$HOME/.workbuddy-ai/projects"  # Default: both current and legacy WorkBuddy.
+# export GEMINI_USAGE_DIR="$HOME/.gemini"
+# export XAI_MANAGEMENT_API_KEY_FILE="$HOME/.config/xai/management-key"
+# export XAI_TEAM_ID="your-team-id"  # Management key with billing read permission.
+# export MINIMAX_API_KEY_FILE="$HOME/.config/minimax/subscription-key"
+# export MINIMAX_REGION="international"  # Or "china".

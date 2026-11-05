@@ -40,4 +40,13 @@ class ClaudeTests(unittest.TestCase):
   self.assertAlmostEqual(self.m.claude_price('claude-haiku-5-5',(100001,0,0,0,0)),.0500005)
  def test_non_assistant_and_synthetic_are_ignored(self):
   row=self.row();row['type']='user';self.write('a.jsonl',[row,self.row('s',model='<synthetic>')]);self.assertEqual(self.stats()['summary']['requests'],0)
+ def test_third_party_model_is_tracked_without_invented_price(self):
+  self.write('third.jsonl',[self.row(model='deepseek-flash')]);summary=self.stats()['summary']
+  self.assertEqual(summary['totalTokens'],1320);self.assertEqual(summary['unpricedRequests'],1)
+ def test_changing_source_directory_does_not_reuse_old_usage(self):
+  self.write('one.jsonl',[self.row()])
+  first=self.m.claude_usage_live(self.root,now=self.now)[0]
+  other=Path(self.temp.name)/'other';other.mkdir()
+  second=self.m.claude_usage_live(other,now=self.now)[0]
+  self.assertEqual(first['summary']['requests'],1);self.assertEqual(second['summary']['requests'],0)
 if __name__=='__main__':unittest.main(verbosity=2)

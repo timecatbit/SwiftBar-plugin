@@ -1,8 +1,8 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>4.10.2</xbar.version>
-# <xbar.desc>汇总 OpenCodex 与 Claude Code 用量，查看 Komari 服务器状态。</xbar.desc>
-# <xbar.dependencies>python3,curl,ocx</xbar.dependencies>
+# <xbar.version>5.0.0</xbar.version>
+# <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
+# <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
@@ -24,10 +24,12 @@ esac
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export PYTHONIOENCODING=utf-8
 export OCX_PLUGIN_PATH
+OCX_USER_CONFIG="${OCX_STATE_DIR:-$HOME/Library/Application Support/SwiftBarToken}/config.local.sh"
 OCX_LOCAL_CONFIG="$(dirname "$OCX_PLUGIN_PATH")/.opencodex-panel/config.local.sh"
 if [ -f "$OCX_LOCAL_CONFIG" ]; then
     source "$OCX_LOCAL_CONFIG"
 fi
+if [ -f "$OCX_USER_CONFIG" ]; then source "$OCX_USER_CONFIG"; fi
 
 PYTHON_BIN="$OCX_PYTHON"
 if [ -z "$PYTHON_BIN" ]; then PYTHON_BIN=$(command -v python3); fi
@@ -78,7 +80,7 @@ def detect_base():
     if explicit:
         return explicit.rstrip("/")
     try:
-        with open(os.path.expanduser("~/.opencodex/runtime-port.json"), encoding="utf-8") as handle:
+        with open(os.path.join(os.path.expanduser(os.environ.get("OCX_HOME", "~/.opencodex")), "runtime-port.json"), encoding="utf-8") as handle:
             port = int(json.load(handle).get("port", 10100))
         if 1 <= port <= 65535:
             return "http://127.0.0.1:%d" % port
@@ -95,18 +97,70 @@ PANEL_APP = os.path.join(PLUGIN_DIR, ".opencodex-panel", "OpenCodexPanel.app")
 DEEPSEEK_LOGO_FILE = os.path.join(PLUGIN_DIR, "assets", "deepseek-logo.svg")
 
 HOME = os.path.expanduser("~")
-OCX_HOME = os.path.join(HOME, ".opencodex")
-TOKEN_FILE = os.path.join(OCX_HOME, "admin-api-token")
+OCX_HOME = os.path.expanduser(os.environ.get("OCX_HOME") or os.path.join(HOME, ".opencodex"))
+TOKEN_FILE = os.path.expanduser(os.environ.get("OCX_TOKEN_FILE") or os.path.join(OCX_HOME, "admin-api-token"))
 CONFIG_FILE = os.path.join(OCX_HOME, "config.json")
 SERVICE_LOG = os.path.join(OCX_HOME, "service.log")
 RELEASES_URL = "https://github.com/lidge-jun/opencodex/releases/latest"
 KOMARI_BASE_URL = os.environ.get("KOMARI_BASE_URL", "").rstrip("/")
 
+
+# Runtime files are installed alongside this script; the source checkout is never needed.
+for _lib in (os.path.join(PLUGIN_DIR, '.opencodex-panel', 'lib'), os.path.join(PLUGIN_DIR, 'lib')):
+    if os.path.isdir(_lib):
+        sys.path.insert(0, _lib)
+        break
+import swiftbar_preferences as preferences
+import swiftbar_sources as sources
+import swiftbar_accounts as accounts
+STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
+    (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
+     os.path.join(HOME, 'Library', 'Application Support', 'SwiftBarToken')))
+
+def view_settings():
+    return preferences.read(STATE_DIR)
+
+def module_enabled(key):
+    return key in view_settings()['visible']
+
+def source_path(key):
+    custom = view_settings()['paths'].get(key)
+    codex_home = os.path.expanduser(os.environ.get('CODEX_HOME') or os.path.join(HOME, '.codex'))
+    defaults = {
+        'opencodex': OCX_HOME,
+        'claude': os.environ.get('CLAUDE_PROJECTS_DIR') or os.path.join(os.path.expanduser(os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(HOME, '.claude')), 'projects'),
+        'codex': os.environ.get('CODEX_USAGE_DIR') or codex_home,
+        'opencode': os.environ.get('OPENCODE_DATA_DIR') or os.path.join(os.path.expanduser(os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')), 'opencode'),
+        'deepseek-harness': os.environ.get('DSH_SESSIONS_DIR') or '',
+        'workbuddy': os.environ.get('WORKBUDDY_USAGE_DIR') or HOME,
+        'gemini': os.environ.get('GEMINI_USAGE_DIR') or os.path.join(HOME,'.gemini'),
+    }
+    return os.path.expanduser(custom or defaults.get(key) or '')
+
+def local_zone():
+    from zoneinfo import ZoneInfo
+    explicit = os.environ.get('OCX_TIMEZONE') or os.environ.get('TZ')
+    if explicit:
+        try: return ZoneInfo(explicit)
+        except (ValueError, KeyError): pass
+    try:
+        with open('/etc/localtime', 'rb') as handle: return ZoneInfo.from_file(handle)
+    except (OSError, ValueError): return datetime.now().astimezone().tzinfo
+
+def range_cache_name(key=None):
+    settings = view_settings()
+    scope = [(k, source_path(k)) for k in preferences.USAGE if k in settings['visible']]
+    fingerprint = hashlib.sha256(json.dumps(scope).encode()).hexdigest()[:12]
+    return 'range_usage_' + (key or selected_range()) + '_' + fingerprint
+
+def ocx_configured():
+    return bool(os.environ.get('OCX_BASE_URL') or os.path.isfile(TOKEN_FILE) or os.path.isfile(os.path.join(OCX_HOME, 'runtime-port.json')))
+
 CACHE_SCOPE = hashlib.sha256((BASE + "\n" + KOMARI_BASE_URL).encode()).hexdigest()[:16]
 CACHE_DIR = os.path.join(os.environ.get("OCX_CACHE_DIR") or tempfile.gettempdir(),
                          "opencodex-swiftbar-v4-%s-%s" % (os.getuid(), CACHE_SCOPE))
 UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
-EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600}
+EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300}
 
 
 def macos_dark_mode():
@@ -585,9 +639,15 @@ def request(path, method="GET", body=None, timeout=4.0, auth=True):
 def deepseek_balance_direct():
     """OpenCodex 会过滤负余额；必要时直接向 DeepSeek 查询并保留负数。"""
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as handle:
-            config = json.load(handle)
-        provider = (config.get("providers") or {}).get("deepseek") or {}
+        api_key = str(os.environ.get('DEEPSEEK_API_KEY') or '').strip()
+        key_file = os.environ.get('DEEPSEEK_API_KEY_FILE')
+        if not api_key and key_file:
+            with open(os.path.expanduser(key_file), encoding='utf-8') as handle: api_key = handle.read().strip()
+        if api_key:
+            provider = {'baseUrl':'https://api.deepseek.com', 'apiKey':api_key}
+        else:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as handle: config = json.load(handle)
+            provider = (config.get("providers") or {}).get("deepseek") or {}
         base_url = str(provider.get("baseUrl") or "").rstrip("/")
         if base_url not in ("https://api.deepseek.com", "https://api.deepseek.com/v1"):
             return None
@@ -666,6 +726,9 @@ def report_balance_value(report):
 
 def provider_quotas_cached():
     def load():
+        if os.environ.get('DEEPSEEK_API_KEY') or os.environ.get('DEEPSEEK_API_KEY_FILE') or not ocx_configured():
+            direct = deepseek_balance_direct()
+            return (direct, None) if direct else (None, (0, '未配置 DeepSeek API 凭据', None))
         payload, error = request("/api/provider-quotas", timeout=4.0)
         reports = list(payload.get("reports") or []) if isinstance(payload, dict) else []
         existing = next((row for row in reports if isinstance(row, dict) and
@@ -750,12 +813,13 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
     import sqlite3
     from pathlib import Path
     from zoneinfo import ZoneInfo
-    zone = ZoneInfo(os.environ.get('OCX_TIMEZONE','Asia/Taipei'))
+    zone = local_zone()
     now = now or datetime.now(zone)
+    zone = now.tzinfo
     window_start,window_end=range_bounds(range_key,now)
-    root = Path(root or os.path.join(HOME,'.claude','projects'))
+    root = Path(root or source_path('claude'))
     if not root.is_dir(): return None,(0,'未找到 Claude Code 用量记录',None)
-    db_path = db_path or os.path.join(CACHE_DIR,'claude-usage-v2.sqlite3')
+    db_path = db_path or os.path.join(CACHE_DIR,'claude-usage-v3-'+hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:12]+'.sqlite3')
     os.makedirs(os.path.dirname(db_path),mode=0o700,exist_ok=True)
     conn=sqlite3.connect(db_path,timeout=10)
     os.chmod(db_path,0o600)
@@ -789,7 +853,7 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
                         row=json.loads(line)
                         if row.get('type')!='assistant':continue
                         msg=row.get('message') or {};u=msg.get('usage') or {};model=str(msg.get('model') or '')
-                        if not u or not model.startswith('claude-') or not msg.get('id'):continue
+                        if not u or not model or model in ('<synthetic>','synthetic') or not msg.get('id'):continue
                         ts=datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))
                         day=ts.astimezone(zone).date().isoformat()
                         def n(k):return max(0,int(u.get(k) or 0))
@@ -809,6 +873,7 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
         summary=empty();first_activity=None
         for day,model,i,o,w5,w1,r,speed,geo,tier,session,stamp in conn.execute('SELECT day,model,i,o,w5,w1,r,speed,geo,tier,session,ts FROM usage WHERE ts>=? AND ts<=?',(window_start,window_end)):
             first_activity=stamp if first_activity is None else min(first_activity,stamp)
+            day=datetime.fromtimestamp(stamp,zone).date().isoformat()
             cost=claude_price(model,(i,o,w5,w1,r),speed,geo,tier)
             targets=[days.setdefault(day,empty()),summary,models.setdefault(model,empty())]
             sessions.add(session)
@@ -1091,7 +1156,7 @@ def resource_lines(data):
     logo=deepseek_logo_image()
     options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
     balance=(balance or '—')+(' · 上次' if (data.get('provider_quotas') or {}).get('_stale') else '')
-    lines=[item('DeepSeek 余额',badge=balance,href=BASE+'/',**options)]
+    lines=[item('DeepSeek 余额',badge=balance,href='https://platform.deepseek.com/usage',**options)] if module_enabled('deepseek') else []
     accounts=(data.get('accounts') or {}).get('accounts') or []
     if len(accounts)<=2:
         lines.append(item('Codex 可用',badge=account_quota_summary(data) or '—',sfimage='gauge.with.dots.needle.67percent',href=BASE+'/'))
@@ -1099,14 +1164,18 @@ def resource_lines(data):
         for account in accounts:
             single=dict(data,accounts={'accounts':[account]})
             lines.append(item('Codex 可用',badge=account_quota_summary(single),sfimage='gauge.with.dots.needle.67percent',href=BASE+'/'))
-    return lines+['---']
+    lines=[row for row in lines if module_enabled('codex-quota') or not row.startswith('Codex 可用')]
+    if module_enabled('chatgpt'):lines.extend(chatgpt_lines(data))
+    for key in ('grok','minimax'):
+        if module_enabled(key):lines+=provider_account_lines(key,data)
+    return lines+(['---'] if lines else [])
 
 
 RANGES={'today':'当天','24h':'近 24 小时','7d':'近 7 天','30d':'近 30 天','week':'本周','month':'本月','all':'全部'}
 
 def usage_now():
     from zoneinfo import ZoneInfo
-    return datetime.now(ZoneInfo(os.environ.get('OCX_TIMEZONE','Asia/Taipei')))
+    return datetime.now(local_zone())
 
 def selected_range():
     value=read_cache('view-range').get('range','today')
@@ -1157,23 +1226,45 @@ def ocx_range_usage(key,now):
     return payload
 
 def range_usage_cached():
-    key=selected_range();name='range_usage_'+key
+    key=selected_range();name=range_cache_name(key)
     def load():
         now=usage_now();start,end=range_bounds(key,now)
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            oc=pool.submit(ocx_range_usage,key,now)
-            cc=pool.submit(claude_usage_live,range_key=key,now=now)
-            try:opencodex=oc.result()
-            except Exception:opencodex={'error':'暂不可用'}
-            try:claude,error=cc.result();claude=claude or {'error':'暂不可用'}
-            except Exception:claude={'error':'暂不可用'}
-        return {'range':key,'start':start,'end':end,'opencodex':opencodex,'claude':claude},None
+        enabled=[k for k in preferences.USAGE if module_enabled(k)]
+        def collect(source):
+            try:
+                if source=='opencodex':
+                    return ocx_range_usage(key,now) if ocx_configured() else {'error':'未配置 OpenCodex'}
+                if source=='claude':
+                    value,error=claude_usage_live(range_key=key,now=now)
+                    return value or {'error':'未找到 Claude Code 记录'}
+                root=source_path(source)
+                if not root:return {'error':'请选择记录目录'}
+                if source=='gemini':return sources.gemini_usage(root,CACHE_DIR,start,end,now.tzinfo,'opencodex' in enabled)
+                if source=='opencode':return sources.opencode_usage(root,start,end,now.tzinfo,'opencodex' in enabled)
+                return sources.jsonl_usage(source,root,CACHE_DIR,start,end,now.tzinfo,'opencodex' in enabled)
+            except Exception:return {'error':'记录暂不可用'}
+        bundle={'range':key,'start':start,'end':end}
+        with ThreadPoolExecutor(max_workers=max(1,len(enabled))) as pool:
+            pending={source:pool.submit(collect,source) for source in enabled}
+            for source,future in pending.items():bundle[source]=future.result()
+        return bundle,None
     value,error=cached_fetch(name,load,60)
-    if selected_range()==key:
-        # Push the finished snapshot promptly; the UI need not wait for SwiftBar's next 30s tick.
+    if range_cache_name()==name:
         try:subprocess.run(['/usr/bin/open','-g','swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))],capture_output=True,timeout=4)
         except Exception:pass
     return value,error
+
+
+def external_loaders():
+    loaders={}
+    if ocx_configured():loaders['badge']=update_status_cached
+    if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
+    if module_enabled('komari'):loaders['komari']=komari_snapshot
+    if module_enabled('updates'):loaders['app_updates']=app_updates_cached
+    if module_enabled('chatgpt'):loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=os.environ.get('CODEX_HOME')),None),EXTERNAL_TTLS['chatgpt'])
+    for key in ('grok','minimax'):
+        if module_enabled(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
+    return loaders
 
 
 def background_refresh():
@@ -1185,24 +1276,23 @@ def background_refresh():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return 0
-            loaders = {"badge": update_status_cached, "provider_quotas": provider_quotas_cached,
-                       "komari": komari_snapshot, "app_updates": app_updates_cached}
+            loaders = external_loaders()
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(loader) for name, loader in loaders.items()
                            if cache_due(read_cache(name), EXTERNAL_TTLS[name])]
-                if cache_due(read_cache("range_usage_"+selected_range()),60):futures.append(pool.submit(range_usage_cached))
+                if cache_due(read_cache(range_cache_name()),60):futures.append(pool.submit(range_usage_cached))
                 for future in futures:
                     future.result()
-            if cache_due(read_cache("range_usage_"+selected_range()),60):range_usage_cached()
-            auto_update_opencodex()
-            notify_app_updates(update_rows({}))
+            if cache_due(read_cache(range_cache_name()),60):range_usage_cached()
+            if ocx_configured():auto_update_opencodex()
+            if module_enabled('updates'):notify_app_updates(update_rows({}))
         return 0
     except OSError:
         return 0
 
 
 def schedule_background_refresh():
-    if not any(cache_due(read_cache(name), ttl) for name, ttl in EXTERNAL_TTLS.items()) and not cache_due(read_cache("range_usage_"+selected_range()),60):
+    if not any(cache_due(read_cache(name), EXTERNAL_TTLS[name]) for name in external_loaders()) and not cache_due(read_cache(range_cache_name()),60):
         return
     try:
         subprocess.Popen(["/bin/bash", PLUGIN, "--background-refresh"], stdin=subprocess.DEVNULL,
@@ -1216,13 +1306,13 @@ def gather():
     started = time.monotonic()
     data = {}
     schedule_background_refresh()
-    health, health_error = request("/healthz", timeout=1.5, auth=False)
+    health, health_error = request("/healthz", timeout=1.5, auth=False) if ocx_configured() else (None,(0,'未配置 OpenCodex',None))
     if health_error or not isinstance(health, dict):
         health = None
     data["healthz"], data["healthz_error"] = health, health_error
     for name, ttl in EXTERNAL_TTLS.items():
         data[name], data[name + "_error"] = cache_result(read_cache(name), ttl)
-    data["range_usage"],data["range_usage_error"]=cache_result(read_cache("range_usage_"+selected_range()),60)
+    data["range_usage"],data["range_usage_error"]=cache_result(read_cache(range_cache_name()),60)
     if not health:
         data["_elapsed"] = time.monotonic() - started
         return data
@@ -1310,6 +1400,8 @@ def deepseek_balance(data):
 
 def title(data):
     icon_options = {"emojize": "false", "sfimage": "sparkles", "sfsize": 18}
+    if not module_enabled('opencodex') or not ocx_configured():
+        return item("", tooltip="AI 用量面板", **icon_options)
     if not data.get("healthz"):
         return item("", tooltip="OpenCodex 未连接", sfimage="exclamationmark.triangle", sfsize=18, emojize="false")
 
@@ -1592,7 +1684,7 @@ def komari_lines(data):
     return lines
 
 
-def management_lines(data, include_swiftbar=True):
+def unfiltered_management_lines(data, include_swiftbar=True):
     """Group operations by the application they actually control."""
     accounts=(data.get('accounts') or {}).get('accounts') or []
     healthy=bool(data.get('healthz'))
@@ -1627,8 +1719,85 @@ def management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('OpenCodex 插件 v4.10.2',color=MUTED,size=11)]
+              item('OpenCodex 插件 v5.0.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
+
+
+def management_lines(data, include_swiftbar=True):
+    rows=unfiltered_management_lines(data,include_swiftbar);result=[];keep=True
+    for row in rows:
+        if row=='---':
+            if result and result[-1]!='---':result.append(row)
+            continue
+        if not row.startswith('--'):
+            key=next((key for prefix,key in [('OpenCodex 管理','opencodex'),('Komari 监控','komari'),('应用更新','updates')] if row.startswith(prefix)),None)
+            keep=key is None or module_enabled(key)
+        if keep:result.append(row)
+    while result and result[-1]=='---':result.pop()
+    return result
+
+
+def chatgpt_lines(data):
+    payload=data.get('chatgpt') or {};windows=payload.get('windows') or []
+    visible=[w for w in windows if not w.get('resetsAt') or w['resetsAt']>time.time()]
+    label='ChatGPT 额度'
+    badge=('%s%% 可用'%fmt_int(min(w['remaining'] for w in visible))) if visible else payload.get('state','正在读取')
+    if windows and not visible:badge='待刷新'
+    if payload.get('_stale'):badge+=' · 上次'
+    lines=[item(label,badge=badge,sfimage='bubble.left.and.bubble.right')]
+    lines.append(item('ChatGPT 登录 · Codex 服务额度',level=1,color=MUTED,size=10))
+    for w in visible:
+        minutes=w.get('minutes') or 0;span=('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
+        lines.append(item(str(w['name'])+' · '+span,level=1,badge='%g%% 可用'%w['remaining']))
+    if not visible:lines.append(item(payload.get('state','正在读取')+'；使用 Codex 客户端的 ChatGPT 登录',level=1,color=MUTED,size=10))
+    lines.append(item('打开 ChatGPT',level=1,href='https://chatgpt.com',sfimage='arrow.up.right'))
+    return lines
+
+
+def module_options():
+    settings=view_settings();options=[];group=None
+    for key,label,category in preferences.MODULES:
+        if category!=group:
+            options.append({'label':category,'section':True,'children':[]});group=category
+        enabled=key in settings['visible']
+        options.append({'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':[]})
+    options.append({'label':'','separator':True,'children':[]})
+    paths=[{'label':label+' 记录目录…','symbol':'folder','action':['choose-source',key],'children':[]} for key,label,category in preferences.MODULES if key in preferences.USAGE and key!='opencodex']
+    options.append({'label':'数据来源','symbol':'folder','children':paths})
+    settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
+    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'恢复默认模块','action':['reset-modules'],'children':[]},{'label':'打开本机配置','action':['open-settings'],'children':[]}])
+    options.append({'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows})
+    return options
+
+
+def module_menu_lines():
+    rows=[item('主页模块',sfimage='square.grid.2x2')]
+    def append(entries,level):
+        for entry in entries:
+            if entry.get('separator'):rows.append('-'*(2*level+3))
+            elif entry.get('section'):rows.append(item(entry['label'],level=level,color=MUTED,size=10))
+            elif entry.get('children'):
+                rows.append(item(entry['label'],level=level));append(entry['children'],level+1)
+            else:rows.append(item(entry['label'],level=level,checked=entry.get('checked',False),**act(*entry['action'])))
+    append(module_options(),1)
+    return rows
+
+
+def provider_account_lines(key,data):
+    payload=data.get(key) or {};is_grok=key=='grok'
+    label='Grok API 余额' if is_grok else 'MiniMax 套餐额度'
+    windows=[w for w in payload.get('windows',[]) if not w.get('resetsAt') or w['resetsAt']>time.time()]
+    if is_grok and 'balance' in payload:badge='$%.2f'%payload['balance']
+    elif windows:badge='%g%% 可用'%min(w['remaining'] for w in windows)
+    else:badge='待配置' if '未配置' in payload.get('state','') else payload.get('state','正在读取')
+    if payload.get('windows') and not windows:badge='待刷新'
+    if payload.get('_stale'):badge+=' · 上次'
+    rows=[item(label,badge=badge,sfimage='creditcard' if is_grok else 'chart.pie')]
+    rows.append(item('xAI API 预付余额 · USD' if is_grok else 'MiniMax 套餐 · 按服务端额度',level=1,color=MUTED,size=10))
+    if not windows and not ('balance' in payload):rows.append(item(payload.get('state','正在读取'),level=1,color=MUTED,size=10))
+    for w in windows:rows.append(item(w['name'],level=1,badge='%g%% 可用'%w['remaining']))
+    rows.append(item('打开用量与账单',level=1,href='https://console.x.ai' if is_grok else 'https://platform.minimax.io/user-center/payment/token-plan',sfimage='arrow.up.right'))
+    return rows
 
 
 def render_native(data):
@@ -1993,6 +2162,8 @@ def dashboard_payload(data):
     if bundle.get('range')!=key:bundle={}
     start,end=range_bounds(key,now)
     start=bundle.get('start',start);end=bundle.get('end',end)
+    selected=[(k,label,bundle.get(k) or {}) for k,label,category in preferences.MODULES if k in preferences.USAGE and module_enabled(k)]
+    usage_sources=[u for k,label,u in selected]
     oc=bundle.get('opencodex') or {};cc=bundle.get('claude') or {}
     short=key in ('today','24h')
     if short:
@@ -2003,7 +2174,7 @@ def dashboard_payload(data):
         span=datetime.fromtimestamp(start,now.tzinfo).strftime('%m/%d %H:%M')+'–'+datetime.fromtimestamp(end,now.tzinfo).strftime('%H:%M' if key=='today' else '%m/%d %H:%M')
     else:
         last=datetime.fromtimestamp(end,now.tzinfo).date()
-        earliest=[str(day.get('date',''))[:10] for payload in [oc,cc] for day in payload.get('days',[]) if day.get('date') and (number(day.get('requests'))>0 or number(day.get('totalTokens'))>0)]
+        earliest=[str(day.get('date',''))[:10] for payload in usage_sources for day in payload.get('days',[]) if day.get('date') and (number(day.get('requests'))>0 or number(day.get('totalTokens'))>0)]
         first=datetime.fromtimestamp(start,now.tzinfo).date() if start else (datetime.strptime(min(earliest),'%Y-%m-%d').date() if earliest else last)
         first=max(first,last-timedelta(days=365))
         slots=[(first+timedelta(days=n)).isoformat() for n in range((last-first).days+1)]
@@ -2023,21 +2194,28 @@ def dashboard_payload(data):
         if cost is not None:cost=number(cost)
         requests=int(number(summary.get('requests')));unpriced=int(number(summary.get('unpricedRequests')))
         if requests and unpriced>=requests:cost=None
-        if not available:status='正在读取' if not bundle else '暂不可用'
+        if not available:status=str(usage.get('error') or ('正在读取' if not bundle else '暂不可用'))
+        elif usage.get('partial'):status='部分记录未读取'
+        elif unpriced>=requests and requests:status='费用待定价'
         return {'id':pid,'name':label,'subtitle':subtitle,'status':status,'available':available,
                 'cost':cost,'tokens':total,'requests':requests,'output':number(summary.get('outputTokens')),
                 'cache':min(1,cache/inputs) if inputs else None,'coverage':number(summary.get('coverageRatio')) if summary.get('coverageRatio') is not None else None,
                 'sessions':int(number(summary.get('sessions'))),'unpriced':unpriced,'models':model_rows,'history':history}
-    providers=[provider('opencodex','OpenCodex',oc,'v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v'),'运行正常' if data.get('healthz') else '未连接'),
-               provider('claude','Claude Code',cc,'本机记录 · API 估算','已同步')]
+    providers=[provider(k,label,u,('v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')) if k=='opencodex' else ('本机记录 · 已排除代理重复项' if u.get('excludedProxyRequests') else '本机记录 · API 等值估算'),'运行正常' if k=='opencodex' and data.get('healthz') else '已同步') for k,label,u in selected]
+    # Codex local records and an active OpenCodex proxy can describe the same calls.
+    # Keep both cards available, but use the proxy as the summary authority.
+    proxy_available=any(p['id']=='opencodex' and p['available'] for p in providers)
+    for p in providers:
+        p['summaryIncluded']=not (p['id']=='codex' and proxy_available)
+        if not p['summaryIncluded']:p['subtitle']='独立明细 · Summary 已采用 OpenCodex'
     # Crop only today's chart, never the statistics window. Preserve a short zero
     # lead-in before the earliest source activity, and use actual time spacing.
     chart_positions=None
     if key=='today' and slots:
-        active=[i for i in range(len(slots)) if any(p['history'][i]>0 for p in providers)]
+        active=[i for i in range(len(slots)) if any(p['history'][i]>0 for p in providers if p.get('summaryIncluded',True))]
         if active:
             first_index=active[0]
-            activity=[number(source.get('firstActivityAt')) for source in (oc,cc)
+            activity=[number(source.get('firstActivityAt')) for source in [bundle.get(p['id'],{}) for p in providers if p.get('summaryIncluded',True)]
                       if source.get('firstActivityAt') is not None and start<=number(source.get('firstActivityAt'))<=end]
             first_call=min(activity) if activity else max(start,slots[first_index])
             first_call=min(first_call,end-0.001)
@@ -2065,12 +2243,12 @@ def dashboard_payload(data):
         size=int((len(slots)+59)//60)
         for p in providers:p['history']=[sum(p['history'][i:i+size]) for i in range(0,len(slots),size)]
         labels=[labels[i] for i in range(0,len(slots),size)];unit='每 %d 天'%size
-    chart_status='正在读取' if not bundle else ('部分图表数据不可用' if any(p.get('error') or p.get('chartUnavailable') for p in [oc,cc]) else '')
-    if any(p.get('historyTruncated') or p.get('entriesTruncated') for p in [oc,cc]):chart_status='仅含现有记录'
-    if key=='all' and any(number(p.get('summary',{}).get('requests'))>sum(number(day.get('requests')) for day in p.get('days',[])) for p in [oc,cc]):chart_status='图表展示最近 366 天'
+    chart_status='正在读取' if not bundle else ('部分图表数据不可用' if any(p.get('error') or p.get('chartUnavailable') for p in usage_sources) else '')
+    if any(p.get('historyTruncated') or p.get('entriesTruncated') for p in usage_sources):chart_status='仅含现有记录'
+    if key=='all' and any(number(p.get('summary',{}).get('requests'))>sum(number(day.get('requests')) for day in p.get('days',[])) for p in usage_sources):chart_status='图表展示最近 366 天'
     return {'date':now.date().isoformat(),'dates':labels,'providers':providers,'rangeKey':key,'rangeLabel':RANGES[key],
             'chartUnit':unit,'chartSpan':span,'chartStatus':chart_status,'chartPositions':chart_positions,
-            'note':'费用为 Token 的 API 等值估算，不代表订阅账单。'}
+            'showSummary':module_enabled('summary'),'note':'费用为已知 API 等值估算；未定价项不计入费用。'}
 
 
 
@@ -2084,18 +2262,25 @@ def native_menu_line(line):
 
 
 def render(data):
-    native = render_native(data)
+    dashboard=dashboard_payload(data)
+    options=module_options()
+    native_rows=[item('主页模块…',sfimage='square.grid.2x2',**act('panel-modules'))]
     if os.environ.get("OCX_NATIVE_LAYOUT") == "1" or not os.path.isdir(PANEL_APP):
-        rows=native.splitlines()
-        return "\n".join(rows[:1]+[native_menu_line(line) for line in rows[1:]])
-    rows = native.splitlines()
-    panel_rows = [row for row in rows[2:] if row.startswith("今日用量 · 上次数据")]
-    native_rows = panel_rows + management_lines(data, include_swiftbar=False)
-    panel_rows += management_lines(data)
-    write_json_cache(cache_path("panel-view"), {"schema": 1, "dashboard": dashboard_payload(data),
-                                               "entries": panel_entries(panel_rows),"rangeOptions":range_options(),
-                                               "updateCount":update_attention_count(update_rows(data))})
-    return "\n".join([panel_title(rows[0]), "---"] + [native_menu_line(line) for line in native_rows])
+        overview=[]
+        if module_enabled('opencodex') and selected_range()=='today' and ((data.get('usage_today') or {}).get('error') or data.get('usage_today_error')):
+            overview.append(item('今日用量 · 暂不可用'))
+        if module_enabled('summary'):
+            valid=[p for p in dashboard['providers'] if p['available'] and p.get('summaryIncluded',True)]
+            total=sum(p['tokens'] for p in valid)
+            overview.append(item('Summary · '+dashboard['rangeLabel']+' · '+fmt_tokens(total)+' Token' if valid else 'Summary · 数据待同步'))
+        for provider in dashboard['providers']:
+            overview.append(item(provider['name']+' · '+(fmt_tokens(provider['tokens'])+' Token' if provider['available'] else provider['status'])))
+        return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data,include_swiftbar=False)+['---']+module_menu_lines()])
+    write_json_cache(cache_path("panel-view"), {"schema":1,"dashboard":dashboard,
+        "entries":panel_entries(management_lines(data)),"rangeOptions":range_options(),
+        "moduleOptions":options,"appearance":view_settings()['appearance'],
+        "updateCount":update_attention_count(update_rows(data))})
+    return "\n".join([panel_title(title(data)),'---']+[native_menu_line(line) for line in native_rows])
 
 
 # ---------------------------------------------------------------------------
@@ -2193,11 +2378,30 @@ def invalidate_caches(names):
 
 
 def run_action(name, extra):
-    if name == "panel":
+    if name in ("panel", "panel-modules"):
+        write_json_cache(cache_path("panel-open"), {"schema":1,"mode":"modules" if name=="panel-modules" else "home","createdAt":time.time()})
         if os.path.isdir(PANEL_APP):
             subprocess.run(["/usr/bin/open", "-g", "-a", PANEL_APP, "--args",
                             "--plugin", os.path.abspath(PLUGIN), "--snapshot", cache_path("panel-view")],
                            capture_output=True, timeout=5)
+    elif name in ('set-module','set-appearance','reset-modules'):
+        if name=='set-module':preferences.update(STATE_DIR,'module',extra[0] if extra else '',extra[1] if len(extra)>1 else '')
+        elif name=='set-appearance':preferences.update(STATE_DIR,'appearance',extra[0] if extra else '')
+        else:preferences.update(STATE_DIR,'reset')
+        schedule_background_refresh()
+    elif name == 'open-settings':
+        path=os.path.join(STATE_DIR,'config.local.sh')
+        if not os.path.exists(path):
+            os.makedirs(STATE_DIR,mode=0o700,exist_ok=True)
+            with open(path,'w') as handle:handle.write('# Local settings only; never commit API keys.\n# export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"\n# export KOMARI_BASE_URL="https://your-komari.example"\n# export XAI_MANAGEMENT_API_KEY_FILE="$HOME/.config/xai/management-key"\n# export XAI_TEAM_ID="your-team-id"\n# export MINIMAX_API_KEY_FILE="$HOME/.config/minimax/subscription-key"\n# export MINIMAX_REGION="international"  # or china\n')
+            os.chmod(path,0o600)
+        subprocess.run(['/usr/bin/open','-t',path],check=True,timeout=5)
+    elif name == 'choose-source':
+        key=extra[0] if extra else ''
+        if key not in preferences.USAGE:raise ValueError('invalid source')
+        response=applescript('POSIX path of (choose folder with prompt '+as_literal('选择 '+key+' 的用量记录目录')+')')
+        if response.returncode==0:
+            preferences.update(STATE_DIR,'path',key,response.stdout.strip());schedule_background_refresh()
     elif name == "set-range":
         key=extra[0] if extra else "today"
         if key not in RANGES:raise ValueError("invalid range")
@@ -2206,7 +2410,7 @@ def run_action(name, extra):
     elif name == "swiftbar-folder":
         subprocess.run(["/usr/bin/open", PLUGIN_DIR], check=True, timeout=5)
     elif name == "refresh":
-        invalidate_caches(["usage_today", "usage_7d", "startup", "range_usage_"+selected_range()] + list(EXTERNAL_TTLS))
+        invalidate_caches(["usage_today", "usage_7d", "startup", range_cache_name()] + list(EXTERNAL_TTLS))
         schedule_background_refresh()
     elif name == "check-app-updates":
         invalidate_caches(["app_updates", "badge"])
@@ -2323,12 +2527,16 @@ def consume_panel_action():
             return
         # Only an action already present in the rendered menu can be requested.
         snapshot=read_cache("panel-view")
-        nodes = list(snapshot.get("entries") or [])+list(snapshot.get("rangeOptions") or [])
+        nodes = list(snapshot.get("entries") or [])+list(snapshot.get("rangeOptions") or [])+list(snapshot.get("moduleOptions") or [])
         allowed = []
         while nodes:
             node = nodes.pop()
             if node.get("action"):
                 allowed.append(node["action"])
+                # A persistent picker may queue another click before the previous refresh.
+                candidate=node['action']
+                if len(candidate)==3 and candidate[0]=='set-module' and candidate[1] in preferences.KNOWN:
+                    allowed.extend([['set-module',candidate[1],value] for value in ('true','false')])
             nodes.extend(node.get("children") or [])
         if action not in allowed:
             return
