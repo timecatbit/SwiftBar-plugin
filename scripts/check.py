@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Syntax checks and isolated unit tests; does not run the live plugin."""
 import os
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -25,6 +26,6 @@ with tempfile.TemporaryDirectory(prefix='swiftbar-token-tests-') as scratch:
         test_main=Path(scratch)/'main.swift'
         test_main.write_text(declarations+'\n'+(ROOT/'tests/PanelInteractionTests.swift').read_text())
         binary=Path(scratch)/'panel-interaction-tests'
-        cache=ROOT/'build/swift-module-cache';cache.mkdir(parents=True,exist_ok=True)
+        cache=ROOT/'build'/('swift-module-cache-' + hashlib.sha256(os.fsencode(ROOT)).hexdigest()[:10]);cache.mkdir(parents=True,exist_ok=True)
         subprocess.run(['xcrun','swiftc','-module-cache-path',str(cache),str(test_main),'-o',str(binary)],check=True,env=environment)
         subprocess.run([str(binary)],check=True,env=environment)

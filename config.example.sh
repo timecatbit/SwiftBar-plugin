@@ -7,6 +7,7 @@
 # export OCX_HOME="$HOME/.opencodex"
 # export OCX_TOKEN_FILE="$HOME/.opencodex/admin-api-token"
 # export CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
+# export OCX_CHATGPT_HOME="$HOME/.codex"  # Subscription login source; does not change Codex local usage.
 # export CODEX_USAGE_DIR="$HOME/.codex"
 # export OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
 # export DSH_SESSIONS_DIR="/path/to/your/harness/session-logs"

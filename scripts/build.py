@@ -2,6 +2,7 @@
 """Build and ad-hoc sign the native AppKit helper on macOS."""
 import argparse
 import os
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,7 +15,7 @@ def build(output):
         raise SystemExit('The AppKit helper must be built on macOS.')
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    cache = ROOT / 'build' / 'swift-module-cache'
+    cache = ROOT / 'build' / ('swift-module-cache-' + hashlib.sha256(os.fsencode(ROOT)).hexdigest()[:10])
     cache.mkdir(parents=True, exist_ok=True)
     # Sign outside File Provider folders, which may add disallowed Finder metadata.
     with tempfile.TemporaryDirectory(prefix='swiftbar-panel-') as temporary:

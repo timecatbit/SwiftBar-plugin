@@ -23,7 +23,7 @@ def has_records(root, patterns=('*.jsonl',)):
     except OSError:return False
 
 
-def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=()):
+def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=(), chatgpt_home=None):
     home=Path(home or Path.home());found={'summary','updates'}
     if configured_proxy:found.update(('opencodex','codex-quota'))
     for source,binary in (('claude','claude'),('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
@@ -46,7 +46,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     roots=[root/n/'projects' for n in ('.workbuddy-ai','.workbuddy') if (root/n/'projects').is_dir()]
     if not roots and root!=home:roots=[root/'projects' if (root/'projects').is_dir() else root]
     if any(has_records(folder) for folder in roots):found.add('workbuddy')
-    auth_root=Path(os.environ.get('CODEX_HOME') or home/'.codex')
+    auth_root=Path(chatgpt_home or os.environ.get('CODEX_HOME') or home/'.codex').expanduser()
     auth=read_object(auth_root/'auth.json')
     if which('codex') and (auth.get('auth_mode') in ('chatgpt','chatgptAuthTokens') or isinstance(auth.get('tokens'),dict) and auth['tokens'].get('access_token')):
         found.add('chatgpt')

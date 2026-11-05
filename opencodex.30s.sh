@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.2.0</xbar.version>
+# <xbar.version>5.3.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -76,7 +76,7 @@ def detect_base():
     if explicit:
         return explicit.rstrip("/")
     try:
-        with open(os.path.join(os.path.expanduser(os.environ.get("OCX_HOME", "~/.opencodex")), "runtime-port.json"), encoding="utf-8") as handle:
+        with open(os.path.join(os.path.expanduser((os.environ.get("OCX_HOME") or "~/.opencodex")), "runtime-port.json"), encoding="utf-8") as handle:
             port = int(json.load(handle).get("port", 10100))
         if 1 <= port <= 65535:
             return "http://127.0.0.1:%d" % port
@@ -162,8 +162,12 @@ UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
 EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300}
 
 
+def chatgpt_home():
+    return os.path.abspath(os.path.expanduser(os.environ.get('OCX_CHATGPT_HOME') or os.environ.get('CODEX_HOME') or os.path.join(HOME,'.codex')))
+
+
 def chatgpt_configured():
-    auth=discovery.read_object(os.path.join(os.environ.get('CODEX_HOME') or os.path.join(HOME,'.codex'),'auth.json'))
+    auth=discovery.read_object(os.path.join(chatgpt_home(),'auth.json'))
     tokens=auth.get('tokens') if isinstance(auth.get('tokens'),dict) else {}
     return bool(shutil.which('codex') and (auth.get('auth_mode') in ('chatgpt','chatgptAuthTokens') or tokens.get('access_token')))
 
@@ -199,7 +203,7 @@ def refresh_ttl(base):
     return max(base,300 if power.get('battery') else 180)
 
 
-CONNECTION_KEYS={'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+CONNECTION_KEYS={'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
 
@@ -211,6 +215,11 @@ def connection_fingerprint(name):
             try:
                 stat=os.stat(os.path.expanduser(os.environ[key]));parts.extend([stat.st_mtime_ns,stat.st_size])
             except OSError:parts.append('unavailable')
+    if name=='chatgpt':
+        parts.append(chatgpt_home())
+        try:
+            stat=os.stat(os.path.join(chatgpt_home(),'auth.json'));parts.extend([stat.st_mtime_ns,stat.st_size])
+        except OSError:parts.append('unavailable')
     if name not in CONNECTION_KEYS or name=='provider_quotas':parts.extend([BASE,TOKEN_FILE])
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
@@ -1333,7 +1342,7 @@ def external_loaders():
     if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates'):loaders['app_updates']=app_updates_cached
-    if module_enabled('chatgpt') and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=os.environ.get('CODEX_HOME')),None),EXTERNAL_TTLS['chatgpt'])
+    if module_enabled('chatgpt') and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ('grok','minimax'):
         if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
     return loaders
@@ -1812,7 +1821,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('OpenCodex 插件 v5.0.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.3.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -1848,7 +1857,7 @@ def chatgpt_lines(data):
 
 
 def detected_modules():
-    return discovery.detect({key:source_path(key) for key in preferences.USAGE},HOME,ocx_configured(),KOMARI_BASE_URL,app_roots=[os.path.join(HOME,'Applications'),'/Applications'])
+    return discovery.detect({key:source_path(key) for key in preferences.USAGE},HOME,ocx_configured(),KOMARI_BASE_URL,app_roots=[os.path.join(HOME,'Applications'),'/Applications'],chatgpt_home=chatgpt_home())
 
 
 def detection_help_entries():
@@ -1889,12 +1898,26 @@ def location_entry(label,paths):
     return {'label':label,'detail':'\n'.join(paths),'children':[]}
 
 
+def client_connection_entry(key):
+    proxy=key=='opencodex';configured=ocx_configured() if proxy else chatgpt_configured()
+    root=OCX_HOME if proxy else chatgpt_home()
+    children=[location_entry('配置目录',[root])]
+    if proxy:
+        children.extend([location_entry('管理地址',[BASE]),location_entry('管理令牌文件',[TOKEN_FILE])])
+    else:children.append({'label':'读取此目录的 ChatGPT 登录，不修改登录文件','children':[]})
+    children.append({'label':'选择配置目录…','symbol':'folder','action':['choose-client-home',key],'children':[]})
+    if proxy:children.extend([
+        {'label':'修改管理地址…','action':['set-proxy-address'],'children':[]},
+        {'label':'选择管理令牌文件…','action':['choose-admin-token'],'children':[]}])
+    children.append({'label':'恢复自动读取','action':['reset-client-connection',key],'children':[]})
+    if os.path.isdir(root):children.append({'label':'在 Finder 中打开','symbol':'folder','action':['reveal-client-home',key],'children':[]})
+    return {'label':'OpenCodex' if proxy else 'ChatGPT / Codex 额度','detail':'已配置' if configured else '未配置','symbol':'network' if proxy else 'person.crop.circle','children':children}
+
+
 def connection_options():
     scope=hashlib.sha256(json.dumps([(k,source_path(k)) for k in preferences.USAGE]).encode()).hexdigest()[:12]
     detected,_=cached_fetch('configured-sources-'+scope,lambda:({'modules':detected_modules()},None),300)
-    found=set((detected or {}).get('modules',[]))
-    rows=[{'label':'配置状态 · 不代表连接验证结果','children':[]}]
-    rows.append({'label':'OpenCodex','detail':'已配置' if ocx_configured() else '未配置','symbol':'network','children':[{'label':'自动读取本机运行端口与管理凭据','children':[]},location_entry('配置目录',[OCX_HOME])]})
+    found=set((detected or {}).get('modules',[]));groups={k:[] for k in ('本机 Harness','API','订阅套餐','其他')}
     for key,label,_ in preferences.MODULES:
         if key in preferences.USAGE and key!='opencodex':
             custom=bool(view_settings()['paths'].get(key))
@@ -1905,9 +1928,10 @@ def connection_options():
                 locations=source_locations(key)
                 if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
                 if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
-            rows.append({'label':label,'detail':'已配置' if configured else '未配置','symbol':'folder','children':children})
-    rows.append({'label':'','separator':True,'children':[]})
-    for key,label in [('deepseek','DeepSeek API'),('grok','Grok API'),('minimax','MiniMax 套餐'),('komari','Komari 监控')]:
+            groups['本机 Harness'].append({'label':label,'detail':'已配置' if configured else '未配置','symbol':'folder','children':children})
+    groups['订阅套餐'].append(client_connection_entry('chatgpt'))
+    groups['其他'].append(client_connection_entry('opencodex'))
+    for key,label,group in [('deepseek','DeepSeek API','API'),('grok','Grok API','API'),('minimax','MiniMax 套餐','订阅套餐'),('komari','Komari 监控','其他')]:
         status='已配置' if connection_ready(key) else '未配置'
         children=[{'label':'设置面板地址…' if key=='komari' else '选择密钥文件…','action':['configure-connection',key],'children':[]}]
         if key=='deepseek' and connection_ready(key):children.insert(0,{'label':'来源 · 指定的密钥' if accounts.credential('DEEPSEEK_API_KEY') else '来源 · OpenCodex 官方连接','children':[]})
@@ -1918,11 +1942,67 @@ def connection_options():
             elif envkey and os.environ.get(envkey+'_FILE'):children.insert(0,location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE']))]))
             elif key=='deepseek':children.insert(0,location_entry('配置文件',[CONFIG_FILE]))
         children.append({'label':'恢复自动读取' if key=='deepseek' else '清除连接设置…','action':['clear-connection',key],'children':[]})
-        rows.append({'label':label,'detail':status,'symbol':'server.rack' if key=='komari' else 'key','children':children})
-    rows.extend([{'label':'ChatGPT / Codex 额度','detail':'已配置' if chatgpt_configured() else '未配置','symbol':'person.crop.circle','children':[{'label':'使用 Codex 客户端的 ChatGPT 登录','children':[]}]+([location_entry('登录配置文件',[os.path.join(os.path.expanduser(os.environ.get('CODEX_HOME') or os.path.join(HOME,'.codex')),'auth.json')])] if chatgpt_configured() else [])},
-                 {'label':'','separator':True,'children':[]},
-                 {'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]}])
+        groups[group].append({'label':label,'detail':status,'symbol':'server.rack' if key=='komari' else 'key','children':children})
+    rows=[]
+    for label,entries in groups.items():
+        rows.append({'label':label,'section':True,'children':[]});rows.extend(entries)
+    rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]}])
     return rows
+
+
+def apply_client_connection(values,module=None):
+    """Only the plugin's overrides change; client files and global environment stay intact."""
+    global OCX_HOME,TOKEN_FILE,CONFIG_FILE,SERVICE_LOG,BASE,NATIVE_USAGE_URL
+    connections.write_overrides(STATE_DIR,values);os.environ.update(values)
+    OCX_HOME=os.path.expanduser(os.environ.get('OCX_HOME') or os.path.join(HOME,'.opencodex'))
+    TOKEN_FILE=os.path.expanduser(os.environ.get('OCX_TOKEN_FILE') or os.path.join(OCX_HOME,'admin-api-token'))
+    CONFIG_FILE=os.path.join(OCX_HOME,'config.json');SERVICE_LOG=os.path.join(OCX_HOME,'service.log')
+    BASE=detect_base();NATIVE_USAGE_URL=BASE+'/#usage'
+    if module:preferences.update(STATE_DIR,'module',module,'true')
+    sync_connection_cache();schedule_background_refresh()
+
+
+def configure_client_action(name,extra):
+    key=extra[0] if len(extra)==1 else ''
+    if name in ('choose-client-home','reset-client-connection','reveal-client-home') and key not in ('chatgpt','opencodex'):raise ValueError('invalid client')
+    if name=='reveal-client-home':
+        root=OCX_HOME if key=='opencodex' else chatgpt_home()
+        if os.path.isdir(root):subprocess.run(['/usr/bin/open',root],check=True,timeout=5)
+        return
+    if name=='reset-client-connection':
+        values={'OCX_CHATGPT_HOME':''} if key=='chatgpt' else {'OCX_HOME':'','OCX_BASE_URL':'','OCX_TOKEN_FILE':''}
+    elif name=='choose-client-home':
+        message='选择包含 auth.json 的 Codex 配置目录' if key=='chatgpt' else '选择 OpenCodex 配置目录；自动读取其中的运行端口和管理令牌'
+        result=applescript('POSIX path of (choose folder with prompt '+as_literal(message)+')')
+        if result.returncode:return
+        root=os.path.abspath(os.path.expanduser(result.stdout.strip()))
+        if not os.path.isdir(root):return
+        if key=='chatgpt':
+            auth=discovery.read_object(os.path.join(root,'auth.json'));tokens=auth.get('tokens') if isinstance(auth.get('tokens'),dict) else {}
+            if auth.get('auth_mode') not in ('chatgpt','chatgptAuthTokens') and not tokens.get('access_token'):
+                applescript('display alert "未找到 ChatGPT 登录" message "请选择已通过 ChatGPT 账户登录的 Codex 配置目录。仅 API Key 登录不能读取订阅额度。"');return
+            values={'OCX_CHATGPT_HOME':root}
+        else:
+            if not any(os.path.isfile(os.path.join(root,n)) for n in ('runtime-port.json','admin-api-token','config.json')):
+                applescript('display alert "未找到 OpenCodex 配置" message "请选择包含运行端口、管理令牌或 config.json 的目录。"');return
+            values={'OCX_HOME':root,'OCX_BASE_URL':'','OCX_TOKEN_FILE':''}
+    elif name=='set-proxy-address':
+        if extra:raise ValueError('invalid proxy address action')
+        result=applescript('text returned of (display dialog "OpenCodex 管理地址" default answer '+as_literal(BASE)+' buttons {"取消", "保存"} default button "保存" cancel button "取消" with title "连接设置")')
+        if result.returncode:return
+        url=connections.monitor_url(result.stdout.strip())
+        if not url:
+            applescript('display alert "地址无效" message "请填写实际的 http:// 或 https:// 管理地址。"');return
+        values={'OCX_BASE_URL':url}
+    elif name=='choose-admin-token':
+        if extra:raise ValueError('invalid token action')
+        result=applescript('POSIX path of (choose file with prompt "选择 OpenCodex 管理令牌文件；仅保存文件路径")')
+        if result.returncode:return
+        filename=os.path.abspath(os.path.expanduser(result.stdout.strip()))
+        if not os.path.isfile(filename):return
+        values={'OCX_TOKEN_FILE':filename}
+    else:raise ValueError('invalid connection action')
+    apply_client_connection(values,None if name=='reset-client-connection' else 'chatgpt' if key=='chatgpt' else 'opencodex')
 
 
 def configure_connection(key,clear=False):
@@ -2480,10 +2560,20 @@ def native_menu_line(line):
 def resource_panel_entries(data):
     entries=panel_entries(management_lines(data))
     mapping={'ChatGPT 额度':'chatgpt','Grok API 余额':'grok','MiniMax 套餐额度':'minimax','Komari 监控':'komari','应用更新':'updates'}
+    groups={label:[] for label in ('订阅','API','其他')};footer=[]
     for entry in entries:
+        if entry.get('separator'):continue
         source=next((source for prefix,source in mapping.items() if entry['label'].startswith(prefix)),None)
         if source and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
-    return entries
+        label=entry['label']
+        if label in ('刷新数据','SwiftBar 管理'):footer.append(entry);continue
+        group='订阅' if label.startswith(('Codex 可用','ChatGPT 额度','MiniMax 套餐额度')) else 'API' if label.startswith(('DeepSeek 余额','Grok API 余额')) else '其他'
+        groups[group].append(entry)
+    result=[]
+    for label,items in groups.items():
+        if items:result.append({'label':label,'section':True,'children':[]});result.extend(items)
+    if result and footer:result.append({'label':'','separator':True,'children':[]})
+    return result+footer
 
 
 def presentation_settings():
@@ -2639,6 +2729,8 @@ def run_action(name, extra):
         schedule_background_refresh()
     elif name == 'refresh-source':
         refresh_resource(extra[0] if len(extra)==1 else '')
+    elif name in ('choose-client-home','reset-client-connection','reveal-client-home','set-proxy-address','choose-admin-token'):
+        configure_client_action(name,extra)
     elif name in ('configure-connection','clear-connection'):
         configure_connection(extra[0] if len(extra)==1 else '',name=='clear-connection')
     elif name == 'auto-source':

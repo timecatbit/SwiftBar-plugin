@@ -135,3 +135,77 @@ class PowerTests(unittest.TestCase):
             row=next(r for r in self.m.connection_options() if r['label']=='DeepSeek API')
         text=json.dumps(row)
         self.assertIn(str(path),text);self.assertNotIn('PRIVATE-TEST-KEY',text)
+
+    def test_connection_groups_are_flat_and_correct(self):
+        with patch.object(self.m,'detected_modules',return_value=[]):rows=self.m.connection_options()
+        groups={};current=None
+        for row in rows:
+            if row.get('section'):current=row['label'];groups[current]=[]
+            elif row.get('detail'):groups[current].append(row['label'])
+        self.assertEqual(list(groups),['本机 Harness','API','订阅套餐','其他'])
+        self.assertIn('Claude Code',groups['本机 Harness'])
+        self.assertEqual(groups['API'],['DeepSeek API','Grok API'])
+        self.assertEqual(groups['订阅套餐'],['ChatGPT / Codex 额度','MiniMax 套餐'])
+        self.assertEqual(groups['其他'],['OpenCodex','Komari 监控'])
+    def test_home_resource_groups_omit_empty_sections(self):
+        for key in self.m.preferences.KNOWN:self.m.preferences.update(self.m.STATE_DIR,'module',key,'false')
+        rows=self.m.resource_panel_entries({})
+        self.assertFalse(any(r.get('section') for r in rows))
+        for key in ('chatgpt','minimax','deepseek','grok','komari'):self.m.preferences.update(self.m.STATE_DIR,'module',key,'true')
+        rows=self.m.resource_panel_entries({});groups={};current=None
+        for row in rows:
+            if row.get('section'):current=row['label'];groups[current]=[]
+            elif not row.get('separator') and row['label'] not in ('刷新数据','SwiftBar 管理'):groups[current].append(row['label'])
+        self.assertEqual(list(groups),['订阅','API','其他'])
+        self.assertIn('ChatGPT 额度',groups['订阅']);self.assertIn('MiniMax 套餐额度',groups['订阅'])
+        self.assertIn('DeepSeek 余额',groups['API']);self.assertIn('Grok API 余额',groups['API'])
+        self.assertTrue(any(x.startswith('Komari') for x in groups['其他']))
+    def test_client_configuration_actions_are_visible_and_whitelisted(self):
+        choices=self.m.connection_options()
+        for label,action in [('ChatGPT / Codex 额度',['choose-client-home','chatgpt']),('OpenCodex',['set-proxy-address'])]:
+            row=next(r for r in choices if r['label']==label)
+            self.assertIn(action,[c.get('action') for c in row['children']])
+            self.write('panel-view',{'moduleOptions':[row]})
+            self.write('panel-action',{'id':'connection','action':action,'createdAt':self.m.time.time()})
+            with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_called_once_with(action[0],action[1:])
+            self.assertEqual(self.m.read_cache('panel-action-receipt')['status'],'done')
+    def test_changing_chatgpt_source_preserves_client_files_and_codex_usage(self):
+        home=Path(self.temp.name)/'login-profile';home.mkdir();auth=home/'auth.json'
+        auth.write_text(json.dumps({'auth_mode':'chatgpt','tokens':{'access_token':'PRIVATE-TEST-SESSION'}}));before=auth.read_bytes()
+        usage=self.m.source_path('codex')
+        response=types.SimpleNamespace(returncode=0,stdout=str(home))
+        with patch.object(self.m,'applescript',return_value=response),patch.object(self.m,'schedule_background_refresh'):
+            self.m.configure_client_action('choose-client-home',['chatgpt'])
+        self.assertEqual(self.m.chatgpt_home(),str(home));self.assertEqual(self.m.source_path('codex'),usage)
+        self.assertEqual(auth.read_bytes(),before)
+        text=(Path(self.m.STATE_DIR)/'config.local.sh').read_text()
+        self.assertIn('OCX_CHATGPT_HOME',text);self.assertNotIn('PRIVATE-TEST-SESSION',text)
+        self.assertTrue(self.m.module_enabled('chatgpt'))
+    def test_changing_opencodex_directory_rebinds_port_and_token(self):
+        home=Path(self.temp.name)/'proxy-profile';home.mkdir()
+        (home/'runtime-port.json').write_text('{"port":12345}')
+        token=home/'admin-api-token';token.write_text('PRIVATE-ADMIN-TOKEN')
+        response=types.SimpleNamespace(returncode=0,stdout=str(home))
+        with patch.dict(os.environ,{'OCX_BASE_URL':'http://old.invalid','OCX_TOKEN_FILE':'/old/token'}),patch.object(self.m,'applescript',return_value=response),patch.object(self.m,'schedule_background_refresh'):
+            self.m.configure_client_action('choose-client-home',['opencodex'])
+            self.assertEqual(self.m.BASE,'http://127.0.0.1:12345');self.assertEqual(self.m.TOKEN_FILE,str(token))
+            self.assertEqual(self.m.NATIVE_USAGE_URL,self.m.BASE+'/#usage')
+        self.assertEqual(token.read_text(),'PRIVATE-ADMIN-TOKEN')
+        self.assertNotIn('PRIVATE-ADMIN-TOKEN',(Path(self.m.STATE_DIR)/'config.local.sh').read_text())
+    def test_invalid_or_cancelled_client_settings_leave_no_file(self):
+        for name,extra in [('choose-client-home',['chatgpt']),('choose-client-home',['opencodex']),('set-proxy-address',[]),('choose-admin-token',[])]:
+            with patch.object(self.m,'applescript',return_value=types.SimpleNamespace(returncode=1,stdout='')),patch.object(self.m.connections,'write_overrides') as write:
+                self.m.configure_client_action(name,extra);write.assert_not_called()
+        with patch.object(self.m,'applescript',side_effect=[types.SimpleNamespace(returncode=0,stdout='https://user:password@host'),types.SimpleNamespace(returncode=0,stdout='')]),patch.object(self.m.connections,'write_overrides') as write:
+            self.m.configure_client_action('set-proxy-address',[]);write.assert_not_called()
+    def test_chatgpt_directory_and_login_changes_invalidate_cached_quota(self):
+        first=Path(self.temp.name)/'a';second=Path(self.temp.name)/'b'
+        for home in (first,second):home.mkdir();(home/'auth.json').write_text('{"auth_mode":"chatgpt"}')
+        with patch.dict(os.environ,{'OCX_CHATGPT_HOME':str(first)}):self.m.cached_fetch('chatgpt',lambda:({'windows':[{'remaining':50}]},None),300)
+        with patch.dict(os.environ,{'OCX_CHATGPT_HOME':str(second)}):self.assertEqual(self.m.read_cache('chatgpt'),{})
+    def test_reset_connection_restores_defaults_without_rewriting_clients(self):
+        with patch.dict(os.environ,{'OCX_HOME':'/old','OCX_BASE_URL':'http://old.invalid','OCX_TOKEN_FILE':'/old-token'}),patch.object(self.m,'schedule_background_refresh'):
+            self.m.configure_client_action('reset-client-connection',['opencodex'])
+            self.assertEqual(self.m.OCX_HOME,os.path.join(self.m.HOME,'.opencodex'))
+            self.assertEqual(self.m.TOKEN_FILE,os.path.join(self.m.OCX_HOME,'admin-api-token'))
+            self.assertNotEqual(self.m.BASE,'http://old.invalid')

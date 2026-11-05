@@ -128,12 +128,13 @@ final class DashboardView:FlippedView {
     }
     static func chartExtra(_ d:Dashboard)->CGFloat {CGFloat(max(0,(d.providers.filter{$0.summaryIncluded != false}.count+3)/3-1))*17}
     static func summaryHeight(_ d:Dashboard)->CGFloat {d.showSummary==false ? 44 : 254+chartExtra(d)}
-    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+d.providers.reduce(0){$0+providerHeight($1,d)}+22}
+    static func harnessHeaderHeight(_ d:Dashboard)->CGFloat {d.providers.isEmpty || d.showSummary==false ? 0 : 24}
+    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+harnessHeaderHeight(d)+d.providers.reduce(0){$0+providerHeight($1,d)}+(d.providers.isEmpty ? 0 : 22)}
     init(_ data:Dashboard,width:CGFloat){
         self.data=data;super.init(frame:NSRect(x:0,y:0,width:width,height:Self.height(data)))
         setAccessibilityElement(true);setAccessibilityRole(.group);setAccessibilityLabel("用量概览")
         if data.allowCollapse==true {
-            var y=Self.summaryHeight(data)
+            var y=Self.summaryHeight(data)+Self.harnessHeaderHeight(data)
             for p in data.providers {
                 let expanded=(data.expandedProviders ?? []).contains(p.id)
                 let button=DisclosureButton(label:(expanded ? "收起 " : "展开 ")+p.name+" 明细",frame:NSRect(x:4,y:y+2,width:width-8,height:49))
@@ -150,7 +151,7 @@ final class DashboardView:FlippedView {
     override func draw(_ dirtyRect:NSRect){
         let left:CGFloat=12,right=bounds.width-12,width=right-left
         let valid=summaryProviders.filter{$0.available},costs=valid.compactMap{$0.cost}
-        text(data.showSummary==false ? "用量" : "Summary",x:left,y:10,w:150,size:14,weight:.semibold)
+        text(data.showSummary==false ? "Harness" : "Summary",x:left,y:10,w:150,size:14,weight:.semibold)
         if data.showSummary != false {
         let partial=valid.count != summaryProviders.count || valid.contains{$0.unpriced>0}
         let columns:[CGFloat]=[width*0.38,width*0.38,width*0.24]
@@ -160,8 +161,9 @@ final class DashboardView:FlippedView {
         drawSummaryChart(left:left,right:right)
         }
         var y:CGFloat=Self.summaryHeight(data)
+        if Self.harnessHeaderHeight(data)>0{text("Harness",x:left,y:y+5,w:width,size:10.5,color:.secondaryLabelColor,weight:.medium);y+=Self.harnessHeaderHeight(data)}
         for p in data.providers {if data.allowCollapse==true{drawCollapsibleProvider(p,y:y,left:left,right:right)}else{drawProvider(p,y:y,left:left,right:right)};y+=Self.providerHeight(p,data)}
-        text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)
+        if !data.providers.isEmpty{text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)}
     }
     private func drawCollapsibleProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
         let width=right-left,c=accent(p.id,self),expanded=(data.expandedProviders ?? []).contains(p.id)

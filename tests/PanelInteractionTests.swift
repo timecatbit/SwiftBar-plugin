@@ -94,4 +94,14 @@ let overlap=NSRect(x:950,y:400,width:224,height:200),point=NSPoint(x:1000,y:450)
 expect(MenuLayout.topmostIndex(at:point,frames:[rootFrame,overlap])==1,"Covered rows cannot own hover or mouse input")
 expect(MenuLayout.topmostIndex(at:NSPoint(x:1000,y:650),frames:[rootFrame,overlap])==0,"Uncovered ancestor rows remain reachable")
 expect(MenuLayout.topmostIndex(at:NSPoint(x:100,y:100),frames:[rootFrame,overlap])==nil,"Outside points do not hit a menu")
+var grouped=initial.dashboard!
+let sampleProvider=ProviderUsage(id:"claude",name:"Claude Code",subtitle:"",status:"",available:false,cost:nil,tokens:0,requests:0,output:0,cache:nil,coverage:nil,sessions:0,unpriced:0,summaryIncluded:true,models:[],history:[])
+expect(DashboardView.harnessHeaderHeight(grouped)==0,"Empty Harness group has no header")
+grouped.providers=[sampleProvider]
+expect(DashboardView.harnessHeaderHeight(grouped)==24,"Harness group header gets its own space")
+let groupedView=DashboardView(grouped,width:344)
+let disclosure=groupedView.subviews.compactMap{$0 as? DisclosureButton}.first!
+expect(disclosure.frame.minY==DashboardView.summaryHeight(grouped)+24+2,"Disclosure hitbox moves with Harness heading")
+grouped.showSummary=false
+expect(DashboardView.harnessHeaderHeight(grouped)==0,"Hidden Summary uses the title without a duplicate Harness header")
 print("Native interaction assertions: \(assertions) passed")
