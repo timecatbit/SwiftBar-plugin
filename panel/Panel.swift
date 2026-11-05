@@ -322,7 +322,12 @@ enum MenuLayout {
     static func height(_ value:String,font:NSFont,width:CGFloat)->CGFloat {
         ceil((value as NSString).boundingRect(with:NSSize(width:max(1,width),height:1000),options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:font]).height)
     }
-    static func valueWidth(_ e:Entry)->CGFloat {e.value.map{width($0,font:valueFont)+(e.attention==true ? 16 : 0)} ?? 0}
+    static func configured(_ value:String?)->Bool? {
+        if value=="已配置"{return true}
+        if value=="未配置"{return false}
+        return nil
+    }
+    static func valueWidth(_ e:Entry)->CGFloat {e.value.map{width($0,font:valueFont)+(e.attention==true ? 16 : configured($0) != nil ? 12 : 0)} ?? 0}
     static func trailing(_ e:Entry)->CGFloat {e.children.isEmpty ? 12 : 32}
     static func labelWidth(_ e:Entry,width:CGFloat,left:CGFloat)->CGFloat {max(24,width-left-trailing(e)-valueWidth(e)-(e.value == nil ? 0 : 10))}
     static func rowHeight(_ e:Entry,width:CGFloat,left:CGFloat)->CGFloat {
@@ -368,7 +373,7 @@ final class Row:NSButton {
     init(_ entry:Entry,frame:NSRect){
         self.entry=entry;super.init(frame:frame);title=entry.label;isBordered=false;setButtonType(.momentaryChange)
         target=self;action=#selector(activate);isEnabled=entry.actionable
-        setAccessibilityLabel(entry.label+(entry.detail.map{", "+$0} ?? ""))
+        setAccessibilityLabel(entry.label+(entry.value.map{", "+$0} ?? "")+(entry.detail.map{", "+$0} ?? ""))
         if let raw=entry.image,let data=Data(base64Encoded:raw),let img=NSImage(data:data){glyph=img;glyph?.isTemplate=entry.template ?? false}
         else if let symbol=entry.symbol{glyph=NSImage(systemSymbolName:symbol,accessibilityDescription:nil)}
     }
@@ -385,7 +390,7 @@ final class Row:NSButton {
         let left=columnInset
         if let checked=entry.checked {
             let box=NSRect(x:13,y:(bounds.height-12)/2,width:12,height:12)
-            let radio=entry.action?.first=="set-appearance"
+            let radio=["set-appearance","set-chatgpt-source"].contains(entry.action?.first ?? "")
             let outline=NSBezierPath(roundedRect:box,xRadius:radio ? 6 : 3,yRadius:radio ? 6 : 3)
             if checked {
                 NSColor.controlAccentColor.setFill();outline.fill()
@@ -415,6 +420,11 @@ final class Row:NSButton {
                 NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.22 : 0.10).setFill()
                 NSBezierPath(roundedRect:valueRect,xRadius:7,yRadius:7).fill()
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX+8,y:bounds.midY-textHeight/2,width:valueRect.width-16,height:textHeight),font:MenuLayout.valueFont,color:dark(self) ? accent("opencodex",self) : .controlAccentColor,alignment:.center)
+            }else if let configured=MenuLayout.configured(value){
+                let dot=NSBezierPath(ovalIn:NSRect(x:valueRect.minX,y:bounds.midY-3,width:6,height:6))
+                if configured{statusGreen(self).setFill();dot.fill()}
+                else{NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()}
+                MenuLayout.draw(value,in:NSRect(x:valueRect.minX+12,y:bounds.midY-textHeight/2,width:valueRect.width-12,height:textHeight),font:MenuLayout.valueFont,color:.secondaryLabelColor,alignment:.right)
             }else{
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:bounds.midY-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:entry.actionable ? .labelColor : .secondaryLabelColor,alignment:.right)
             }
@@ -773,7 +783,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func dispatchAction(_ action:[String]){
         let passive=["refresh-source","refresh-view"].contains(action[0])
-        let keepOpen=["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
+        let keepOpen=["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-subscription","set-chatgpt-source","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
         if !keepOpen{hide()};if keepOpen && !passive{updatePresentation()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
         do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id;pendingSince=Date();updateFallback()

@@ -37,7 +37,7 @@ class ModuleTests(unittest.TestCase):
     def test_hide_resource_and_management_branches(self):
         for key in ('opencodex','codex-quota','deepseek','komari','updates'):self.toggle(key,False)
         lines='\n'.join(self.m.management_lines({}))
-        for text in ('OpenCodex 管理','DeepSeek 余额','Codex 可用','Komari 监控','应用更新'):self.assertNotIn(text,lines)
+        for text in ('OpenCodex 管理','DeepSeek API','ChatGPT 订阅','Komari 监控','应用更新'):self.assertNotIn(text,lines)
         self.assertIn('刷新数据',lines);self.assertIn('SwiftBar 管理',lines)
     def test_usage_selection_changes_chart_and_cache_scope(self):
         old=self.m.range_cache_name()
@@ -83,7 +83,7 @@ class ModuleTests(unittest.TestCase):
             result=self.m.render({'healthz':{'version':'test'}})
         self.assertIn('主页模块…',result)
         self.assertIn('自动检测',result);self.assertIn('detect-modules',result)
-        for label in ('DeepSeek 余额','OpenCodex 管理','Komari 监控','刷新数据'):self.assertNotIn(label,result)
+        for label in ('DeepSeek API','OpenCodex 管理','Komari 监控','刷新数据'):self.assertNotIn(label,result)
     def test_native_manager_request_switches_existing_helper_mode(self):
         app=Path(self.temp.name)/'Panel.app';app.mkdir()
         with patch.object(self.m,'PANEL_APP',str(app)),patch.object(self.m.subprocess,'run'):
@@ -111,7 +111,7 @@ class ModuleTests(unittest.TestCase):
     def test_optional_account_resources_are_on_homepage(self):
         for key in ('grok','minimax'):self.toggle(key,True)
         lines='\n'.join(self.m.resource_lines({'grok':{'balance':12.3},'minimax':{'windows':[{'name':'text','remaining':65}]}}))
-        self.assertIn('Grok API 余额',lines);self.assertIn('$12.30',lines);self.assertIn('65% 可用',lines)
+        self.assertIn('Grok API',lines);self.assertIn('$12.30',lines);self.assertIn('65% 可用',lines)
         self.assertNotIn('grok',self.m.external_loaders());self.assertNotIn('minimax',self.m.external_loaders())
         with patch.dict(os.environ,{'XAI_MANAGEMENT_API_KEY':'test-key','XAI_TEAM_ID':'test-team','MINIMAX_API_KEY':'test-key'}):
             self.assertIn('grok',self.m.external_loaders());self.assertIn('minimax',self.m.external_loaders())
@@ -125,7 +125,7 @@ class ModuleTests(unittest.TestCase):
     def test_flyout_checks_use_visible_action_whitelist(self):
         self.toggle('grok',True)
         entries=self.m.resource_panel_entries({})
-        grok=next(e for e in entries if e['label']=='Grok API 余额')
+        grok=next(e for e in entries if e['label']=='Grok API')
         self.assertEqual(grok['onOpenAction'],['refresh-source','grok'])
         self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'entries':entries})
         self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':'on-open','action':['refresh-source','grok'],'createdAt':self.m.time.time()})
@@ -172,7 +172,7 @@ class ModuleTests(unittest.TestCase):
             self.m.run_action('detect-modules',[])
         self.assertEqual(target.read_bytes(),before);refresh.assert_not_called()
         message,detail=confirm.call_args.args
-        self.assertIn('覆盖当前模块选择',message);self.assertIn('将启用：Codex 本机用量',detail)
+        self.assertIn('覆盖当前模块选择',message);self.assertIn('将启用：ChatGPT 本机用量',detail)
         self.assertIn('将取消：OpenCodex',detail);self.assertEqual(confirm.call_args.kwargs['accept'],'覆盖当前选项')
     def test_detection_explicit_confirmation_replaces_selection_only(self):
         preferences.update(self.m.STATE_DIR,'appearance','solid')

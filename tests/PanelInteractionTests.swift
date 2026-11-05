@@ -104,4 +104,10 @@ let disclosure=groupedView.subviews.compactMap{$0 as? DisclosureButton}.first!
 expect(disclosure.frame.minY==DashboardView.summaryHeight(grouped)+24+2,"Disclosure hitbox moves with Harness heading")
 grouped.showSummary=false
 expect(DashboardView.harnessHeaderHeight(grouped)==0,"Hidden Summary uses the title without a duplicate Harness header")
+expect(MenuLayout.configured("已配置")==true,"Configured gets a filled indicator")
+expect(MenuLayout.configured("未配置")==false,"Unconfigured gets an outline indicator")
+expect(MenuLayout.configured("已同步")==nil,"Connection results must not be confused with configuration")
+let configuredEntry=try JSONDecoder().decode(Entry.self,from:Data("{\"label\":\"ChatGPT 本机用量\",\"value\":\"已配置\",\"symbol\":\"folder\",\"children\":[{\"label\":\"目录\",\"children\":[]}]}".utf8))
+expect(MenuLayout.valueWidth(configuredEntry)==MenuLayout.width("已配置",font:MenuLayout.valueFont)+12,"Indicator reserves its own column")
+expect(MenuLayout.labelWidth(configuredEntry,width:280,left:36)+36+MenuLayout.trailing(configuredEntry)+MenuLayout.valueWidth(configuredEntry)+10==280,"Status, label and arrow cannot overlap")
 print("Native interaction assertions: \(assertions) passed")

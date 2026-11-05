@@ -267,7 +267,7 @@ def opencode_usage(root, start, end, zone, exclude_proxy=False):
 def chatgpt_account(binary=None, home=None):
     """Use official read-only App Server methods; never refresh/login or invoke a model."""
     binary = binary or shutil.which('codex')
-    if not binary: return {'state': '未安装 Codex 客户端', 'windows': []}
+    if not binary: return {'state': '未安装 ChatGPT 编程客户端', 'windows': []}
     environment = os.environ.copy()
     if home: environment['CODEX_HOME'] = str(home)
     process = subprocess.Popen([binary, 'app-server'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment)

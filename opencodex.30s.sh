@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.3.0</xbar.version>
+# <xbar.version>5.4.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -107,6 +107,7 @@ for _lib in (os.path.join(PLUGIN_DIR, '.opencodex-panel', 'lib'), os.path.join(P
         sys.path.insert(0, _lib)
         break
 import swiftbar_preferences as preferences
+import swiftbar_catalog as catalog
 import swiftbar_sources as sources
 import swiftbar_accounts as accounts
 import swiftbar_discovery as discovery
@@ -172,7 +173,16 @@ def chatgpt_configured():
     return bool(shutil.which('codex') and (auth.get('auth_mode') in ('chatgpt','chatgptAuthTokens') or tokens.get('access_token')))
 
 
+def chatgpt_source():
+    chosen=view_settings()['chatgptSource']
+    if chosen!='auto':return chosen
+    return 'client' if chatgpt_configured() or not ocx_configured() else 'proxy'
+
+
 def connection_ready(key):
+    if key in catalog.MANUAL_SUBSCRIPTIONS:return key in view_settings()['configuredSubscriptions']
+    if key in catalog.PORTAL_APIS:return any(accounts.credential(name) for name in catalog.credential_names(key))
+    if key=='chatgpt':return ocx_configured() if chatgpt_source()=='proxy' else chatgpt_configured()
     if key=='deepseek':
         if os.environ.get('DEEPSEEK_API_KEY') or os.environ.get('DEEPSEEK_API_KEY_FILE'):
             return bool(accounts.credential('DEEPSEEK_API_KEY'))
@@ -1237,23 +1247,35 @@ def app_update_lines(data):
     return lines
 
 def resource_lines(data):
-    balance,value=deepseek_balance(data)
-    logo=deepseek_logo_image()
-    options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
-    balance=(balance or '—')+(' · 上次' if (data.get('provider_quotas') or {}).get('_stale') else '')
-    lines=[item('DeepSeek 余额',badge=balance,href='https://platform.deepseek.com/usage',**options)] if module_enabled('deepseek') else []
-    accounts=(data.get('accounts') or {}).get('accounts') or []
-    if len(accounts)<=2:
-        lines.append(item('Codex 可用',badge=account_quota_summary(data) or '—',sfimage='gauge.with.dots.needle.67percent',href=BASE+'/'))
-    else:
-        for account in accounts:
-            single=dict(data,accounts={'accounts':[account]})
-            lines.append(item('Codex 可用',badge=account_quota_summary(single),sfimage='gauge.with.dots.needle.67percent',href=BASE+'/'))
-    lines=[row for row in lines if module_enabled('codex-quota') or not row.startswith('Codex 可用')]
-    if module_enabled('chatgpt'):lines.extend(chatgpt_lines(data))
-    for key in ('grok','minimax'):
-        if module_enabled(key):lines+=provider_account_lines(key,data)
+    lines=[]
+    for service in catalog.SERVICES:
+        key=service.key
+        if not module_enabled(key):continue
+        if key=='chatgpt':lines.extend(chatgpt_lines(data))
+        elif key=='deepseek':
+            balance,value=deepseek_balance(data);logo=deepseek_logo_image()
+            options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
+            balance=(balance or ('正在读取' if connection_ready(key) else '未配置'))+(' · 上次' if (data.get('provider_quotas') or {}).get('_stale') else '')
+            lines.append(item(service.label,badge=balance,**options))
+            lines.append(item('配置状态',badge='已配置' if connection_ready(key) else '未配置',level=1,color=MUTED,size=10))
+            lines.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
+        elif key in ('grok','minimax'):lines.extend(provider_account_lines(key,data))
+        else:lines.extend(portal_service_lines(key))
     return lines+(['---'] if lines else [])
+
+
+def portal_service_lines(key):
+    service=catalog.BY_KEY[key];configured=connection_ready(key)
+    rows=[item(service.label,badge='官网查看' if configured else '未配置',sfimage='person.crop.circle' if service.category=='订阅' else 'creditcard')]
+    rows.append(item('配置状态',badge='已配置' if configured else '未配置',level=1,color=MUTED,size=10))
+    rows.append(item('尚未接入自动额度查询，请在官网查看' if service.category=='订阅' else '已识别 API 配置；余额与账单请在官网查看' if configured else '未发现 API 配置；也可直接打开官网',level=1,color=MUTED,size=10))
+    if service.category=='订阅':
+        rows.append(item('手动配置标记，不代表套餐验证结果',level=1,color=MUTED,size=10))
+        rows.append(item('清除配置标记' if configured else '标记为已配置',level=1,**act('set-subscription',key,'false' if configured else 'true')))
+    else:
+        rows.append(item('选择密钥文件…',level=1,**act('configure-connection',key)))
+    rows.append(item('打开订阅管理' if service.category=='订阅' else '打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
+    return rows
 
 
 RANGES={'today':'当天','24h':'近 24 小时','7d':'近 7 天','30d':'近 30 天','week':'本周','month':'本月','all':'全部'}
@@ -1342,7 +1364,7 @@ def external_loaders():
     if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates'):loaders['app_updates']=app_updates_cached
-    if module_enabled('chatgpt') and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
+    if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ('grok','minimax'):
         if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
     return loaders
@@ -1356,6 +1378,8 @@ def refresh_resource(source):
     checks=read_cache('resource-checks');now=time.time();last=checks.get(source,0)
     if isinstance(last,(int,float)) and 0<=now-last<5:return
     checks[source]=now;checks['schema']=1;write_json_cache(cache_path('resource-checks'),checks)
+    if source=='chatgpt' and chatgpt_source()=='proxy':
+        invalidate_caches(['quota','accounts','active']);return
     name=RESOURCE_CACHES[source]
     invalidate_caches([name])
     loader=external_loaders().get(name)
@@ -1413,7 +1437,7 @@ def gather():
         data[name], data[name + "_error"] = cache_result(read_cache(name), ttl)
     for key in ('grok','minimax'):
         if not connection_ready(key):data[key]=accounts.account(key);data[key+'_error']=None
-    if not chatgpt_configured():data['chatgpt']={'state':'未找到 Codex 的 ChatGPT 登录'};data['chatgpt_error']=None
+    if not chatgpt_configured():data['chatgpt']={'state':'未找到 ChatGPT 客户端登录'};data['chatgpt_error']=None
     data["range_usage"],data["range_usage_error"]=cache_result(read_cache(range_cache_name()),refresh_ttl(60))
     if not health:
         data["_elapsed"] = time.monotonic() - started
@@ -1555,8 +1579,8 @@ def service_lines(data):
     lines = []
     if running:
         lines.append(item("重新启动代理", sfimage="restart", **act("restart")))
-        lines.append(item("同步模型到 Codex", sfimage="arrow.triangle.2.circlepath", **act("sync")))
-        lines.append(item("停止代理（并还原原生 Codex）", sfimage="stop.fill", color=BAD, **act("stop")))
+        lines.append(item("同步模型到 ChatGPT", sfimage="arrow.triangle.2.circlepath", **act("sync")))
+        lines.append(item("停止代理（并还原原生 ChatGPT）", sfimage="stop.fill", color=BAD, **act("stop")))
     else:
         lines.append(item("启动代理", sfimage="play.fill", color=OK, **act("start")))
     if startup.get("serviceInstalled") or not startup:
@@ -1687,7 +1711,7 @@ def account_quick_lines(data):
 
 
 def account_quota_summary(data):
-    """在主菜单直接列出每个 Codex 账号的可用额度，避免只显示主账号。"""
+    """在主菜单直接列出每个 ChatGPT 账号的可用额度，避免只显示主账号。"""
     accounts = (data.get("accounts") or {}).get("accounts") or []
     quotas = (data.get("quota") or {}).get("quotas") or {}
     parts = []
@@ -1795,9 +1819,9 @@ def unfiltered_management_lines(data, include_swiftbar=True):
     children.extend([item('打开控制台',href=BASE+'/',sfimage='macwindow'),
                      item('查看完整用量',href=NATIVE_USAGE_URL,sfimage='chart.bar.xaxis')])
     if healthy:
-        children.extend(['---',item('Codex 账户 · %d'%len(accounts),panelsection=True,color=MUTED,size=11)])
+        children.extend(['---',item('ChatGPT 账户 · %d'%len(accounts),panelsection=True,color=MUTED,size=11)])
         children.extend(account_quick_lines(data))
-        children.extend(['---',item('同步模型到 Codex',sfimage='arrow.triangle.2.circlepath',**act('sync')),
+        children.extend(['---',item('同步模型到 ChatGPT',sfimage='arrow.triangle.2.circlepath',**act('sync')),
                          item('检查更新',sfimage='arrow.down.circle',**act('check-update')),
                          item('打开代理日志',sfimage='doc.text',**act('logs')),
                          item('重新启动代理…',sfimage='arrow.clockwise',**act('restart')),
@@ -1821,7 +1845,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.3.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.4.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -1840,24 +1864,37 @@ def management_lines(data, include_swiftbar=True):
 
 
 def chatgpt_lines(data):
+    label=catalog.BY_KEY['chatgpt'].label
+    if chatgpt_source()=='proxy':
+        proxy_accounts=(data.get('accounts') or {}).get('accounts') or []
+        badge=account_quota_summary(data) or ('正在读取' if ocx_configured() else '未配置')
+        if len(proxy_accounts)>2 or len(badge)>32:badge='%d 个账户'%len(proxy_accounts)
+        lines=[item(label,badge=badge,sfimage='gauge.with.dots.needle.67percent')]
+        lines.append(item('来源 · OpenCodex 管理的 ChatGPT 账户',level=1,color=MUTED,size=10))
+        lines.append(item('编程工具额度，不代表网页聊天的全部限额',level=1,color=MUTED,size=10))
+        for account in (data.get('accounts') or {}).get('accounts') or []:
+            single=dict(data,accounts={'accounts':[account]})
+            lines.append(item(account_quota_summary(single) or '额度待同步',level=1))
+        lines.append(item('打开账户管理',level=1,href=BASE+'/',sfimage='arrow.up.right'))
+        return lines
     payload=data.get('chatgpt') or {};windows=payload.get('windows') or []
     visible=[w for w in windows if not w.get('resetsAt') or w['resetsAt']>time.time()]
-    label='ChatGPT 额度'
-    badge=('%s%% 可用'%fmt_int(min(w['remaining'] for w in visible))) if visible else payload.get('state','正在读取')
+    badge=('%s%% 可用'%fmt_int(min(w['remaining'] for w in visible))) if visible else ('未配置' if not chatgpt_configured() else payload.get('state','正在读取'))
     if windows and not visible:badge='待刷新'
     if payload.get('_stale'):badge+=' · 上次'
     lines=[item(label,badge=badge,sfimage='bubble.left.and.bubble.right')]
-    lines.append(item('ChatGPT 登录 · Codex 服务额度',level=1,color=MUTED,size=10))
+    lines.append(item('ChatGPT 登录 · 编程工具额度',level=1,color=MUTED,size=10))
     for w in visible:
         minutes=w.get('minutes') or 0;span=('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
-        lines.append(item(str(w['name'])+' · '+span,level=1,badge='%g%% 可用'%w['remaining']))
-    if not visible:lines.append(item(payload.get('state','正在读取')+'；使用 Codex 客户端的 ChatGPT 登录',level=1,color=MUTED,size=10))
+        window_name='ChatGPT' if str(w['name']).lower()=='codex' else str(w['name'])
+        lines.append(item(window_name+' · '+span,level=1,badge='%g%% 可用'%w['remaining']))
+    if not visible:lines.append(item(payload.get('state','未配置' if not chatgpt_configured() else '正在读取'),level=1,color=MUTED,size=10))
     lines.append(item('打开 ChatGPT',level=1,href='https://chatgpt.com',sfimage='arrow.up.right'))
     return lines
 
 
 def detected_modules():
-    return discovery.detect({key:source_path(key) for key in preferences.USAGE},HOME,ocx_configured(),KOMARI_BASE_URL,app_roots=[os.path.join(HOME,'Applications'),'/Applications'],chatgpt_home=chatgpt_home())
+    return discovery.detect({key:source_path(key) for key in preferences.USAGE},HOME,ocx_configured(),KOMARI_BASE_URL,app_roots=[os.path.join(HOME,'Applications'),'/Applications'],chatgpt_home=chatgpt_home(),configured_subscriptions=view_settings()['configuredSubscriptions'])
 
 
 def detection_help_entries():
@@ -1899,9 +1936,16 @@ def location_entry(label,paths):
 
 
 def client_connection_entry(key):
-    proxy=key=='opencodex';configured=ocx_configured() if proxy else chatgpt_configured()
+    proxy=key=='opencodex';configured=ocx_configured() if proxy else connection_ready('chatgpt')
     root=OCX_HOME if proxy else chatgpt_home()
-    children=[location_entry('配置目录',[root])]
+    children=[]
+    if not proxy:
+        chosen=view_settings()['chatgptSource']
+        children.extend({'label':label,'checked':chosen==value,'action':['set-chatgpt-source',value],'children':[]} for value,label in [('auto','自动选择来源'),('client','本机 ChatGPT 登录'),('proxy','OpenCodex 账户')])
+        children.append({'label':'当前来源 · '+('OpenCodex 账户' if chatgpt_source()=='proxy' else '本机 ChatGPT 登录'),'children':[]})
+        if chatgpt_source()=='proxy':children.append(location_entry('账户管理地址',[BASE]))
+        children.append({'label':'','separator':True,'children':[]})
+    children.append(location_entry('配置目录' if proxy else '本机登录目录',[root]))
     if proxy:
         children.extend([location_entry('管理地址',[BASE]),location_entry('管理令牌文件',[TOKEN_FILE])])
     else:children.append({'label':'读取此目录的 ChatGPT 登录，不修改登录文件','children':[]})
@@ -1911,7 +1955,7 @@ def client_connection_entry(key):
         {'label':'选择管理令牌文件…','action':['choose-admin-token'],'children':[]}])
     children.append({'label':'恢复自动读取','action':['reset-client-connection',key],'children':[]})
     if os.path.isdir(root):children.append({'label':'在 Finder 中打开','symbol':'folder','action':['reveal-client-home',key],'children':[]})
-    return {'label':'OpenCodex' if proxy else 'ChatGPT / Codex 额度','detail':'已配置' if configured else '未配置','symbol':'network' if proxy else 'person.crop.circle','children':children}
+    return {'label':'OpenCodex' if proxy else 'ChatGPT 订阅','value':'已配置' if configured else '未配置','symbol':'network' if proxy else 'person.crop.circle','children':children}
 
 
 def connection_options():
@@ -1928,26 +1972,42 @@ def connection_options():
                 locations=source_locations(key)
                 if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
                 if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
-            groups['本机 Harness'].append({'label':label,'detail':'已配置' if configured else '未配置','symbol':'folder','children':children})
-    groups['订阅套餐'].append(client_connection_entry('chatgpt'))
-    groups['其他'].append(client_connection_entry('opencodex'))
-    for key,label,group in [('deepseek','DeepSeek API','API'),('grok','Grok API','API'),('minimax','MiniMax 套餐','订阅套餐'),('komari','Komari 监控','其他')]:
-        status='已配置' if connection_ready(key) else '未配置'
-        children=[{'label':'设置面板地址…' if key=='komari' else '选择密钥文件…','action':['configure-connection',key],'children':[]}]
-        if key=='deepseek' and connection_ready(key):children.insert(0,{'label':'来源 · 指定的密钥' if accounts.credential('DEEPSEEK_API_KEY') else '来源 · OpenCodex 官方连接','children':[]})
-        if connection_ready(key):
-            envkey={'deepseek':'DEEPSEEK_API_KEY','grok':'XAI_MANAGEMENT_API_KEY','minimax':'MINIMAX_API_KEY'}.get(key)
-            if key=='komari':children.insert(0,location_entry('面板地址',[KOMARI_BASE_URL]))
-            elif envkey and os.environ.get(envkey):children.insert(0,{'label':'密钥来源 · 进程环境变量','children':[]})
-            elif envkey and os.environ.get(envkey+'_FILE'):children.insert(0,location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE']))]))
-            elif key=='deepseek':children.insert(0,location_entry('配置文件',[CONFIG_FILE]))
-        children.append({'label':'恢复自动读取' if key=='deepseek' else '清除连接设置…','action':['clear-connection',key],'children':[]})
-        groups[group].append({'label':label,'detail':status,'symbol':'server.rack' if key=='komari' else 'key','children':children})
+            groups['本机 Harness'].append({'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children})
+    for service in catalog.SERVICES:
+        if service.key=='chatgpt':row=client_connection_entry('chatgpt')
+        else:row=service_connection_entry(service.key)
+        groups['订阅套餐' if service.category=='订阅' else 'API'].append(row)
+    groups['其他'].extend([client_connection_entry('opencodex'),service_connection_entry('komari')])
     rows=[]
     for label,entries in groups.items():
         rows.append({'label':label,'section':True,'children':[]});rows.extend(entries)
     rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]}])
     return rows
+
+
+def service_connection_entry(key):
+    service=catalog.BY_KEY.get(key);configured=connection_ready(key)
+    if key in catalog.MANUAL_SUBSCRIPTIONS:
+        children=[{'label':'尚未接入自动额度查询；通过官网查看','children':[]},
+                  {'label':'配置标记由你手动维护，不验证套餐状态','children':[]}]
+        if configured:children.append(location_entry('本机标记文件',[os.path.join(STATE_DIR,'preferences.json')]))
+        children.extend([{'label':'清除配置标记' if configured else '标记为已配置','action':['set-subscription',key,'false' if configured else 'true'],'children':[]},
+                         {'label':'打开订阅管理','symbol':'arrow.up.right','href':service.url,'children':[]}])
+    else:
+        children=[]
+        if key in catalog.PORTAL_APIS:children.append({'label':'仅识别 API 配置；余额与账单在官网查看','children':[]})
+        if key=='minimax-api':children.append({'label':'使用 API 平台密钥，与订阅套餐密钥分开','children':[]})
+        if configured:
+            envkey=next((name for name in catalog.credential_names(key) if accounts.credential(name)),None)
+            if key=='komari':children.append(location_entry('面板地址',[KOMARI_BASE_URL]))
+            elif envkey and os.environ.get(envkey):children.append({'label':'密钥来源 · 进程环境变量 '+envkey,'children':[]})
+            elif envkey and os.environ.get(envkey+'_FILE'):children.append(location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE']))]))
+            elif key=='deepseek':children.extend([{'label':'来源 · OpenCodex 官方连接','children':[]},location_entry('配置文件',[CONFIG_FILE])])
+        children.append({'label':'设置面板地址…' if key=='komari' else '选择密钥文件…','action':['configure-connection',key],'children':[]})
+        children.append({'label':'恢复自动读取' if key=='deepseek' else '清除连接设置…','action':['clear-connection',key],'children':[]})
+        if service:children.append({'label':'打开订阅管理' if service.category=='订阅' else '打开用量与账单','symbol':'arrow.up.right','href':service.url,'children':[]})
+    return {'label':service.label if service else 'Komari 监控','value':'已配置' if configured else '未配置',
+            'symbol':'server.rack' if key=='komari' else 'person.crop.circle' if service.category=='订阅' else 'key','children':children}
 
 
 def apply_client_connection(values,module=None):
@@ -1972,7 +2032,7 @@ def configure_client_action(name,extra):
     if name=='reset-client-connection':
         values={'OCX_CHATGPT_HOME':''} if key=='chatgpt' else {'OCX_HOME':'','OCX_BASE_URL':'','OCX_TOKEN_FILE':''}
     elif name=='choose-client-home':
-        message='选择包含 auth.json 的 Codex 配置目录' if key=='chatgpt' else '选择 OpenCodex 配置目录；自动读取其中的运行端口和管理令牌'
+        message='选择包含 auth.json 的 ChatGPT 编程客户端配置目录' if key=='chatgpt' else '选择 OpenCodex 配置目录；自动读取其中的运行端口和管理令牌'
         result=applescript('POSIX path of (choose folder with prompt '+as_literal(message)+')')
         if result.returncode:return
         root=os.path.abspath(os.path.expanduser(result.stdout.strip()))
@@ -1980,7 +2040,7 @@ def configure_client_action(name,extra):
         if key=='chatgpt':
             auth=discovery.read_object(os.path.join(root,'auth.json'));tokens=auth.get('tokens') if isinstance(auth.get('tokens'),dict) else {}
             if auth.get('auth_mode') not in ('chatgpt','chatgptAuthTokens') and not tokens.get('access_token'):
-                applescript('display alert "未找到 ChatGPT 登录" message "请选择已通过 ChatGPT 账户登录的 Codex 配置目录。仅 API Key 登录不能读取订阅额度。"');return
+                applescript('display alert "未找到 ChatGPT 登录" message "请选择已通过 ChatGPT 账户登录的 ChatGPT 编程客户端配置目录。仅 API Key 登录不能读取订阅额度。"');return
             values={'OCX_CHATGPT_HOME':root}
         else:
             if not any(os.path.isfile(os.path.join(root,n)) for n in ('runtime-port.json','admin-api-token','config.json')):
@@ -2002,6 +2062,7 @@ def configure_client_action(name,extra):
         if not os.path.isfile(filename):return
         values={'OCX_TOKEN_FILE':filename}
     else:raise ValueError('invalid connection action')
+    if key=='chatgpt' and name=='choose-client-home':preferences.update(STATE_DIR,'chatgpt-source','client')
     apply_client_connection(values,None if name=='reset-client-connection' else 'chatgpt' if key=='chatgpt' else 'opencodex')
 
 
@@ -2010,6 +2071,8 @@ def configure_connection(key,clear=False):
     names={'komari':['KOMARI_BASE_URL'], 'deepseek':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
            'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
            'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
+    for api in catalog.PORTAL_APIS:
+        names[api]=[name+suffix for name in catalog.credential_names(api) for suffix in ('','_FILE')]
     if key not in names:raise ValueError('invalid connection')
     values={name:'' for name in names[key]}
     def text_input(message,default=''):
@@ -2071,7 +2134,7 @@ def module_menu_lines():
             if entry.get('separator'):rows.append('-'*(2*level+3))
             elif entry.get('section'):rows.append(item(entry['label'],level=level,color=MUTED,size=10))
             elif entry.get('children'):
-                rows.append(item(entry['label'],level=level));append(entry['children'],level+1)
+                rows.append(item(entry['label']+(' · '+entry['value'] if entry.get('value') else ''),level=level));append(entry['children'],level+1)
             elif entry.get('action'):rows.append(item(entry['label'],level=level,checked=entry.get('checked',False),**act(*entry['action'])))
             else:rows.append(item(entry['label'],level=level,size=11))
     append(module_options(),1)
@@ -2080,11 +2143,11 @@ def module_menu_lines():
 
 def provider_account_lines(key,data):
     payload=data.get(key) or {};is_grok=key=='grok'
-    label='Grok API 余额' if is_grok else 'MiniMax 套餐额度'
+    label=catalog.BY_KEY[key].label
     windows=[w for w in payload.get('windows',[]) if not w.get('resetsAt') or w['resetsAt']>time.time()]
     if is_grok and 'balance' in payload:badge='$%.2f'%payload['balance']
     elif windows:badge='%g%% 可用'%min(w['remaining'] for w in windows)
-    else:badge='待配置' if '未配置' in payload.get('state','') else payload.get('state','正在读取')
+    else:badge='未配置' if '未配置' in payload.get('state','') else payload.get('state','正在读取')
     if payload.get('windows') and not windows:badge='待刷新'
     if payload.get('_stale'):badge+=' · 上次'
     rows=[item(label,badge=badge,sfimage='creditcard' if is_grok else 'chart.pie')]
@@ -2559,16 +2622,15 @@ def native_menu_line(line):
 
 def resource_panel_entries(data):
     entries=panel_entries(management_lines(data))
-    mapping={'ChatGPT 额度':'chatgpt','Grok API 余额':'grok','MiniMax 套餐额度':'minimax','Komari 监控':'komari','应用更新':'updates'}
+    services={service.label:service for service in catalog.SERVICES}
     groups={label:[] for label in ('订阅','API','其他')};footer=[]
     for entry in entries:
         if entry.get('separator'):continue
-        source=next((source for prefix,source in mapping.items() if entry['label'].startswith(prefix)),None)
-        if source and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
-        label=entry['label']
+        label=entry['label'];service=services.get(label)
+        source=service.key if service else 'komari' if label.startswith('Komari 监控') else 'updates' if label=='应用更新' else None
+        if source in RESOURCE_CACHES and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
         if label in ('刷新数据','SwiftBar 管理'):footer.append(entry);continue
-        group='订阅' if label.startswith(('Codex 可用','ChatGPT 额度','MiniMax 套餐额度')) else 'API' if label.startswith(('DeepSeek 余额','Grok API 余额')) else '其他'
-        groups[group].append(entry)
+        groups[service.category if service else '其他'].append(entry)
     result=[]
     for label,items in groups.items():
         if items:result.append({'label':label,'section':True,'children':[]});result.extend(items)
@@ -2712,6 +2774,12 @@ def run_action(name, extra):
         if name=='set-module' and len(extra)==2 and extra[1]=='true' and extra[0] in RESOURCE_CACHES:
             invalidate_caches([RESOURCE_CACHES[extra[0]]])
         schedule_background_refresh()
+    elif name == 'set-chatgpt-source':
+        if len(extra)!=1:raise ValueError('invalid subscription source')
+        preferences.update(STATE_DIR,'chatgpt-source',extra[0]);invalidate_caches(['chatgpt','quota','accounts','active']);schedule_background_refresh()
+    elif name == 'set-subscription':
+        if len(extra)!=2:raise ValueError('invalid subscription')
+        preferences.update(STATE_DIR,'subscription',extra[0],extra[1])
     elif name == 'set-collapse':
         if len(extra)!=1:raise ValueError('invalid display action')
         preferences.update(STATE_DIR,'collapse',extra[0])
@@ -2771,15 +2839,15 @@ def run_action(name, extra):
             cli_action(["restart"], "代理已重新启动")
     elif name == "stop":
         if confirm("停止 opencodex 代理？",
-                   "代理会停止，并同时把 Codex 还原为原生配置。\n需要时点「启动代理」可以重新开启。"):
+                   "代理会停止，并同时把 ChatGPT 编程客户端还原为原生配置。\n需要时点「启动代理」可以重新开启。"):
             cli_action(["stop"], "代理已停止")
     elif name == "start":
         notify("正在启动 opencodex…")
         error = ocx(["ensure"]) or ocx(["start"])
         notify("启动失败：" + error if error else "代理已启动")
     elif name == "sync":
-        notify("正在同步模型到 Codex…")
-        api_action("/api/sync", "POST", {}, "模型已同步到 Codex")
+        notify("正在同步模型到 ChatGPT…")
+        api_action("/api/sync", "POST", {}, "模型已同步到 ChatGPT")
     elif name == "repair":
         if confirm("修复自启动服务？", "会重新注册后台服务，可能需要输入管理员密码。"):
             cli_action(["service", "repair"], "自启动服务已修复")

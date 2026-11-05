@@ -7,7 +7,7 @@
 # export OCX_HOME="$HOME/.opencodex"
 # export OCX_TOKEN_FILE="$HOME/.opencodex/admin-api-token"
 # export CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
-# export OCX_CHATGPT_HOME="$HOME/.codex"  # Subscription login source; does not change Codex local usage.
+# export OCX_CHATGPT_HOME="$HOME/.codex"  # Subscription login source; does not change ChatGPT local usage.
 # export CODEX_USAGE_DIR="$HOME/.codex"
 # export OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
 # export DSH_SESSIONS_DIR="/path/to/your/harness/session-logs"
@@ -19,3 +19,11 @@
 # export XAI_TEAM_ID="your-team-id"  # Management key with billing read permission.
 # export MINIMAX_API_KEY_FILE="$HOME/.config/minimax/subscription-key"
 # export MINIMAX_REGION="international"  # Or "china".
+
+# API portal modules: identify configuration only; no automatic balance queries yet.
+# Membership keys and API platform keys are independent.
+# export OPENAI_API_KEY_FILE="$HOME/.config/openai/api-key"
+# export ANTHROPIC_API_KEY_FILE="$HOME/.config/anthropic/api-key"
+# export MINIMAX_PLATFORM_API_KEY_FILE="$HOME/.config/minimax/platform-key"
+# export GEMINI_API_KEY_FILE="$HOME/.config/gemini/api-key"  # GOOGLE_API_KEY(_FILE) is also recognized.
+# export MOONSHOT_API_KEY_FILE="$HOME/.config/moonshot/api-key"

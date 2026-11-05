@@ -5,8 +5,10 @@
 ## 已确认的产品约定
 
 - 主页按 Harness、订阅、API、其他分组，Summary 置顶；隐藏模块不留下空分组。“连接与数据”按本机 Harness、API、订阅套餐、其他分段，不额外增加一级菜单。
-- ChatGPT / Codex 和 OpenCodex 连接可修改；只更改插件的目录/地址/文件引用，客户端原文件保持只读。
+- ChatGPT 和 OpenCodex 连接可修改；只更改插件的目录/地址/文件引用，客户端原文件保持只读。
 - 主页模块管理使用 280pt 紧凑列表，外观/目录设置放底部侧栏，勾选必须清晰可见。
+- 订阅固定为 ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi；API 为 ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi。独立 Codex 显示名称统一为 ChatGPT，但真实命令、路径、数据 ID、模型名称和 OpenCodex 名称保持兼容。
+- API 配置不能作为订阅证明；未接入查询的模块显示官网查看，手动标记明确声明未验证。禁止推算/伪造额度。
 - 保持 360pt 主页；Summary 与范围筛选器对齐。
 - 范围筛选使用点击展开的原生下拉框；其他分栏悬停在旁边展开。
 - Summary 概览不可选中，不显示悬停提示，不铺深色高亮。客户端标题可点击展开；仅使用轻微悬停反馈。

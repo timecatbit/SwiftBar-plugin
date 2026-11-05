@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import swiftbar_accounts as accounts
+import swiftbar_catalog as catalog
 import swiftbar_preferences as preferences
 from swiftbar_config import monitor_url
 
@@ -23,9 +24,9 @@ def has_records(root, patterns=('*.jsonl',)):
     except OSError:return False
 
 
-def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=(), chatgpt_home=None):
+def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=(), chatgpt_home=None, configured_subscriptions=()):
     home=Path(home or Path.home());found={'summary','updates'}
-    if configured_proxy:found.update(('opencodex','codex-quota'))
+    if configured_proxy:found.update(('opencodex','chatgpt'))
     for source,binary in (('claude','claude'),('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
         if which(binary):found.add(source)
     if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
@@ -58,6 +59,9 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
     if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
     if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
+    for key in catalog.PORTAL_APIS:
+        if any(accounts.credential(name) for name in catalog.credential_names(key)):found.add(key)
+    found.update(k for k in configured_subscriptions if k in catalog.MANUAL_SUBSCRIPTIONS)
     if monitor_url(komari_url):found.add('komari')
     return [key for key,label,group in preferences.MODULES if key in found]
 

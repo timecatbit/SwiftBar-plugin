@@ -21,18 +21,25 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Summary | 汇总当前显示的用量来源；共用趋势图显示总量及各来源 |
 | OpenCodex | 本机或自定义管理接口的 Token、请求、费用、模型分布；附代理管理 |
 | Claude Code | 本机 JSONL 中的用量字段；兼容第三方模型，未知价格显示未计价 |
-| Codex 本机用量 | Codex 会话与归档会话的用量事件；不会把缓存或 reasoning 再加一次 |
+| ChatGPT 本机用量 | Codex 会话与归档会话的用量事件；不会把缓存或 reasoning 再加一次 |
 | OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用 |
 | DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志 |
 | WorkBuddy | 当前与旧版 `projects` JSONL；按响应 ID 去重，缓存与 reasoning 不重复计数，Credit 不视作美元 |
 | Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token |
 | DeepSeek API 余额 | 官方 `/user/balance`；可独立配置 API key 文件，也可复用 OpenCodex 已配置的官方 DeepSeek 凭据 |
-| ChatGPT / Codex 额度 | 官方 Codex App Server 返回的 ChatGPT 登录账户额度；不是网页聊天次数或订阅账单 |
-| OpenCodex 账户额度 | OpenCodex 管理的 Codex 账户可用量 |
+| ChatGPT 订阅 | 本机 ChatGPT 登录的编程工具额度，或 OpenCodex 管理的 ChatGPT 账户额度；支持选择来源，不代表网页聊天全部限额 |
+| Claude / Gemini / Grok / Kimi 订阅 | 独立模块、手动配置标记与官网入口；尚未接入自动额度查询，不读取浏览器登录 |
 | Grok API 余额 | xAI 官方 Management API 的团队预付余额，需管理密钥和 Team ID；不是 SuperGrok 订阅额度 |
-| MiniMax 套餐额度 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
+| MiniMax 订阅 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
+| ChatGPT / Claude / MiniMax / Gemini / Kimi API | 识别已有 API 密钥配置或引用用户选择的密钥文件；本版仅提供官网账单入口，未接入余额自动查询 |
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
 | 应用更新 | OpenCodex 稳定版自动更新；Claude、ChatGPT、Claude Code 只提示 |
+
+订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块目录、主页和连接设置共用同一分类。
+
+“已配置”旁为绿色实心圆点，“未配置”旁为灰色空心圆点，文字始终保留。圆点只说明存在配置引用或用户保存的手动标记，不代表已验证凭据或付费状态。尚未接入查询的模块显示“官网查看”，不显示伪造的零余额；未设置则显示“未配置”。订阅手动标记保存在本机偏好文件，不复制登录信息。API 官网入口模块不会发送密钥请求。MiniMax API 使用独立的 `MINIMAX_PLATFORM_API_KEY_FILE`，不复用订阅的 `MINIMAX_API_KEY_FILE`。
+
+升级会把原来的 OpenCodex 账户额度迁入 ChatGPT 订阅，并继续使用原有代理来源，不改变已选择的主页模块。界面统一使用 ChatGPT 名称；`codex` 命令、`~/.codex` 路径、内部数据 ID 与模型原名保持兼容。OpenCodex 是独立产品名称。
 
 首次安装自动检测常见客户端命令、WorkBuddy 应用、记录目录和已配置 API 凭据，勾选找到的模块。升级保留已有选择，不会重新打开手动关闭的模块；悬停右键“自动检测”可在旁边查看说明，也可从“外观与设置 → 自动检测”进入。点击“开始检测…”后先扫描，再列出将启用和取消的模块，并提醒会覆盖当前模块选择；默认按钮是“取消”，只有点击“覆盖当前选项”才按检测结果替换勾选。取消保持原设置。未安装、未配置、日志格式不支持或无权限时会显示状态，不会当成零用量。
 
@@ -79,7 +86,7 @@ SwiftBar 插件目录/
 常用设置在 **右键星星 → 主页模块 → 连接与数据**，按 **本机 Harness、API、订阅套餐、其他** 分组，不增加菜单层级，也不需要修改脚本。每项明确显示“已配置”或“未配置”；自动读取或手动指定是配置来源，不代替状态，已配置也不等于网络验证成功：
 
 - 本机客户端自动读取标准记录目录；已配置项在下一级显示实际读取目录，可在 Finder 中打开、手动选择或恢复自动查找。API 只显示配置/密钥文件路径，不显示密钥内容。
-- ChatGPT / Codex 额度支持选择含 `auth.json` 的配置目录、恢复自动读取及在 Finder 中打开；默认使用 `CODEX_HOME` 或 `~/.codex`。只改变插件读取位置，不修改客户端登录文件，也不影响 Codex 本机用量目录。
+- ChatGPT 订阅支持自动、本机登录和 OpenCodex 账户三种来源选择；支持选择含 `auth.json` 的配置目录、恢复自动读取及在 Finder 中打开；默认使用 `CODEX_HOME` 或 `~/.codex`。只改变插件读取位置，不修改客户端登录文件，也不影响 ChatGPT 本机用量目录。
 - OpenCodex 位于“其他”：可选择配置目录、修改管理地址、选择管理令牌文件及恢复自动读取。选择配置目录时改为读取该目录内的端口和令牌，不保留上一个目录的连接覆盖。
 - DeepSeek 优先使用明确指定的密钥文件，否则读取 OpenCodex 的官方 DeepSeek 连接。
 - Komari 必须明确提供实际面板地址；空值、注释和示例地址不算配置，不会自动启用。
@@ -99,11 +106,11 @@ SwiftBar 插件目录/
 
 `config.local.sh` 是唯一的插件用户配置。注释只作说明，不是已启用的设置。安装器不会再自动复制仓库中的私有配置；旧运行目录配置仅在用户配置不存在时迁移一次，已存在的用户配置（即使只有注释）始终优先，旧文件备份后移出。首次安装需要显式导入时可传 `--config /path/to/config.local.sh`；已有用户配置时拒绝覆盖。
 
-Claude Code、Codex、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“连接与数据”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
+Claude Code、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“连接与数据”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
 
-自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 Codex 登录状态。不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效，实际状态在打开模块时查询。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
+自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 ChatGPT 编程客户端登录状态；也保留已手动配置的订阅入口。不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效；已接入自动查询的模块在打开时检查，官网入口模块不发请求。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
 
 ## 后台开销
 
@@ -114,7 +121,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 ## 统计口径与隐私
 
 - 费用是已知价格的 API 等值估算，或客户端记录的费用，不是订阅账单。没有价格的数据会保留 Token 并标记未计价。
-- 同时显示 OpenCodex 和 Codex 本机用量时，OpenCodex 有可用数据则作为 Summary 的统计来源；Codex 保留独立明细，避免同一调用跨代理和客户端重复相加。关闭 OpenCodex 后，Codex 会计入 Summary。
+- 同时显示 OpenCodex 和 ChatGPT 本机用量时，OpenCodex 有可用数据则作为 Summary 的统计来源；ChatGPT 保留独立明细，避免同一调用跨代理和客户端重复相加。关闭 OpenCodex 后，ChatGPT 会计入 Summary。
 - 其他客户端会排除明确标记为 `opencodex`/`ocx` 的代理记录。自定义路由名及跨工具导入的历史可能仍重叠，使用共享代理时应选择合适的统计来源。
 - 按系统时区统计，可通过 `OCX_TIMEZONE` 覆盖。周从周一开始；近 24 小时为滚动窗口，近 7/30 天含当天。
 - 本机日志只索引用量元数据，不保存对话正文；数据库只读，增量索引和设置仅当前用户可读。余额和订阅额度不加入费用汇总。

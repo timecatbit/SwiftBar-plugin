@@ -4,38 +4,44 @@ import os
 import tempfile
 import time
 from pathlib import Path
+import swiftbar_catalog as catalog
 
 MODULES = (
     ('summary', 'Summary', '概览'),
     ('opencodex', 'OpenCodex', 'Harness'),
     ('claude', 'Claude Code', 'Harness'),
-    ('codex', 'Codex 本机用量', 'Harness'),
+    ('codex', 'ChatGPT 本机用量', 'Harness'),
     ('opencode', 'OpenCode', 'Harness'),
     ('deepseek-harness', 'DeepSeek Harness', 'Harness'),
     ('workbuddy', 'WorkBuddy', 'Harness'),
     ('gemini', 'Gemini CLI', 'Harness'),
-    ('chatgpt', 'ChatGPT / Codex 额度', '订阅'),
-    ('codex-quota', 'OpenCodex 账户额度', '订阅'),
-    ('minimax', 'MiniMax 套餐额度', '订阅'),
-    ('deepseek', 'DeepSeek API 余额', 'API'),
-    ('grok', 'Grok API 余额', 'API'),
+) + tuple((s.key, s.label, s.category) for s in catalog.SERVICES) + (
     ('komari', 'Komari 监控', '其他'),
     ('updates', '应用更新', '其他'),
 )
-DEFAULT_VISIBLE = ['summary', 'opencodex', 'claude', 'deepseek', 'codex-quota', 'komari', 'updates']
+DEFAULT_VISIBLE = ['summary', 'opencodex', 'claude', 'deepseek', 'chatgpt', 'komari', 'updates']
 KNOWN = {row[0] for row in MODULES}
 USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbuddy', 'gemini')
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'chatgptSource': 'auto', 'configuredSubscriptions': []}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
             return defaults
         visible = value.get('visible')
         if isinstance(visible, list) and all(isinstance(v, str) for v in visible):
-            defaults['visible'] = list(dict.fromkeys(v for v in visible if v in KNOWN))
+            defaults['visible'] = list(dict.fromkeys('chatgpt' if v == 'codex-quota' else v for v in visible if v in KNOWN or v == 'codex-quota'))
+            if 'codex-quota' in visible and 'chatgpt' not in visible:
+                defaults['chatgptSource'] = 'proxy'
+            elif 'chatgpt' in visible and 'codex-quota' not in visible:
+                defaults['chatgptSource'] = 'client'
+        if value.get('chatgptSource') in ('auto', 'client', 'proxy'):
+            defaults['chatgptSource'] = value['chatgptSource']
+        subscriptions = value.get('configuredSubscriptions')
+        if isinstance(subscriptions, list):
+            defaults['configuredSubscriptions'] = [k for k in catalog.MANUAL_SUBSCRIPTIONS if k in subscriptions]
         if value.get('appearance') in ('glass', 'solid'):
             defaults['appearance'] = value['appearance']
         if isinstance(value.get('allowCollapse'),bool):defaults['allowCollapse']=value['allowCollapse']
@@ -71,11 +77,20 @@ def write(directory, value):
 def update(directory, kind, key=None, value=None):
     current = read(directory)
     if kind == 'module':
+        if key == 'codex-quota': key = 'chatgpt'  # Existing queued callbacks remain valid.
         if key not in KNOWN or value not in ('true', 'false'):
             raise ValueError('invalid module preference')
         visible = set(current['visible'])
         visible.add(key) if value == 'true' else visible.discard(key)
         current['visible'] = [m[0] for m in MODULES if m[0] in visible]
+    elif kind == 'chatgpt-source':
+        if key not in ('auto', 'client', 'proxy'): raise ValueError('invalid subscription source')
+        current['chatgptSource'] = key
+    elif kind == 'subscription':
+        if key not in catalog.MANUAL_SUBSCRIPTIONS or value not in ('true', 'false'): raise ValueError('invalid subscription')
+        chosen = set(current['configuredSubscriptions'])
+        chosen.add(key) if value == 'true' else chosen.discard(key)
+        current['configuredSubscriptions'] = [k for k in catalog.MANUAL_SUBSCRIPTIONS if k in chosen]
     elif kind == 'appearance':
         if key not in ('glass', 'solid'):
             raise ValueError('invalid appearance')

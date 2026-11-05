@@ -37,7 +37,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_proxy_and_komari_are_optional_and_third_party_key_not_reused(self):
         self.put('.opencodex/config.json',json.dumps({'providers':{'deepseek':{'baseUrl':'https://proxy.example','apiKey':'PRIVATE'}}}))
         found=self.detect(configured_proxy=True,komari_url='https://monitor.example.test')
-        self.assertIn('opencodex',found);self.assertIn('codex-quota',found);self.assertIn('komari',found);self.assertNotIn('deepseek',found)
+        self.assertIn('opencodex',found);self.assertIn('chatgpt',found);self.assertIn('komari',found);self.assertNotIn('deepseek',found)
         self.put('.opencodex/config.json',json.dumps({'providers':{'deepseek':{'baseUrl':'https://api.deepseek.com','apiKey':'PRIVATE'}}}))
         self.assertIn('deepseek',self.detect())
     def test_chatgpt_login_is_not_inferred_from_inference_api_key(self):

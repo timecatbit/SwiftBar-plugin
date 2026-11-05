@@ -5,10 +5,12 @@ import re
 import shlex
 import tempfile
 from urllib.parse import urlsplit
+import swiftbar_catalog as catalog
 
 KEYS = {'OCX_HOME', 'OCX_BASE_URL', 'OCX_TOKEN_FILE', 'OCX_CHATGPT_HOME', 'KOMARI_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY_FILE',
         'XAI_MANAGEMENT_API_KEY', 'XAI_MANAGEMENT_API_KEY_FILE', 'XAI_TEAM_ID',
         'MINIMAX_API_KEY', 'MINIMAX_API_KEY_FILE', 'MINIMAX_REGION'}
+KEYS.update(name + suffix for key in catalog.API_KEYS for name in catalog.credential_names(key) for suffix in ('', '_FILE'))
 HEADER = '''# 本机高级设置：仅本用户可读，不随插件上传或覆盖。
 # 常用设置请用「主页模块 → 连接与数据」；本机客户端默认自动读取。
 # 注释是说明，不代表已配置。无需填写即可使用已发现的本机客户端。

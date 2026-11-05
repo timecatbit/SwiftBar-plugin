@@ -104,11 +104,11 @@ class PowerTests(unittest.TestCase):
         with patch.object(self.m,'detected_modules',return_value=['claude']),patch.object(self.m,'connection_ready',return_value=False),patch.object(self.m,'chatgpt_configured',return_value=False):
             rows=self.m.connection_options()
         for row in rows:
-            if row.get('detail'):self.assertIn(row['detail'],('已配置','未配置'))
+            if row.get('value'):self.assertIn(row['value'],('已配置','未配置'))
         by_name={r['label']:r for r in rows}
-        self.assertEqual(by_name['Claude Code']['detail'],'已配置')
-        self.assertEqual(by_name['Komari 监控']['detail'],'未配置')
-        self.assertEqual(by_name['DeepSeek API']['detail'],'未配置')
+        self.assertEqual(by_name['Claude Code']['value'],'已配置')
+        self.assertEqual(by_name['Komari 监控']['value'],'未配置')
+        self.assertEqual(by_name['DeepSeek API']['value'],'未配置')
     def test_deepseek_requires_actual_key_and_official_connection(self):
         self.m.CONFIG_FILE=str(Path(self.temp.name)/'proxy-config.json')
         for provider,expected in [({},False),({'baseUrl':'https://api.deepseek.com','apiKey':'example-key'},True),({'baseUrl':'https://third-party.invalid','apiKey':'example-key'},False)]:
@@ -121,7 +121,7 @@ class PowerTests(unittest.TestCase):
         self.m.preferences.update(self.m.STATE_DIR,'path','claude',str(folder))
         with patch.object(self.m,'detected_modules',return_value=[]):
             row=next(r for r in self.m.connection_options() if r['label']=='Claude Code')
-        self.assertEqual(row['detail'],'已配置')
+        self.assertEqual(row['value'],'已配置')
         self.assertTrue(any(c.get('detail')==str(folder.resolve()) for c in row['children']))
         self.assertTrue(any(c.get('action')==['reveal-source','claude'] for c in row['children']))
     def test_workbuddy_locations_show_actual_project_roots_not_home(self):
@@ -141,11 +141,11 @@ class PowerTests(unittest.TestCase):
         groups={};current=None
         for row in rows:
             if row.get('section'):current=row['label'];groups[current]=[]
-            elif row.get('detail'):groups[current].append(row['label'])
+            elif row.get('value'):groups[current].append(row['label'])
         self.assertEqual(list(groups),['本机 Harness','API','订阅套餐','其他'])
         self.assertIn('Claude Code',groups['本机 Harness'])
-        self.assertEqual(groups['API'],['DeepSeek API','Grok API'])
-        self.assertEqual(groups['订阅套餐'],['ChatGPT / Codex 额度','MiniMax 套餐'])
+        self.assertEqual(groups['API'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
+        self.assertEqual(groups['订阅套餐'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
         self.assertEqual(groups['其他'],['OpenCodex','Komari 监控'])
     def test_home_resource_groups_omit_empty_sections(self):
         for key in self.m.preferences.KNOWN:self.m.preferences.update(self.m.STATE_DIR,'module',key,'false')
@@ -157,12 +157,12 @@ class PowerTests(unittest.TestCase):
             if row.get('section'):current=row['label'];groups[current]=[]
             elif not row.get('separator') and row['label'] not in ('刷新数据','SwiftBar 管理'):groups[current].append(row['label'])
         self.assertEqual(list(groups),['订阅','API','其他'])
-        self.assertIn('ChatGPT 额度',groups['订阅']);self.assertIn('MiniMax 套餐额度',groups['订阅'])
-        self.assertIn('DeepSeek 余额',groups['API']);self.assertIn('Grok API 余额',groups['API'])
+        self.assertIn('ChatGPT 订阅',groups['订阅']);self.assertIn('MiniMax 订阅',groups['订阅'])
+        self.assertIn('DeepSeek API',groups['API']);self.assertIn('Grok API',groups['API'])
         self.assertTrue(any(x.startswith('Komari') for x in groups['其他']))
     def test_client_configuration_actions_are_visible_and_whitelisted(self):
         choices=self.m.connection_options()
-        for label,action in [('ChatGPT / Codex 额度',['choose-client-home','chatgpt']),('OpenCodex',['set-proxy-address'])]:
+        for label,action in [('ChatGPT 订阅',['choose-client-home','chatgpt']),('OpenCodex',['set-proxy-address'])]:
             row=next(r for r in choices if r['label']==label)
             self.assertIn(action,[c.get('action') for c in row['children']])
             self.write('panel-view',{'moduleOptions':[row]})

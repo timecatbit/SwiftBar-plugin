@@ -46,9 +46,10 @@ class UpdateTests(unittest.TestCase):
   self.assertFalse(next(r for r in rows if r['id']=='claude')['available'])
  def test_home_balances_are_visible_and_not_nested_under_management(self):
   data={'healthz':{'version':'2.97.0'},'provider_quotas':{'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥229.61'}]}}]},'accounts':{'accounts':[{'id':'a','logLabel':'main'}]},'quota':{'quotas':{'a':{'weeklyPercent':76}}}}
-  with patch.object(self.m,'deepseek_logo_image',return_value=None):
+  with patch.object(self.m,'deepseek_logo_image',return_value=None),patch.object(self.m,'chatgpt_source',return_value='proxy'):
    entries=self.m.panel_entries(self.m.management_lines(data))
-  self.assertIn('229.61',entries[0]['value']);self.assertIn('main 24%',entries[1]['value'])
+  by_name={e['label']:e for e in entries}
+  self.assertIn('229.61',by_name['DeepSeek API']['value']);self.assertIn('main 24%',by_name['ChatGPT 订阅']['value'])
   management=next(e for e in entries if e['label']=='OpenCodex 管理')
   self.assertFalse(any('DeepSeek' in e['label'] for e in management['children']))
 if __name__=='__main__':unittest.main()
