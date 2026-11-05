@@ -1,0 +1,100 @@
+import test_claude as fixture
+import unittest
+from datetime import datetime,timedelta
+from unittest.mock import patch
+import json,time
+class RangeTests(unittest.TestCase):
+ setUp=fixture.ClaudeTests.setUp
+ row=fixture.ClaudeTests.row
+ write=fixture.ClaudeTests.write
+ stats=fixture.ClaudeTests.stats
+ def test_today_default_and_precise_rolling_window(self):
+  self.assertEqual(self.m.selected_range(),'today')
+  start,end=self.m.range_bounds('24h',self.now)
+  self.assertEqual(end-start,86400)
+  self.assertEqual(datetime.fromtimestamp(start,self.now.tzinfo).hour,12)
+  start,end=self.m.range_bounds('today',self.now)
+  self.assertEqual(datetime.fromtimestamp(start,self.now.tzinfo).hour,0)
+ def test_calendar_week_month_and_day_counts(self):
+  for key,expected in [('week','2026-11-02'),('month','2026-11-01'),('7d','2026-10-29'),('30d','2026-10-06')]:
+   self.assertEqual(datetime.fromtimestamp(self.m.range_bounds(key,self.now)[0],self.now.tzinfo).date().isoformat(),expected)
+  self.assertEqual(self.m.range_bounds('all',self.now)[0],0)
+ def test_historical_index_keeps_records_outside_seven_days(self):
+  self.write('a.jsonl',[self.row('old','2026-09-01T01:00:00Z'),self.row('month','2026-11-01T01:00:00Z'),self.row('today')])
+  self.assertEqual(self.stats()['summary']['requests'],1)
+  all_data=self.m.claude_usage_live(self.root,self.db,self.now,'all')[0]
+  self.assertEqual(all_data['summary']['requests'],3)
+  self.assertEqual(self.m.claude_usage_live(self.root,self.db,self.now,'month')[0]['summary']['requests'],2)
+  self.assertEqual(self.m.claude_usage_live(self.root,self.db,self.now,'all')[0]['summary']['requests'],3)
+ def test_rolling_window_edges_are_inclusive_and_hour_buckets_add_up(self):
+  self.write('a.jsonl',[self.row('before','2026-11-03T03:59:59Z'),self.row('start','2026-11-03T04:00:00Z'),self.row('end','2026-11-04T04:00:00Z'),self.row('after','2026-11-04T04:00:01Z')])
+  p=self.m.claude_usage_live(self.root,self.db,self.now,'24h')[0]
+  self.assertEqual(p['summary']['requests'],2)
+  self.assertEqual(sum(h['totalTokens'] for h in p['hours']),p['summary']['totalTokens'])
+ def test_old_range_is_not_relabelled_after_selection_changes(self):
+  self.m.write_json_cache(self.m.cache_path('view-range'),{'schema':1,'range':'30d'})
+  d=self.m.dashboard_payload({'range_usage':{'range':'today','claude':{'summary':{'requests':100,'totalTokens':1000}}}})
+  self.assertEqual(d['rangeKey'],'30d');self.assertEqual(d['chartStatus'],'正在读取')
+  self.assertTrue(all(not p['available'] for p in d['providers']))
+ def test_invalid_selection_is_rejected(self):
+  with self.assertRaises(ValueError):self.m.run_action('set-range',['../../bad'])
+ def test_range_selector_actions_are_whitelisted(self):
+  self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'entries':[],'rangeOptions':self.m.range_options()})
+  self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':'range','action':['set-range','month'],'createdAt':time.time()})
+  with patch.object(self.m,'schedule_background_refresh'):self.m.consume_panel_action()
+  self.assertEqual(self.m.selected_range(),'month')
+  self.assertEqual(self.m.read_cache('panel-action-receipt')['status'],'done')
+
+ def test_single_calendar_day_is_not_duplicated_in_chart(self):
+  monday=datetime(2026,11,2,12,tzinfo=self.now.tzinfo)
+  start,end=self.m.range_bounds('week',monday)
+  self.m.write_json_cache(self.m.cache_path('view-range'),{'schema':1,'range':'week'})
+  sample={'summary':{'totalTokens':100,'requests':1},'days':[{'date':'2026-11-02','totalTokens':100}]}
+  with patch.object(self.m,'usage_now',return_value=monday):
+   d=self.m.dashboard_payload({'range_usage':{'range':'week','start':start,'end':end,'opencodex':sample,'claude':sample}})
+  self.assertEqual(d['providers'][0]['history'],[100]);self.assertEqual(len(d['dates']),1)
+
+ def test_all_history_trims_empty_backend_calendar_prefix(self):
+  self.m.write_json_cache(self.m.cache_path('view-range'),{'schema':1,'range':'all'})
+  data={'summary':{'totalTokens':100,'requests':1},'days':[{'date':'2025-11-04','requests':0,'totalTokens':0},{'date':'2026-09-08','requests':1,'totalTokens':100}]}
+  with patch.object(self.m,'usage_now',return_value=self.now):
+   d=self.m.dashboard_payload({'range_usage':{'range':'all','start':0,'end':self.now.timestamp(),'opencodex':data,'claude':data}})
+  self.assertEqual(d['chartSpan'],'09/08–11/04');self.assertEqual(d['chartStatus'],'')
+  self.assertEqual(sum(d['providers'][0]['history']),100)
+
+ def test_today_chart_crops_inactive_prefix_but_preserves_totals(self):
+  start,end=self.m.range_bounds('today',self.now)
+  # First Claude use at 09:12; OpenCodex starts at 10:00.
+  first=start+9*3600+12*60
+  oc={'summary':{'requests':2,'totalTokens':200},'firstActivityAt':start+10*3600,
+      'hours':[{'timestamp':start+10*3600,'totalTokens':150},{'timestamp':start+11*3600,'totalTokens':50}]}
+  cc={'summary':{'requests':1,'totalTokens':100},'firstActivityAt':first,
+      'hours':[{'timestamp':start+9*3600,'totalTokens':100}]}
+  with patch.object(self.m,'usage_now',return_value=self.now):
+   d=self.m.dashboard_payload({'range_usage':{'range':'today','start':start,'end':end,'opencodex':oc,'claude':cc}})
+  self.assertNotEqual(d['dates'][0],'00:00');self.assertLess(d['chartPositions'][1],0.1)
+  for provider in d['providers']:
+   self.assertEqual(provider['history'][:2],[0,0]);self.assertEqual(sum(provider['history']),provider['tokens'])
+   self.assertEqual(len(provider['history']),len(d['dates']))
+  self.assertTrue(all(a<b for a,b in zip(d['chartPositions'],d['chartPositions'][1:])))
+
+ def test_today_no_activity_has_no_fabricated_spike(self):
+  with patch.object(self.m,'usage_now',return_value=self.now):
+   d=self.m.dashboard_payload({'range_usage':{'range':'today','opencodex':{'summary':{'requests':0,'totalTokens':0}}}})
+  self.assertIsNone(d['chartPositions']);self.assertTrue(all(v==0 for p in d['providers'] for v in p['history']))
+
+ def test_midnight_activity_retains_zero_lead_in(self):
+  now=self.now.replace(hour=0,minute=0,second=30);start,end=self.m.range_bounds('today',now)
+  sample={'summary':{'requests':1,'totalTokens':100},'firstActivityAt':start,
+          'hours':[{'timestamp':start,'totalTokens':100}]}
+  with patch.object(self.m,'usage_now',return_value=now):
+   d=self.m.dashboard_payload({'range_usage':{'range':'today','start':start,'end':end,'claude':sample}})
+  self.assertEqual(d['providers'][1]['history'],[0,0,100]);self.assertEqual(d['chartPositions'],[0,0.04,1.0])
+
+ def test_rolling_24h_chart_keeps_full_window(self):
+  self.m.write_json_cache(self.m.cache_path('view-range'),{'schema':1,'range':'24h'})
+  start,end=self.m.range_bounds('24h',self.now)
+  sample={'summary':{'requests':1,'totalTokens':100},'hours':[{'timestamp':int(end//3600)*3600,'totalTokens':100}]}
+  with patch.object(self.m,'usage_now',return_value=self.now):
+   d=self.m.dashboard_payload({'range_usage':{'range':'24h','start':start,'end':end,'claude':sample}})
+  self.assertIsNone(d['chartPositions']);self.assertEqual(len(d['dates']),25)

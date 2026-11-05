@@ -1,0 +1,65 @@
+import json,os,tempfile,time,types,unittest
+from pathlib import Path
+from unittest.mock import patch
+SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+class PanelTests(unittest.TestCase):
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+  env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OCX_PLUGIN_PATH':str(SOURCE.resolve()),'OCX_CACHE_DIR':self.temp.name});env.start();self.addCleanup(env.stop)
+  self.m=types.ModuleType('panel_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'entries':[{'label':'刷新数据','action':['refresh'],'children':[]},{'label':'账户','children':[{'label':'main','action':['account-use','main'],'children':[]}]}]})
+ def request(self,action,age=0):
+  self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':'test-request','action':action,'createdAt':time.time()-age})
+ def receipt(self):return json.loads(Path(self.m.cache_path('panel-action-receipt')).read_text())
+ def test_click_is_consumed_exactly_once(self):
+  self.request(['refresh'])
+  with patch.object(self.m,'run_action') as run:
+   self.m.consume_panel_action();self.m.consume_panel_action();run.assert_called_once_with('refresh',[])
+  self.assertEqual(self.receipt()['status'],'done');self.assertFalse(Path(self.m.cache_path('panel-action')).exists())
+ def test_only_visible_menu_actions_can_run(self):
+  self.request(['copy-token'])
+  with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_not_called()
+  self.assertEqual(self.receipt()['status'],'rejected')
+ def test_expired_action_cannot_run(self):
+  self.request(['refresh'],age=120)
+  with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_not_called()
+  self.assertEqual(self.receipt()['status'],'rejected')
+ def test_nested_action_retains_arguments(self):
+  self.request(['account-use','main'])
+  with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_called_once_with('account-use',['main'])
+ def test_offline_snapshot_replaces_old_dashboard(self):
+  self.m.PANEL_APP=str(Path(self.temp.name)/'Panel.app');Path(self.m.PANEL_APP).mkdir()
+  output=self.m.render({'healthz':None,'healthz_error':(0,'unreachable',None)})
+  snapshot=self.m.read_cache('panel-view')
+  self.assertFalse(snapshot['dashboard']['providers'][0]['available'])
+  self.assertTrue(any('未连接' in entry['label'] for entry in snapshot['entries']))
+  self.assertIn('param3=panel',output)
+  self.assertNotIn('SwiftBar 管理',output)
+  self.assertTrue(any(e['label']=='SwiftBar 管理' for e in snapshot['entries']))
+ def test_menu_hierarchy_and_callback_spaces(self):
+  lines=['账户管理 | sfimage=person.crop.circle','--切换 main | bash=/bin/bash param1="/tmp/path with spaces/plugin.sh" param2=--action param3=account-use param4="account one"','---','服务器监控 · 1/1 在线 | sfimage=server.rack','--● node  在线 · 长期 | href=https://example.test tooltip="在线 · CPU 1% · 内存 20%"']
+  nodes=self.m.panel_entries(lines)
+  self.assertEqual(nodes[0]['children'][0]['action'],['account-use','account one'])
+  self.assertTrue(nodes[1]['separator']);self.assertEqual(nodes[2]['symbol'],'server.rack')
+  self.assertEqual(nodes[2]['children'][0]['label'],'● node');self.assertIn('CPU 1%',nodes[2]['children'][0]['detail'])
+ def test_management_actions_belong_to_the_correct_application(self):
+  data={'healthz':{'version':'test'},'accounts':{'accounts':[{'id':'account-a','logLabel':'main'}]}}
+  with patch.object(self.m,'deepseek_logo_image',return_value=None):
+   entries=self.m.panel_entries(self.m.management_lines(data))
+  by_name={e['label']:e for e in entries if not e.get('separator')}
+  self.assertEqual(list(by_name),['DeepSeek 余额','Codex 可用','OpenCodex 管理','Komari 监控 · 暂无服务器','应用更新','刷新数据','SwiftBar 管理'])
+  oc_actions=[e['action'][0] for e in by_name['OpenCodex 管理']['children'] if e.get('action')]
+  sb_actions=[e['action'][0] for e in by_name['SwiftBar 管理']['children'] if e.get('action')]
+  self.assertIn('account-use',oc_actions);self.assertIn('stop',oc_actions)
+  self.assertEqual(sb_actions,['swiftbar-folder'])
+  self.assertTrue(any('右键星星' in e['label'] and not e.get('action') for e in by_name['SwiftBar 管理']['children']))
+  self.assertFalse(any(e.get('children') for e in by_name['OpenCodex 管理']['children']))
+ def test_action_failure_reports_failure_without_crashing_plugin(self):
+  self.request(['refresh'])
+  with patch.object(self.m,'run_action',side_effect=RuntimeError('failed')):
+   self.m.consume_panel_action()
+  self.assertEqual(self.receipt()['status'],'failed')
+  self.assertEqual(self.receipt()['reason'],'action-failed')
+  self.assertFalse(Path(self.m.cache_path('panel-action')).exists())
+if __name__=='__main__':unittest.main(verbosity=2)
