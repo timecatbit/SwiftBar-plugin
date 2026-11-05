@@ -2,9 +2,9 @@ name: OpenCodex plugin checks
 
 on:
   push:
-    paths: ['opencodex.30s.sh', 'panel/**', 'scripts/**', 'tests/**', 'assets/**', 'config.example.sh', '.github/workflows/opencodex.yml']
+    paths: ['opencodex/**', '.github/workflows/opencodex.yml']
   pull_request:
-    paths: ['opencodex.30s.sh', 'panel/**', 'scripts/**', 'tests/**', 'assets/**', 'config.example.sh', '.github/workflows/opencodex.yml']
+    paths: ['opencodex/**', '.github/workflows/opencodex.yml']
   workflow_dispatch:
 
 permissions:
@@ -19,6 +19,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Syntax and regression tests
-        run: python3 scripts/check.py
+        run: python3 opencodex/scripts/check.py
       - name: Compile and verify native helper
-        run: python3 scripts/build.py
+        run: python3 opencodex/scripts/build.py

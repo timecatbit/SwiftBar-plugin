@@ -1,6 +1,6 @@
 # 维护约定
 
-本仓库是 OpenCodex SwiftBar Token 插件的唯一维护源，仓库根目录直接维护插件源码与工具。
+本目录是 OpenCodex SwiftBar Token 插件的唯一维护源。源码、配置、构建和测试工具均在仓库的 `opencodex/` 子目录维护；以下命令在本目录执行。
 
 ## 已确认的产品约定
 
