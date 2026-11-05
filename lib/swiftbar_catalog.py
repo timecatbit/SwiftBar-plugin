@@ -22,7 +22,7 @@ class Service(NamedTuple):
 
 SERVICES = (
     Service('chatgpt', 'ChatGPT', '订阅', 'https://chatgpt.com', capability='client'),
-    Service('claude-subscription', 'Claude', '订阅', 'https://claude.ai/settings/usage'),
+    Service('claude-subscription', 'Claude', '订阅', 'https://claude.ai/settings/usage', capability='desktop-usage'),
     Service('minimax', 'MiniMax', '订阅', 'https://platform.minimax.io/user-center/payment/token-plan', 'MINIMAX_API_KEY', 'quota'),
     Service('gemini-subscription', 'Gemini', '订阅', 'https://gemini.google.com'),
     Service('grok-subscription', 'Grok', '订阅', 'https://grok.com'),

@@ -106,7 +106,7 @@ class PowerTests(unittest.TestCase):
         for row in rows:
             if row.get('value'):self.assertIn(row['value'],('已配置','未配置'))
         by_name={r['label']:r for r in rows}
-        self.assertEqual(by_name['Claude Code']['value'],'已配置')
+        self.assertEqual(by_name['Claude']['value'],'已配置')
         self.assertEqual(by_name['Komari 监控']['value'],'未配置')
         self.assertEqual(by_name['DeepSeek API']['value'],'未配置')
     def test_deepseek_requires_actual_key_and_official_connection(self):
@@ -120,9 +120,9 @@ class PowerTests(unittest.TestCase):
         folder=Path(self.temp.name)/'custom projects';folder.mkdir()
         self.m.preferences.update(self.m.STATE_DIR,'path','claude',str(folder))
         with patch.object(self.m,'detected_modules',return_value=[]):
-            row=next(r for r in self.m.module_options() if r['label']=='Claude Code')
+            row=next(r for r in self.m.module_options() if r['label']=='Claude')
         self.assertEqual(row['value'],'已配置')
-        self.assertTrue(any(c.get('detail')==str(folder.resolve()) for c in row['children']))
+        self.assertTrue(any(str(folder.resolve()) in c.get('detail','') for c in row['children']))
         self.assertTrue(any(c.get('action')==['reveal-source','claude'] for c in row['children']))
     def test_workbuddy_locations_show_actual_project_roots_not_home(self):
         root=Path(self.temp.name);expected=[str(root/n/'projects') for n in ('.workbuddy-ai','.workbuddy')]
@@ -143,7 +143,7 @@ class PowerTests(unittest.TestCase):
             if row.get('section'):current=row['label'];groups[current]=[]
             elif (row.get('action') or [''])[0]=='set-module':groups[current].append(row['label'])
         self.assertEqual(list(groups),['概览','Harness Token 用量','订阅用量','API 余额','其他'])
-        self.assertIn('Claude Code',groups['Harness Token 用量']);self.assertIn('OpenCodex',groups['Harness Token 用量'])
+        self.assertIn('Claude',groups['Harness Token 用量']);self.assertIn('OpenCodex',groups['Harness Token 用量'])
         self.assertEqual(groups['API 余额'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
         self.assertEqual(groups['订阅用量'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
         self.assertEqual(groups['其他'],['Komari 监控','应用更新'])

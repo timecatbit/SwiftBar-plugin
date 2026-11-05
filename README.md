@@ -3,10 +3,10 @@
 SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.5.5**。
 
 <p align="center">
-  <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude Code 用量、账户余额和更新提示">
+  <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
 </p>
 
-实际运行截图，Summary 选择「全部」，使用实色外观；也支持系统玻璃外观。费用为 API 等值估算，不代表订阅账单。
+实际运行截图，Summary 选择「全部」，客户端明细折叠，使用实色外观；也支持系统玻璃外观。费用为 API 等值估算，不代表订阅账单。
 
 ## 主页与模块
 
@@ -20,7 +20,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | --- | --- |
 | Summary | 汇总当前显示的用量来源；共用趋势图显示总量及各来源 |
 | OpenCodex | 本机或自定义管理接口的 Token、请求、费用、模型分布；附代理管理 |
-| Claude Code | 本机 JSONL 中的用量字段；兼容第三方模型，未知价格显示未计价 |
+| Claude | Claude 桌面 App 登记的可读取会话用量；排除未登记的独立 CLI 会话，未知价格显示未计价 |
 | ChatGPT 本机用量 | Codex 会话与归档会话的用量事件；不会把缓存或 reasoning 再加一次 |
 | OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用 |
 | DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志 |
@@ -28,12 +28,13 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token |
 | DeepSeek API 余额 | 官方 `/user/balance`；可独立配置 API key 文件，也可复用 OpenCodex 已配置的官方 DeepSeek 凭据 |
 | ChatGPT 订阅 | 本机 ChatGPT 登录的编程工具额度，或 OpenCodex 管理的 ChatGPT 账户额度；支持选择来源，不代表网页聊天全部限额 |
-| Claude / Gemini / Grok / Kimi 订阅 | 独立模块、手动配置标记与官网入口；尚未接入自动额度查询，不读取浏览器登录 |
+| Claude 订阅 | 默认读取 App 本机快照并标记过期；明确授权后使用 App 现有登录查询官方用量，显示周期、模型限额及重置时间 |
+| Gemini / Grok / Kimi 订阅 | 独立模块、手动配置标记与官网入口；尚未接入自动额度查询，不读取浏览器登录 |
 | Grok API 余额 | xAI 官方 Management API 的团队预付余额，需管理密钥和 Team ID；不是 SuperGrok 订阅额度 |
 | MiniMax 订阅 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
 | ChatGPT / Claude / MiniMax / Gemini / Kimi API | 识别已有 API 密钥配置或引用用户选择的密钥文件；本版仅提供官网账单入口，未接入余额自动查询 |
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
-| 应用更新 | 跟随已勾选的 Harness；已配置 OpenCodex 时也检查 ChatGPT。OpenCodex 自动更新，其他应用仅提醒或提供官网入口 |
+| 应用更新 | 跟随已勾选的 Harness；OpenCodex 联动 ChatGPT 与 Codex CLI，Claude 联动 Claude Code。OpenCodex 自动更新，其他应用提示并提供更新入口 |
 
 订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块选择与连接设置合并在同一列表，分类与主页一致。
 
@@ -51,7 +52,7 @@ macOS 26+ 使用原生 `NSGlassEffectView` 的 regular 玻璃材质；旧系统�
 
 ## 安装与更新
 
-需要 macOS 13+、SwiftBar、Python 3.9+ 和 Xcode Command Line Tools。OpenCodex、Claude Code 等是可选数据源，不是所有模块的共同依赖。macOS 26 上需使用含标题点击修复的 SwiftBar（已验证 2.1.2 build 623）。
+需要 macOS 13+、SwiftBar、Python 3.9+ 和 Xcode Command Line Tools。OpenCodex、Claude App 等是可选数据源，不是所有模块的共同依赖。macOS 26 上需使用含标题点击修复的 SwiftBar（已验证 2.1.2 build 623）。
 
 ```sh
 git clone https://github.com/timecatbit/swiftbar-token-monitor.git
@@ -108,11 +109,11 @@ SwiftBar 插件目录/
 
 `config.local.sh` 是唯一的插件用户配置。注释只作说明，不是已启用的设置。安装器不会再自动复制仓库中的私有配置；旧运行目录配置仅在用户配置不存在时迁移一次，已存在的用户配置（即使只有注释）始终优先，旧文件备份后移出。首次安装需要显式导入时可传 `--config /path/to/config.local.sh`；已有用户配置时拒绝覆盖。
 
-Claude Code、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“主页模块”中悬停对应客户端后选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
+Claude App、ChatGPT 编程客户端、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“主页模块”中悬停对应客户端后选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
 
-自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 ChatGPT 编程客户端登录状态；也保留已手动配置的订阅入口。不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效；已接入自动查询的模块在打开时检查，官网入口模块不发请求。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
+自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 ChatGPT 编程客户端登录状态；也保留已手动配置的订阅入口。自动检测本身不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效；已接入自动查询的模块在打开时检查，官网入口模块不发请求。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
 
 ## 后台开销
 
@@ -128,7 +129,10 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 按系统时区统计，可通过 `OCX_TIMEZONE` 覆盖。周从周一开始；近 24 小时为滚动窗口，近 7/30 天含当天。
 - 本机日志只索引用量元数据，不保存对话正文；数据库只读，增量索引和设置仅当前用户可读。余额和订阅额度不加入费用汇总。
 - ChatGPT 额度通过客户端已有的 ChatGPT 登录查询，不自动登录、不调用模型；API-key-only 登录不能提供该订阅额度。此模块不声称覆盖 ChatGPT 网页所有聊天限额。
-- 应用更新跟随 Harness 分组的勾选：OpenCodex 对应自动更新，Claude Code 用量模块对应 **Claude 桌面 App** 的更新检查，ChatGPT 本机用量对应 ChatGPT 桌面客户端。Claude 不再检查命令行版本；未安装桌面 App 时明确显示未安装。另有一项联动：已配置 OpenCodex 时，无论其主页模块是否勾选，都会把 ChatGPT 纳入更新检查；不改变主页勾选。没有 OpenCodex 配置时只按 Harness 勾选，订阅/API 勾选不触发应用更新。移出检查范围的应用立即移除其更新条目和数量。
+- 应用更新跟随 Harness 勾选：**Claude → Claude 桌面 App + Claude Code**，**ChatGPT → ChatGPT 桌面客户端 + Codex CLI**，**OpenCodex → OpenCodex + ChatGPT + Codex CLI**。已配置 OpenCodex 时，即使其模块隐藏，也联动检查 ChatGPT 和 Codex CLI；不改变主页勾选，重复来源只检查一次。订阅/API 勾选不触发应用更新，移出范围立即移除条目和更新数量。
+- Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update` 和 `codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。其他桌面客户端仍只提示和打开官方入口。
+- Claude Harness 默认读取 `~/Library/Application Support/Claude` 的会话登记，再读取对应的共享用量记录；只统计 App 登记的可读取会话，并不声称覆盖所有 Chat/Cowork 调用。旧版指定的 CLI 日志目录不会被误用为 App 目录。
+- Claude 订阅默认不读取钥匙串。通过其模块设置或订阅侧栏的“启用实时用量…”确认后，才从本机 Claude Safe Storage 与 App Cookie 文件读取会话，固定向 `https://claude.ai/api/organizations/{组织}/usage` 发出只读请求；不调用模型、不购买额度。凭据仅在内存中使用，缓存只存解析后的用量，关闭后停止读取并废弃实时缓存。此为桌面 App 使用的内部接口，服务端变更或登录过期可能导致读取失败；届时明确显示状态并提供官方入口。没有得到可验证的额度余额字段时，不推算余额。
 - DeepSeek 余额刷新期间保留主页金额，不追加“上次”；刷新进度、成功更新时间与失败状态放在余额侧栏。失败时明确说明正在保留最近余额。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 

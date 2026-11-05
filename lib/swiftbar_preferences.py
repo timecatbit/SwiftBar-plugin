@@ -9,7 +9,7 @@ import swiftbar_catalog as catalog
 MODULES = (
     ('summary', 'Summary', '概览'),
     ('opencodex', 'OpenCodex', 'Harness'),
-    ('claude', 'Claude Code', 'Harness'),
+    ('claude', 'Claude', 'Harness'),
     ('codex', 'ChatGPT 本机用量', 'Harness'),
     ('opencode', 'OpenCode', 'Harness'),
     ('deepseek-harness', 'DeepSeek Harness', 'Harness'),
@@ -25,7 +25,7 @@ USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbu
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'chatgptSource': 'auto', 'configuredSubscriptions': []}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'chatgptSource': 'auto', 'configuredSubscriptions': [], 'claudeLiveUsage': False}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
@@ -45,6 +45,7 @@ def read(directory):
         if value.get('appearance') in ('glass', 'solid'):
             defaults['appearance'] = value['appearance']
         if isinstance(value.get('allowCollapse'),bool):defaults['allowCollapse']=value['allowCollapse']
+        if isinstance(value.get('claudeLiveUsage'),bool):defaults['claudeLiveUsage']=value['claudeLiveUsage']
         expanded=value.get('expandedProviders')
         if isinstance(expanded,list):
             defaults['expandedProviders']=[k for k in USAGE if k in expanded]
@@ -54,7 +55,7 @@ def read(directory):
         if isinstance(revision,int) and 0<=revision<2**63:defaults['revision']=revision
         paths = value.get('paths')
         if isinstance(paths, dict):
-            defaults['paths'] = {k: v for k, v in paths.items() if k in USAGE and isinstance(v, str) and v}
+            defaults['paths'] = {k: v for k, v in paths.items() if k in (*USAGE,'claude-app') and isinstance(v, str) and v}
     except (OSError, ValueError, TypeError):
         pass
     return defaults
@@ -83,6 +84,9 @@ def update(directory, kind, key=None, value=None):
         visible = set(current['visible'])
         visible.add(key) if value == 'true' else visible.discard(key)
         current['visible'] = [m[0] for m in MODULES if m[0] in visible]
+    elif kind == 'claude-live':
+        if key not in ('true','false'):raise ValueError('invalid Claude live usage setting')
+        current['claudeLiveUsage']=key=='true'
     elif kind == 'chatgpt-source':
         if key not in ('auto', 'client', 'proxy'): raise ValueError('invalid subscription source')
         current['chatgptSource'] = key
@@ -109,11 +113,11 @@ def update(directory, kind, key=None, value=None):
         current['allowCollapse']=True;current['expandedProviders']=[]
     elif kind == 'auto-path':
         if key not in USAGE:raise ValueError('invalid data source')
-        current['paths'].pop(key,None)
+        current['paths'].pop('claude-app' if key=='claude' else key,None)
     elif kind == 'path':
         if key not in USAGE or not value or not Path(value).expanduser().exists():
             raise ValueError('invalid data directory')
-        current['paths'][key] = str(Path(value).expanduser().resolve())
+        current['paths']['claude-app' if key=='claude' else key] = str(Path(value).expanduser().resolve())
     else:
         raise ValueError('invalid preference action')
     write(directory, current)

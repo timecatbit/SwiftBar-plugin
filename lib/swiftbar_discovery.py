@@ -6,6 +6,7 @@ import shutil
 import swiftbar_accounts as accounts
 import swiftbar_catalog as catalog
 import swiftbar_preferences as preferences
+import swiftbar_claude as claude_desktop
 from swiftbar_config import monitor_url
 
 
@@ -27,11 +28,14 @@ def has_records(root, patterns=('*.jsonl',)):
 def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil.which, app_roots=(), chatgpt_home=None, configured_subscriptions=()):
     home=Path(home or Path.home());found={'summary','updates'}
     if configured_proxy:found.update(('opencodex','chatgpt'))
-    for source,binary in (('claude','claude'),('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
+    for source,binary in (('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
         if which(binary):found.add(source)
     if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
-    for source in ('claude','codex'):
-        root=Path(paths.get(source) or home/('.claude/projects' if source=='claude' else '.codex'))
+    claude_root=Path(paths.get('claude') or claude_desktop.default_root(home))
+    if any((Path(root)/'Claude.app').is_dir() for root in app_roots) or claude_desktop.registry_files(claude_root):found.add('claude')
+    if claude_desktop.subscription(claude_root).get('windows'):found.add('claude-subscription')
+    for source in ('codex',):
+        root=Path(paths.get(source) or home/'.codex')
         folders=[root]
         if source=='codex':folders=[root/'sessions',root/'archived_sessions'] if any((root/k).is_dir() for k in ('sessions','archived_sessions')) else [root]
         if any(has_records(folder) for folder in folders):found.add(source)

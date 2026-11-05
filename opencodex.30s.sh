@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.5.5</xbar.version>
+# <xbar.version>5.6.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -42,7 +42,7 @@ opencodex 的 SwiftBar 插件。
   1. 无参数运行      输出菜单（首行是菜单栏标题，之后是下拉菜单）
   2. --action <名称> 执行一个操作（重启、停止、同步、切换账号……）
 
-OpenCodex 数据走本机管理接口；Claude Code 仅索引本地日志中的用量字段。
+OpenCodex 数据走本机管理接口；Claude 只索引桌面 App 登记会话的本机用量。
 OpenCodex 鉴权用 ~/.opencodex/admin-api-token。
 需要权限提升的动作（重启 / 重装服务）交给 ocx 命令行处理。
 """
@@ -112,6 +112,8 @@ import swiftbar_sources as sources
 import swiftbar_accounts as accounts
 import swiftbar_discovery as discovery
 import swiftbar_config as connections
+import swiftbar_claude as claude_desktop
+import swiftbar_claude_live as claude_live
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
@@ -124,11 +126,11 @@ def module_enabled(key):
     return key in view_settings()['visible']
 
 def source_path(key):
-    custom = view_settings()['paths'].get(key)
+    custom = view_settings()['paths'].get('claude-app' if key=='claude' else key)
     codex_home = os.path.expanduser(os.environ.get('CODEX_HOME') or os.path.join(HOME, '.codex'))
     defaults = {
         'opencodex': OCX_HOME,
-        'claude': os.environ.get('CLAUDE_PROJECTS_DIR') or os.path.join(os.path.expanduser(os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(HOME, '.claude')), 'projects'),
+        'claude': os.environ.get('CLAUDE_APP_DATA_DIR') or str(claude_desktop.default_root(HOME)),
         'codex': os.environ.get('CODEX_USAGE_DIR') or codex_home,
         'opencode': os.environ.get('OPENCODE_DATA_DIR') or os.path.join(os.path.expanduser(os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')), 'opencode'),
         'deepseek-harness': os.environ.get('DSH_SESSIONS_DIR') or '',
@@ -160,7 +162,7 @@ CACHE_SCOPE = hashlib.sha256(os.path.abspath(STATE_DIR).encode()).hexdigest()[:1
 CACHE_DIR = os.path.join(os.environ.get("OCX_CACHE_DIR") or tempfile.gettempdir(),
                          "opencodex-swiftbar-v5-%s-%s" % (os.getuid(), CACHE_SCOPE))
 UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
-EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300}
+EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "claude_subscription":60}
 
 
 def chatgpt_home():
@@ -180,6 +182,7 @@ def chatgpt_source():
 
 
 def connection_ready(key):
+    if key=='claude-subscription':return bool(claude_desktop.subscription(source_path('claude')).get('windows')) or (view_settings()['claudeLiveUsage'] and os.path.isfile(os.path.join(source_path('claude'),'Cookies')))
     if key in catalog.MANUAL_SUBSCRIPTIONS:return key in view_settings()['configuredSubscriptions']
     if key in catalog.PORTAL_APIS:return any(accounts.credential(name) for name in catalog.credential_names(key))
     if key=='chatgpt':return ocx_configured() if chatgpt_source()=='proxy' else chatgpt_configured()
@@ -213,13 +216,26 @@ def refresh_ttl(base):
     return max(base,300 if power.get('battery') else 180)
 
 
-CONNECTION_KEYS={'app_updates':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
 
 def connection_fingerprint(name):
     parts=[]
-    if name=='app_updates':parts.extend(selected_update_ids());parts.append(module_enabled('updates'))
+    if name=='app_updates':
+        selected=selected_update_ids();parts.extend(selected);parts.append(module_enabled('updates'))
+        for key,command in (('claude-code','claude'),('codex-cli','codex')):
+            if key not in selected:continue
+            binary=shutil.which(command);parts.append(binary)
+            try:
+                stat=os.stat(binary);parts.extend([os.path.realpath(binary),stat.st_ino,stat.st_mtime_ns,stat.st_size])
+            except (OSError,TypeError):parts.append('unavailable')
+    if name=='claude_subscription':
+        parts.extend([source_path('claude'),view_settings()['claudeLiveUsage']])
+        for filename in ('plan-usage-history.json','config.json'):
+            try:
+                stat=os.stat(os.path.join(source_path('claude'),filename));parts.extend([stat.st_mtime_ns,stat.st_size])
+            except OSError:parts.append('unavailable')
     for key in CONNECTION_KEYS.get(name,[]):
         parts.append(os.environ.get(key,''))
         if key.endswith('_FILE') and os.environ.get(key):
@@ -907,6 +923,13 @@ def claude_price(model, metrics, speed='standard', geo='global', tier='standard'
 
 
 def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
+    root=root or source_path('claude')
+    paths,ids=claude_desktop.transcript_files(root,HOME)
+    if not paths:return {'error':'Claude App 暂无可读取用量'},None
+    return claude_usage_records(root,db_path,now,range_key,paths,ids)
+
+
+def claude_usage_records(root, db_path=None, now=None, range_key="today", files=None, allowed_sessions=None):
     import sqlite3
     from pathlib import Path
     from zoneinfo import ZoneInfo
@@ -915,8 +938,8 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
     zone = now.tzinfo
     window_start,window_end=range_bounds(range_key,now)
     root = Path(root or source_path('claude'))
-    if not root.is_dir(): return None,(0,'未找到 Claude Code 用量记录',None)
-    db_path = db_path or os.path.join(CACHE_DIR,'claude-usage-v3-'+hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:12]+'.sqlite3')
+    if not root.is_dir(): return None,(0,'未找到 Claude App 用量记录',None)
+    db_path = db_path or os.path.join(CACHE_DIR,'claude-app-usage-v1-'+hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:12]+'.sqlite3')
     os.makedirs(os.path.dirname(db_path),mode=0o700,exist_ok=True)
     conn=sqlite3.connect(db_path,timeout=10)
     os.chmod(db_path,0o600)
@@ -931,7 +954,7 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
           day=CASE WHEN excluded.ts<ts THEN excluded.day ELSE day END,ts=MIN(ts,excluded.ts),
           i=excluded.i,o=excluded.o,w5=excluded.w5,w1=excluded.w1,r=excluded.r
           WHERE excluded.o>=usage.o AND excluded.i+excluded.w5+excluded.w1+excluded.r>=usage.i+usage.w5+usage.w1+usage.r'''
-        for path in root.rglob('*.jsonl'):
+        for path in (files if files is not None else root.rglob('*.jsonl')):
             try: st=path.stat()
             except OSError: continue
             key=hashlib.sha256(str(path).encode()).hexdigest()
@@ -949,6 +972,7 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
                     try:
                         row=json.loads(line)
                         if row.get('type')!='assistant':continue
+                        if allowed_sessions is not None and row.get('sessionId') not in allowed_sessions:continue
                         msg=row.get('message') or {};u=msg.get('usage') or {};model=str(msg.get('model') or '')
                         if not u or not model or model in ('<synthetic>','synthetic') or not msg.get('id'):continue
                         ts=datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))
@@ -968,7 +992,11 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
         days={};hours={};models={};sessions=set();today=now.date().isoformat();unknown=0
         def empty():return dict(totalTokens=0,inputTokens=0,outputTokens=0,cacheReadInputTokens=0,requests=0,estimatedCostUsd=0,unpricedRequests=0)
         summary=empty();first_activity=None
-        for day,model,i,o,w5,w1,r,speed,geo,tier,session,stamp in conn.execute('SELECT day,model,i,o,w5,w1,r,speed,geo,tier,session,ts FROM usage WHERE ts>=? AND ts<=?',(window_start,window_end)):
+        query='SELECT day,model,i,o,w5,w1,r,speed,geo,tier,session,ts FROM usage WHERE ts>=? AND ts<=?';params=[window_start,window_end]
+        if allowed_sessions is not None:
+            hashes=[hashlib.sha256(s.encode()).hexdigest() for s in allowed_sessions]
+            query+=' AND session IN ('+','.join('?' for _ in hashes)+')';params.extend(hashes)
+        for day,model,i,o,w5,w1,r,speed,geo,tier,session,stamp in conn.execute(query,params):
             first_activity=stamp if first_activity is None else min(first_activity,stamp)
             day=datetime.fromtimestamp(stamp,zone).date().isoformat()
             cost=claude_price(model,(i,o,w5,w1,r),speed,geo,tier)
@@ -985,7 +1013,7 @@ def claude_usage_live(root=None, db_path=None, now=None, range_key="today"):
         return {'summary':summary,'models':[dict(value,model=model) for model,value in models.items()],
                 'days':[dict(value,date=day) for day,value in sorted(days.items())],
                 'hours':[dict(value,timestamp=stamp) for stamp,value in sorted(hours.items())],
-                'firstActivityAt':first_activity,'source':'Claude Code · 本机记录','pricingDate':'2026-11-04','day':today},None
+                'firstActivityAt':first_activity,'source':'Claude App · 已登记会话','pricingDate':'2026-11-04','day':today},None
     finally:conn.close()
 
 
@@ -996,10 +1024,11 @@ def claude_usage_cached():
 # Official feeds verified against the installed apps and Claude's installer.
 # Only public version metadata is fetched; no account credentials or real device IDs.
 UPDATE_LINKS = {'opencodex': RELEASES_URL, 'claude': 'https://claude.ai/download',
-                'chatgpt': 'https://chatgpt.com/download'}
-UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT'}
-# Harness selections control application updates, with one explicit exception:
-# a configured OpenCodex also checks ChatGPT. Subscription/API choices do not opt in.
+                'chatgpt': 'https://chatgpt.com/download', 'claude-code':'https://github.com/anthropics/claude-code/releases',
+                'codex-cli':'https://github.com/openai/codex/releases'}
+UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT', 'claude-code':'Claude Code', 'codex-cli':'Codex'}
+# Harness choices expand into related app/CLI checks. A configured OpenCodex
+# also includes ChatGPT and Codex without changing homepage selections.
 HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude', 'codex':'chatgpt',
                    'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'gemini':'gemini'}
 MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
@@ -1011,8 +1040,14 @@ UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
 
 def selected_update_ids():
     visible=set(view_settings()['visible'])
-    if ocx_configured():visible.add('codex')
-    return [HARNESS_UPDATES[key] for key in preferences.USAGE if key in visible]
+    if ocx_configured() or 'opencodex' in visible:visible.add('codex')
+    result=[]
+    for key in preferences.USAGE:
+        if key in visible:
+            result.append(HARNESS_UPDATES[key])
+            if key=='claude':result.append('claude-code')
+            if key=='codex':result.append('codex-cli')
+    return result
 
 def live_app_update_ids():
     return [key for key in selected_update_ids() if key!='opencodex' and key not in MANUAL_UPDATES]
@@ -1065,6 +1100,17 @@ def sparkle_release(body):
 def app_update_probe(key):
     row={'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'checkedAt':time.time()}
     try:
+        if key in ('claude-code','codex-cli'):
+            binary=shutil.which('claude' if key=='claude-code' else 'codex')
+            if not binary:row['status']='未安装';return row
+            run=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=4,check=True)
+            match=re.search(r'\b(\d+(?:\.\d+){1,4}(?:[-+][a-zA-Z0-9.-]+)?)\b',run.stdout)
+            row['current']=match[1] if match else ''
+            row['latest']=release_body('https://downloads.claude.ai/claude-code-releases/latest').decode().strip() if key=='claude-code' else json.loads(release_body('https://registry.npmjs.org/@openai/codex/latest'))['version']
+            if release_version(row['current']) is None or release_version(row['latest']) is None:raise ValueError('invalid version')
+            row['available']=newer_release(row['latest'],row['current'])
+            row['status']='有新版本' if row['available'] else '已是最新'
+            return row
         info=app_info('Claude' if key=='claude' else 'ChatGPT')
         if not info:row['status']='未安装';return row
         row['current']=info['CFBundleShortVersionString']
@@ -1272,11 +1318,14 @@ def app_update_lines(data):
         label=row['name']+' · '+row['status'].replace('自动更新已开启 · ','')
         detail='尚未接入自动版本检查' if row.get('manual') else (row.get('current') or '版本待确认')
         if row.get('available'):detail+=' → '+str(row.get('latest'))
-        lines.append(item(label,level=1,href=row['href'],paneldetail=detail))
+        if row.get('available') and row['id'] in ('claude-code','codex-cli'):
+            detail+='\n点击运行 '+('claude update' if row['id']=='claude-code' else 'codex update')
+            lines.append(item(label,level=1,paneldetail=detail,**act('update-cli',row['id'])))
+        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail))
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
     lines.append(item('选择 Harness…',level=1,sfimage='square.grid.2x2',**act('panel-modules')))
-    hint='按勾选检查 · OpenCodex 联动 ChatGPT' if ocx_configured() else '仅跟随主页模块中勾选的 Harness'
+    hint='按 Harness 勾选及客户端联动规则检查'
     lines.append(item(hint,level=1,color=MUTED,size=10))
     if any(r['id']=='opencodex' for r in rows):lines.append(item('OpenCodex 每小时自动检查并更新',level=1,color=MUTED,size=10))
     if any(not r.get('manual') and r['id']!='opencodex' for r in rows):lines.append(item('其他已接入应用每 6 小时检查 · 仅提醒',level=1,color=MUTED,size=10))
@@ -1289,6 +1338,7 @@ def resource_lines(data):
         key=service.key
         if not module_enabled(key):continue
         if key=='chatgpt':lines.extend(chatgpt_lines(data))
+        elif key=='claude-subscription':lines.extend(claude_subscription_lines(data))
         elif key=='deepseek':
             balance,value=deepseek_balance(data);logo=deepseek_logo_image()
             options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
@@ -1306,6 +1356,37 @@ def resource_lines(data):
         elif key in ('grok','minimax'):lines.extend(provider_account_lines(key,data))
         else:lines.extend(portal_service_lines(key))
     return lines+(['---'] if lines else [])
+
+
+def claude_subscription_load():
+    if view_settings()['claudeLiveUsage']:
+        return claude_live.live_subscription(source_path('claude'),consent=True)
+    return claude_desktop.subscription(source_path('claude')),None
+
+
+def claude_subscription_lines(data):
+    payload=data.get('claude_subscription') or claude_desktop.subscription(source_path('claude'))
+    windows=payload.get('windows') or []
+    live=payload.get('source')=='live';error=data.get('claude_subscription_error')
+    stale=payload.get('stale',True) or time.time()-payload.get('updatedAt',0)>(600 if live else 1800)
+    value=' · '.join(w['label']+' %g%%'%w['used'] for w in windows[:2]) if windows and not stale else payload.get('state','暂无本机用量快照')
+    if windows and stale:value='用量待更新' if live else '快照待更新'
+    if error:value='刷新失败' if windows else '暂不可用'
+    rows=[item('Claude 订阅',badge=value,sfimage='person.crop.circle'),
+          item('来源 · Claude 官方实时查询' if live else '来源 · Claude App 本机快照',level=1,color=MUTED,size=10)]
+    for w in windows:
+        reset=None
+        if w.get('resetsAt'):
+            try:reset='重置于 '+datetime.fromisoformat(w['resetsAt'].replace('Z','+00:00')).astimezone(local_zone()).strftime('%m/%d %H:%M')
+            except ValueError:pass
+        rows.append(item(w['label'],badge='%g%% 已用'%w['used'],paneldetail=reset,level=1))
+    if windows:rows.append(item('更新时间' if live else '快照时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
+    if error:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
+    if not live:rows.append(item('旧快照不代表当前用量' if stale else '本机快照不含重置时间及额度余额',level=1,color=MUTED,size=10))
+    if not view_settings()['claudeLiveUsage']:rows.append(item('启用实时用量…',level=1,sfimage='arrow.triangle.2.circlepath',**act('set-claude-live','true')))
+    rows.extend([item('打开 Claude',level=1,sfimage='macwindow',**act('open-claude')),
+                 item('打开订阅用量',level=1,sfimage='arrow.up.right',href=catalog.BY_KEY['claude-subscription'].url)])
+    return rows
 
 
 def portal_service_lines(key):
@@ -1387,7 +1468,7 @@ def range_usage_cached():
                     return ocx_range_usage(key,now) if ocx_configured() else {'error':'未配置 OpenCodex'}
                 if source=='claude':
                     value,error=claude_usage_live(range_key=key,now=now)
-                    return value or {'error':'未找到 Claude Code 记录'}
+                    return value or {'error':'未找到 Claude App 记录'}
                 root=source_path(source)
                 if not root:return {'error':'请选择记录目录'}
                 if source=='gemini':return sources.gemini_usage(root,CACHE_DIR,start,end,now.tzinfo,'opencodex' in enabled)
@@ -1408,6 +1489,7 @@ def external_loaders():
     if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates') and live_app_update_ids():loaders['app_updates']=app_updates_cached
+    if module_enabled('claude-subscription'):loaders['claude_subscription']=lambda:cached_fetch('claude_subscription',claude_subscription_load,60)
     if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ('grok','minimax'):
         if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
@@ -1415,7 +1497,7 @@ def external_loaders():
 
 
 # Only these visible resources can request an immediate read from a flyout.
-RESOURCE_CACHES={'deepseek':'provider_quotas','chatgpt':'chatgpt','grok':'grok','minimax':'minimax','komari':'komari','updates':'app_updates'}
+RESOURCE_CACHES={'deepseek':'provider_quotas','chatgpt':'chatgpt','grok':'grok','minimax':'minimax','komari':'komari','updates':'app_updates','claude-subscription':'claude_subscription'}
 
 def refresh_resource(source):
     if source not in RESOURCE_CACHES or not module_enabled(source):raise ValueError('invalid resource')
@@ -1889,7 +1971,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.5.5',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.6.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -1963,6 +2045,7 @@ def detection_menu_lines():
 def source_locations(key):
     """The actual collector roots, not merely the application installation path."""
     root=source_path(key)
+    if key=='claude':return [root,os.path.join(HOME,'.claude','projects')]
     if key=='workbuddy':
         roots=[os.path.join(root,n,'projects') for n in ('.workbuddy-ai','.workbuddy') if os.path.isdir(os.path.join(root,n,'projects'))]
         if roots:return roots
@@ -2008,7 +2091,7 @@ def module_connections():
     found=set((detected or {}).get('modules',[]));connections={}
     for key,label,_ in preferences.MODULES:
         if key in preferences.USAGE and key!='opencodex':
-            custom=bool(view_settings()['paths'].get(key))
+            custom=bool(view_settings()['paths'].get('claude-app' if key=='claude' else key))
             configured=key in found or bool(custom and os.path.exists(source_path(key)))
             children=[{'label':('来源 · 自定记录目录' if custom else '来源 · 自动读取本机客户端') if configured else '未发现客户端或用量记录','children':[]},{'label':'选择记录目录…','action':['choose-source',key],'children':[]},
                       {'label':'恢复自动查找','action':['auto-source',key],'children':[]}]
@@ -2017,6 +2100,12 @@ def module_connections():
                 if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
                 if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
             connections[key]={'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children}
+            if key=='claude':
+                children[0]['label']='来源 · Claude 桌面 App'
+                children.insert(1,{'label':'仅统计 App 登记的可读取会话','children':[]})
+                for child in children:
+                    if child.get('action')==['choose-source','claude']:child['label']='选择 Claude 数据目录…'
+                children.append({'label':'打开 Claude','symbol':'macwindow','action':['open-claude'],'children':[]})
     for service in catalog.SERVICES:
         if service.key=='chatgpt':row=client_connection_entry('chatgpt')
         else:row=service_connection_entry(service.key)
@@ -2028,6 +2117,15 @@ def module_connections():
 
 def service_connection_entry(key):
     service=catalog.BY_KEY.get(key);configured=connection_ready(key)
+    if key=='claude-subscription':
+        return {'label':service.label,'value':'已配置' if configured else '未配置','symbol':'person.crop.circle','children':[
+            {'label':'来源 · Claude App 登录' if view_settings()['claudeLiveUsage'] else '来源 · Claude App 本机用量快照','children':[]},
+            {'label':'关闭实时查询' if view_settings()['claudeLiveUsage'] else '启用实时用量…','action':['set-claude-live','false' if view_settings()['claudeLiveUsage'] else 'true'],'children':[]},
+            location_entry('快照文件',[os.path.join(source_path('claude'),'plan-usage-history.json')]),
+            {'label':'过期快照明确标记，不推算订阅额度','children':[]},
+            {'label':'选择 Claude 数据目录…','action':['choose-source','claude'],'children':[]},
+            {'label':'打开 Claude','action':['open-claude'],'children':[]},
+            {'label':'打开订阅用量','href':service.url,'children':[]}]}
     if key in catalog.MANUAL_SUBSCRIPTIONS:
         children=[{'label':'尚未接入自动额度查询；通过官网查看','children':[]},
                   {'label':'配置标记由你手动维护，不验证套餐状态','children':[]}]
@@ -2606,7 +2704,7 @@ def dashboard_payload(data):
                 'cost':cost,'tokens':total,'requests':requests,'output':number(summary.get('outputTokens')),
                 'cache':min(1,cache/inputs) if inputs else None,'coverage':number(summary.get('coverageRatio')) if summary.get('coverageRatio') is not None else None,
                 'sessions':int(number(summary.get('sessions'))),'unpriced':unpriced,'models':model_rows,'history':history}
-    providers=[provider(k,label,u,('v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')) if k=='opencodex' else ('本机记录 · 已排除代理重复项' if u.get('excludedProxyRequests') else '本机记录 · API 等值估算'),'运行正常' if k=='opencodex' and data.get('healthz') else '已同步') for k,label,u in selected]
+    providers=[provider(k,label,u,('v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')) if k=='opencodex' else ('Claude App · 可读取会话' if k=='claude' else '本机记录 · 已排除代理重复项' if u.get('excludedProxyRequests') else '本机记录 · API 等值估算'),'运行正常' if k=='opencodex' and data.get('healthz') else '已同步') for k,label,u in selected]
     # Codex local records and an active OpenCodex proxy can describe the same calls.
     # Keep both cards available, but use the proxy as the summary authority.
     proxy_available=any(p['id']=='opencodex' and p['available'] for p in providers)
@@ -2853,6 +2951,28 @@ def run_action(name, extra):
     elif name == 'open-settings':
         path=connections.ensure_file(STATE_DIR)
         subprocess.run(['/usr/bin/open','-t',str(path)],check=True,timeout=5)
+    elif name == 'open-claude':
+        if extra:raise ValueError('invalid app action')
+        subprocess.run(['/usr/bin/open','-a','Claude'],check=True,timeout=5)
+    elif name == 'set-claude-live':
+        value=extra[0] if len(extra)==1 else ''
+        if value not in ('true','false'):raise ValueError('invalid Claude usage preference')
+        if value=='true' and not view_settings()['claudeLiveUsage']:
+            detail='允许插件从本机钥匙串与 Claude App 的 Cookie 文件读取现有登录会话，用于定期查询订阅用量。\n会话凭据仅在内存中使用，只发送到 https://claude.ai；不写入插件配置、日志或 GitHub。不会发送消息、调用模型或购买额度。\n可在此处随时关闭。macOS 可能另行询问钥匙串权限。'
+            if not confirm('启用 Claude 实时用量？',detail,accept='允许读取'):return
+        preferences.update(STATE_DIR,'claude-live',value)
+        invalidate_caches(['claude_subscription']);schedule_background_refresh()
+    elif name == 'update-cli':
+        key=extra[0] if len(extra)==1 else ''
+        command={'claude-code':'claude','codex-cli':'codex'}.get(key)
+        if not command or key not in selected_update_ids() or not module_enabled('updates'):raise ValueError('invalid update target')
+        binary=shutil.which(command)
+        if not binary:raise ValueError('CLI not installed')
+        helptext=subprocess.run([binary,'--help'],capture_output=True,text=True,check=True,timeout=5).stdout
+        if not re.search(r'^\s+update(?:\s|\|)',helptext,re.M):
+            applescript('display alert "当前版本不支持 update 命令" message "请通过官方安装方式更新。"');return
+        refresh_url='swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))
+        terminal(shlex.join([binary,'update'])+'\nupdate_result=$?\n'+shlex.join(['/usr/bin/open','-g',refresh_url])+'\nexit "$update_result"')
     elif name == 'reveal-source':
         key=extra[0] if len(extra)==1 else ''
         if key not in preferences.USAGE:raise ValueError('invalid source')
@@ -2861,7 +2981,8 @@ def run_action(name, extra):
     elif name == 'choose-source':
         key=extra[0] if extra else ''
         if key not in preferences.USAGE:raise ValueError('invalid source')
-        response=applescript('POSIX path of (choose folder with prompt '+as_literal('选择 '+key+' 的用量记录目录')+')')
+        prompt='选择 Claude App 数据目录（包含 claude-code-sessions 或 plan-usage-history.json）' if key=='claude' else '选择 '+key+' 的用量记录目录'
+        response=applescript('POSIX path of (choose folder with prompt '+as_literal(prompt)+')')
         if response.returncode==0:
             preferences.update(STATE_DIR,'path',key,response.stdout.strip());schedule_background_refresh()
     elif name == "set-range":

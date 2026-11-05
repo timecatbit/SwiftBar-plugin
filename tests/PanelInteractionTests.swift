@@ -95,7 +95,7 @@ expect(MenuLayout.topmostIndex(at:point,frames:[rootFrame,overlap])==1,"Covered 
 expect(MenuLayout.topmostIndex(at:NSPoint(x:1000,y:650),frames:[rootFrame,overlap])==0,"Uncovered ancestor rows remain reachable")
 expect(MenuLayout.topmostIndex(at:NSPoint(x:100,y:100),frames:[rootFrame,overlap])==nil,"Outside points do not hit a menu")
 var grouped=initial.dashboard!
-let sampleProvider=ProviderUsage(id:"claude",name:"Claude Code",subtitle:"",status:"",available:false,cost:nil,tokens:0,requests:0,output:0,cache:nil,coverage:nil,sessions:0,unpriced:0,summaryIncluded:true,models:[],history:[])
+let sampleProvider=ProviderUsage(id:"claude",name:"Claude",subtitle:"",status:"",available:false,cost:nil,tokens:0,requests:0,output:0,cache:nil,coverage:nil,sessions:0,unpriced:0,summaryIncluded:true,models:[],history:[])
 expect(DashboardView.harnessHeaderHeight(grouped)==0,"Empty Harness group has no header")
 grouped.providers=[sampleProvider]
 expect(DashboardView.harnessHeaderHeight(grouped)==24,"Harness group header gets its own space")

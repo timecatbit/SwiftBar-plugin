@@ -20,7 +20,7 @@ class DiscoveryTests(unittest.TestCase):
         for folder in ('.claude/projects','.codex/sessions','.gemini/tmp','.workbuddy-ai/projects'):(self.home/folder).mkdir(parents=True)
         self.assertEqual(self.detect(),['summary','updates'])
     def test_existing_harness_records_are_detected_without_parsing(self):
-        self.put('.claude/projects/p/one.jsonl');self.put('.codex/sessions/day/one.jsonl')
+        self.put('Library/Application Support/Claude/claude-code-sessions/account/org/session.json');self.put('.codex/sessions/day/one.jsonl')
         self.put('.workbuddy-ai/projects/p/one.jsonl');self.put('.gemini/tmp/p/chats/session-one.jsonl')
         self.put('.local/share/opencode/opencode.db')
         dsh=self.put('dsh/one/session.v4.jsonl.zstd')

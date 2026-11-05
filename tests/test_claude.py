@@ -15,7 +15,7 @@ class ClaudeTests(unittest.TestCase):
   return {'type':'assistant','timestamp':timestamp,'sessionId':'session','requestId':'req-'+id,'message':{'id':id,'model':model,'usage':{'input_tokens':100,'output_tokens':output,'cache_read_input_tokens':1000,'cache_creation_input_tokens':200,'cache_creation':{'ephemeral_1h_input_tokens':200,'ephemeral_5m_input_tokens':0}}}}
  def write(self,name,rows):
   (self.root/name).write_text(''.join(json.dumps(row)+'\n' for row in rows))
- def stats(self):return self.m.claude_usage_live(self.root,self.db,self.now)[0]
+ def stats(self):return self.m.claude_usage_records(self.root,self.db,self.now)[0]
  def test_copied_transcripts_and_stream_chunks_are_not_double_counted(self):
   self.write('a.jsonl',[self.row(output=0),self.row(output=20),self.row(output=20)])
   self.write('b.jsonl',[self.row(output=20)])
@@ -45,8 +45,8 @@ class ClaudeTests(unittest.TestCase):
   self.assertEqual(summary['totalTokens'],1320);self.assertEqual(summary['unpricedRequests'],1)
  def test_changing_source_directory_does_not_reuse_old_usage(self):
   self.write('one.jsonl',[self.row()])
-  first=self.m.claude_usage_live(self.root,now=self.now)[0]
+  first=self.m.claude_usage_records(self.root,now=self.now)[0]
   other=Path(self.temp.name)/'other';other.mkdir()
-  second=self.m.claude_usage_live(other,now=self.now)[0]
+  second=self.m.claude_usage_records(other,now=self.now)[0]
   self.assertEqual(first['summary']['requests'],1);self.assertEqual(second['summary']['requests'],0)
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -1,5 +1,12 @@
 # 更新记录
 
+## 5.6.0
+
+- Claude Harness 改为桌面 App 来源，只统计 App 登记的可读取会话；独立 CLI 日志不再混入，旧目录设置保持兼容保存。
+- Claude 订阅区分实时查询与本机历史快照；实时查询需明确授权，固定访问 Claude 官方域名，显示周期/模型用量及重置时间，登录和网络失败明确反馈。
+- 更新联动：Claude 包含 Claude Code；ChatGPT 包含 Codex CLI；OpenCodex 包含 ChatGPT 与 Codex CLI。列表、数量和通知共用去重后的检查范围。
+- CLI 更新入口分别执行 `claude update`、`codex update`，检查本机命令支持，完成后刷新。
+
 ## 5.5.5
 
 - 主页模块标题下只保留已启用数量，移除“悬停配置”提示。

@@ -6,7 +6,7 @@
 # export OCX_BASE_URL="http://127.0.0.1:10100"
 # export OCX_HOME="$HOME/.opencodex"
 # export OCX_TOKEN_FILE="$HOME/.opencodex/admin-api-token"
-# export CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
+# export CLAUDE_APP_DATA_DIR="$HOME/Library/Application Support/Claude"  # Desktop registry and subscription snapshot.
 # export OCX_CHATGPT_HOME="$HOME/.codex"  # Subscription login source; does not change ChatGPT local usage.
 # export CODEX_USAGE_DIR="$HOME/.codex"
 # export OPENCODE_DATA_DIR="$HOME/.local/share/opencode"

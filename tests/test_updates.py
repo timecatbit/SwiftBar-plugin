@@ -47,13 +47,13 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'release_body') as release,patch.object(self.m.subprocess,'run') as command:
    row=self.m.app_update_probe('claude')
   self.assertEqual(row['status'],'未安装');release.assert_not_called();command.assert_not_called()
- def test_legacy_claude_code_update_is_not_shown_or_notified(self):
+ def test_claude_selection_includes_code_update_and_notification(self):
   self.select('claude')
-  legacy=dict(self.row(),id='claude-code',name='Claude Code')
-  rows=self.m.update_rows({'app_updates':{'apps':[legacy]}})
-  self.assertEqual([r['id'] for r in rows],['claude']);self.assertEqual(self.m.update_attention_count(rows),0)
-  with patch.object(self.m,'send_update_notification') as send:
-   self.m.notify_app_updates([legacy]);send.assert_not_called()
+  cli=dict(self.row(),id='claude-code',name='Claude Code')
+  rows=self.m.update_rows({'app_updates':{'apps':[cli]}})
+  self.assertEqual([r['id'] for r in rows],['claude','claude-code']);self.assertEqual(self.m.update_attention_count(rows),1)
+  with patch.object(self.m,'send_update_notification',return_value=True) as send:
+   self.m.notify_app_updates([cli]);send.assert_called_once()
  def test_sparkle_uses_build_and_filters_other_architecture(self):
   xml=b'''<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><s:shortVersionString>26.1029.61003</s:shortVersionString><s:version>24614</s:version><s:hardwareRequirements>arm64</s:hardwareRequirements></item><item><s:shortVersionString>99.0.0</s:shortVersionString><s:version>99999</s:version><s:hardwareRequirements>x64</s:hardwareRequirements></item></channel></rss>'''
   with patch.object(self.m.platform,'machine',return_value='arm64'):
@@ -77,25 +77,25 @@ class UpdateTests(unittest.TestCase):
   settings['visible']=list(harnesses)+(['updates'] if updates else [])
   self.m.preferences.write(self.m.STATE_DIR,settings)
  def test_default_updates_follow_only_selected_harnesses(self):
-  self.assertEqual(self.m.selected_update_ids(),['opencodex','claude'])
-  self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude'])
+  self.assertEqual(self.m.selected_update_ids(),['opencodex','claude','claude-code','chatgpt','codex-cli'])
+  self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude','claude-code','chatgpt','codex-cli'])
  def test_configured_opencodex_also_checks_chatgpt_without_changing_home_selection(self):
   self.select('claude')
   before=self.m.preferences.read(self.m.STATE_DIR)
   with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'app_info',return_value={}),patch.object(self.m,'app_update_probe',side_effect=lambda key:dict(self.row(),id=key,href=self.m.UPDATE_LINKS[key],status='有新版本')) as probe:
-   self.assertEqual(self.m.selected_update_ids(),['claude','chatgpt'])
+   self.assertEqual(self.m.selected_update_ids(),['claude','claude-code','chatgpt','codex-cli'])
    self.m.app_updates_cached()
-   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','chatgpt'])
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude-code','chatgpt','codex-cli'])
    self.assertNotIn('badge',self.m.external_loaders())
-   self.assertIn('OpenCodex 联动 ChatGPT','\n'.join(self.m.app_update_lines({})))
+   self.assertIn('按 Harness 勾选及客户端联动规则检查','\n'.join(self.m.app_update_lines({})))
   self.assertEqual(self.m.preferences.read(self.m.STATE_DIR),before)
  def test_configured_opencodex_adds_chatgpt_once_even_with_no_selected_harness(self):
   with patch.object(self.m,'ocx_configured',return_value=True):
    for selected in ((),('codex',)):
     self.select(*selected)
-    self.assertEqual(self.m.selected_update_ids(),['chatgpt'])
+    self.assertEqual(self.m.selected_update_ids(),['chatgpt','codex-cli'])
     with patch.object(self.m,'app_info',return_value={}):
-     self.assertEqual([r['id'] for r in self.m.update_rows({})],['chatgpt'])
+     self.assertEqual([r['id'] for r in self.m.update_rows({})],['chatgpt','codex-cli'])
  def test_opencodex_presence_changes_invalidate_cache_and_remove_unselected_chatgpt_alerts(self):
   self.select('claude')
   with patch.object(self.m,'ocx_configured',return_value=False) as configured,patch.object(self.m,'app_update_probe',side_effect=lambda key:dict(self.row(),id=key,href='https://example.test',status='有新版本')) as probe:
@@ -103,7 +103,7 @@ class UpdateTests(unittest.TestCase):
    configured.return_value=True
    self.assertEqual(self.m.read_cache('app_updates'),{})
    self.m.app_updates_cached()
-   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude','chatgpt'])
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude-code','claude','claude-code','chatgpt','codex-cli'])
    payload=self.m.read_cache('app_updates')['payload']
    linked=[r for r in payload['apps'] if r['id']=='chatgpt']
    with patch.object(self.m,'send_update_notification',return_value=True) as send:
@@ -111,8 +111,8 @@ class UpdateTests(unittest.TestCase):
    configured.return_value=False
    self.assertEqual(self.m.read_cache('app_updates'),{})
    rows=self.m.update_rows({'app_updates':payload})
-   self.assertEqual([r['id'] for r in rows],['claude'])
-   self.assertEqual(self.m.update_attention_count(rows),1)
+   self.assertEqual([r['id'] for r in rows],['claude','claude-code'])
+   self.assertEqual(self.m.update_attention_count(rows),2)
    with patch.object(self.m,'send_update_notification') as send:
     self.m.notify_app_updates([dict(linked[0],latest='99.0.0')]);send.assert_not_called()
  def test_subscription_and_api_choices_do_not_select_app_updates(self):
@@ -128,17 +128,17 @@ class UpdateTests(unittest.TestCase):
   self.select('claude')
   with patch.object(self.m,'app_update_probe',return_value=self.row()) as probe:
    self.m.app_updates_cached()
-  probe.assert_called_once_with('claude')
+  self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude-code'])
  def test_switching_harness_invalidates_recent_update_cache(self):
   self.select('claude')
   def row(key):return dict(self.row(),id=key)
   with patch.object(self.m,'app_update_probe',side_effect=row) as probe:
    self.m.app_updates_cached();self.select('codex');self.m.app_updates_cached()
-  self.assertEqual([c.args[0] for c in probe.call_args_list],['claude','chatgpt'])
+  self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude-code','chatgpt','codex-cli'])
  def test_deselected_cached_update_is_hidden_from_list_badge_and_notification(self):
   self.select('codex')
   with patch.object(self.m,'app_info',return_value={}):rows=self.m.update_rows({'app_updates':{'apps':[self.row()]}})
-  self.assertEqual([r['id'] for r in rows],['chatgpt'])
+  self.assertEqual([r['id'] for r in rows],['chatgpt','codex-cli'])
   self.assertEqual(self.m.update_attention_count(rows),0)
   with patch.object(self.m,'send_update_notification') as send:self.m.notify_app_updates([self.row()])
   send.assert_not_called()
@@ -162,5 +162,35 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'app_update_probe',side_effect=change_while_loading):self.m.app_updates_cached()
   self.assertEqual(self.m.read_cache('app_updates'),{})
   with patch.object(self.m,'app_update_probe',return_value=dict(self.row(),id='chatgpt')) as probe:self.m.app_updates_cached()
-  probe.assert_called_once_with('chatgpt')
+  self.assertCountEqual([c.args[0] for c in probe.call_args_list],['chatgpt','codex-cli'])
+ def test_cli_release_sources_and_missing_install(self):
+  cases=[('claude-code','2.1.308 (Claude Code)','2.1.310','claude.ai/claude-code-releases/latest'),('codex-cli','codex-cli 0.164.0','0.166.0','registry.npmjs.org/@openai/codex/latest')]
+  for key,current,latest,url in cases:
+   body=latest.encode() if key=='claude-code' else json.dumps({'version':latest}).encode()
+   with patch.object(self.m.shutil,'which',return_value='/test/bin/tool'),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout=current)),patch.object(self.m,'release_body',return_value=body) as release:
+    row=self.m.app_update_probe(key)
+   self.assertTrue(row['available']);self.assertEqual(row['latest'],latest);self.assertIn(url,release.call_args.args[0])
+  with patch.object(self.m.shutil,'which',return_value=None),patch.object(self.m,'release_body') as release:
+   self.assertEqual(self.m.app_update_probe('codex-cli')['status'],'未安装');release.assert_not_called()
+ def test_cli_update_runs_the_requested_command_with_safe_quoting(self):
+  self.select('claude','codex')
+  for key,command in [('claude-code','claude'),('codex-cli','codex')]:
+   binary='/Applications/Tools With Spaces/'+command
+   with patch.object(self.m.shutil,'which',return_value=binary),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout='  update Update the CLI')),patch.object(self.m,'terminal') as terminal:
+    self.m.run_action('update-cli',[key])
+   self.assertTrue(terminal.call_args.args[0].startswith("'"+binary+"' update\n"))
+   self.assertIn('swiftbar://refreshplugin?',terminal.call_args.args[0])
+ def test_cli_update_refuses_unselected_or_unsupported_command(self):
+  self.select('claude')
+  with patch.object(self.m,'terminal') as terminal:
+   with self.assertRaises(ValueError):self.m.run_action('update-cli',['codex-cli'])
+   with patch.object(self.m.shutil,'which',return_value='/test/claude'),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout='  chat Start chat')),patch.object(self.m,'applescript'):
+    self.m.run_action('update-cli',['claude-code'])
+   terminal.assert_not_called()
+ def test_cli_install_change_invalidates_update_cache(self):
+  self.select('codex')
+  binary=Path(self.tmp.name,'codex');binary.write_text('old')
+  with patch.object(self.m.shutil,'which',return_value=str(binary)):
+   before=self.m.connection_fingerprint('app_updates');binary.write_text('new installed release')
+   self.assertNotEqual(before,self.m.connection_fingerprint('app_updates'))
 if __name__=='__main__':unittest.main()

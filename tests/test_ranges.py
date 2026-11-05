@@ -22,13 +22,13 @@ class RangeTests(unittest.TestCase):
  def test_historical_index_keeps_records_outside_seven_days(self):
   self.write('a.jsonl',[self.row('old','2026-09-01T01:00:00Z'),self.row('month','2026-11-01T01:00:00Z'),self.row('today')])
   self.assertEqual(self.stats()['summary']['requests'],1)
-  all_data=self.m.claude_usage_live(self.root,self.db,self.now,'all')[0]
+  all_data=self.m.claude_usage_records(self.root,self.db,self.now,'all')[0]
   self.assertEqual(all_data['summary']['requests'],3)
-  self.assertEqual(self.m.claude_usage_live(self.root,self.db,self.now,'month')[0]['summary']['requests'],2)
-  self.assertEqual(self.m.claude_usage_live(self.root,self.db,self.now,'all')[0]['summary']['requests'],3)
+  self.assertEqual(self.m.claude_usage_records(self.root,self.db,self.now,'month')[0]['summary']['requests'],2)
+  self.assertEqual(self.m.claude_usage_records(self.root,self.db,self.now,'all')[0]['summary']['requests'],3)
  def test_rolling_window_edges_are_inclusive_and_hour_buckets_add_up(self):
   self.write('a.jsonl',[self.row('before','2026-11-03T03:59:59Z'),self.row('start','2026-11-03T04:00:00Z'),self.row('end','2026-11-04T04:00:00Z'),self.row('after','2026-11-04T04:00:01Z')])
-  p=self.m.claude_usage_live(self.root,self.db,self.now,'24h')[0]
+  p=self.m.claude_usage_records(self.root,self.db,self.now,'24h')[0]
   self.assertEqual(p['summary']['requests'],2)
   self.assertEqual(sum(h['totalTokens'] for h in p['hours']),p['summary']['totalTokens'])
  def test_old_range_is_not_relabelled_after_selection_changes(self):
