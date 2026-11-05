@@ -66,4 +66,15 @@ class AutomaticUpdateTests(unittest.TestCase):
   value=self.m.native_menu_line('应用更新 | color="#111,#ddd" sfcolor=blue badge="3 项待更新" panelattention=true')
   self.assertNotIn('color=',value);self.assertNotIn('panelattention',value);self.assertIn('badge=',value)
 
+ def test_deselected_opencodex_does_not_start_or_check_update(self):
+  self.m.preferences.update(self.m.STATE_DIR,'module','opencodex','false')
+  self.m.auto_update_opencodex()
+  self.assertEqual(self.calls,[]);self.assertNotIn('badge',self.m.external_loaders())
+ def test_deselected_running_update_reconciles_without_reinstall_or_notification(self):
+  self.m.auto_update_opencodex()
+  self.m.preferences.update(self.m.STATE_DIR,'module','opencodex','false')
+  self.current='2.98.0';self.job['status']='succeeded';self.m.auto_update_opencodex()
+  self.assertEqual(len(self.posts()),1);self.notice.assert_not_called()
+  self.assertEqual(self.m.auto_update_state()['status'],'succeeded')
+
 if __name__=='__main__':unittest.main()

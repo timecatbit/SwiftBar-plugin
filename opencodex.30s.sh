@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.5.0</xbar.version>
+# <xbar.version>5.5.1</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -213,12 +213,13 @@ def refresh_ttl(base):
     return max(base,300 if power.get('battery') else 180)
 
 
-CONNECTION_KEYS={'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+CONNECTION_KEYS={'app_updates':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
 
 def connection_fingerprint(name):
     parts=[]
+    if name=='app_updates':parts.extend(selected_update_ids());parts.append(module_enabled('updates'))
     for key in CONNECTION_KEYS.get(name,[]):
         parts.append(os.environ.get(key,''))
         if key.endswith('_FILE') and os.environ.get(key):
@@ -645,6 +646,7 @@ def cache_result(record, ttl):
 
 
 def cached_fetch(name, loader, ttl):
+    fingerprint=connection_fingerprint(name)
     record = read_cache(name)
     if not cache_due(record, ttl):
         return cache_result(record, ttl)
@@ -662,7 +664,7 @@ def cached_fetch(name, loader, ttl):
         # Failed requests retry after a minute, retaining the last successful data.
         record.update(schema=1, error=str((error or (0, "数据格式异常", None))[1]),
                       retryAt=time.time() + 60, day=datetime.now().strftime("%Y-%m-%d"))
-    record["connection"]=connection_fingerprint(name)
+    record["connection"]=fingerprint
     write_json_cache(cache_path(name), record)
     return cache_result(record, ttl)
 
@@ -997,6 +999,24 @@ UPDATE_LINKS = {'opencodex': RELEASES_URL, 'claude': 'https://claude.ai/download
                 'chatgpt': 'https://chatgpt.com/download',
                 'claude-code': 'https://github.com/anthropics/claude-code/releases'}
 UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT', 'claude-code':'Claude Code'}
+# Only Harness selections control application updates. Subscription/API choices
+# must not opt a user into unrelated desktop or command-line update checks.
+HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude-code', 'codex':'chatgpt',
+                   'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'gemini':'gemini'}
+MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
+                  'deepseek-harness':('DeepSeek Harness','https://github.com/deepseek-ai/deepseek-harness/releases'),
+                  'workbuddy':('WorkBuddy','https://cloud.tencent.com/product/workbuddy'),
+                  'gemini':('Gemini CLI','https://github.com/google-gemini/gemini-cli/releases')}
+UPDATE_NAMES.update({key:value[0] for key,value in MANUAL_UPDATES.items()})
+UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
+
+def selected_update_ids():
+    visible=set(view_settings()['visible'])
+    return [HARNESS_UPDATES[key] for key in preferences.USAGE if key in visible]
+
+def live_app_update_ids():
+    return [key for key in selected_update_ids() if key!='opencodex' and key not in MANUAL_UPDATES]
+
 
 def release_version(value):
     match = re.fullmatch(r'v?(\d+(?:\.\d+){0,4})(?:[-+]([a-zA-Z0-9.-]+))?', str(value or '').strip())
@@ -1077,16 +1097,23 @@ def app_update_probe(key):
     return row
 
 def app_updates_cached():
+    if not module_enabled('updates'):return {'apps':[]},None
+    selected=live_app_update_ids()
+    if not selected:return {'apps':[]},None
+    def probe(key):
+        # Preferences can change while another endpoint is still in flight.
+        if not module_enabled('updates') or key not in live_app_update_ids():return None
+        return app_update_probe(key)
     def load():
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            rows=list(pool.map(app_update_probe,['claude','chatgpt','claude-code']))
+        with ThreadPoolExecutor(max_workers=min(3,len(selected))) as pool:
+            rows=[row for row in pool.map(probe,selected) if row is not None]
         return {'apps':rows},None
     result,error=cached_fetch('app_updates',load,EXTERNAL_TTLS['app_updates'])
-    # A failed endpoint doesn't suppress the other applications; retry failures in 10 minutes.
     if any('失败' in row.get('status','') for row in (result or {}).get('apps',[])):
         record=read_cache('app_updates');record.update(force=True,retryAt=time.time()+600)
         write_json_cache(cache_path('app_updates'),record)
     return result,error
+
 
 def auto_update_path():
     directory=os.environ.get('SWIFTBAR_PLUGIN_DATA_PATH') or os.path.join(PLUGIN_DIR,'.opencodex-panel','state')
@@ -1117,12 +1144,13 @@ def auto_update_opencodex():
             def finish(ok,message):
                 save(status='succeeded' if ok else 'failed',message=message,retryAt=0 if ok else now+3600)
                 notice_key=str(state.get('target'))+('::success' if ok else '::failure')
-                if state.get('noticeKey')!=notice_key:
+                if module_enabled('opencodex') and state.get('noticeKey')!=notice_key:
                     notify(message,subtitle='OpenCodex 自动更新');save(noticeKey=notice_key)
                 invalidate_caches(['badge'])
             active=state.get('status')=='running'
             record=read_cache('badge');badge=record.get('payload') or {}
             if not active:
+                if not module_enabled('opencodex'):return
                 if now-state.get('checkedAt',0)<30:return
                 if now-record.get('fetchedAt',0)>EXTERNAL_TTLS['badge'] or not badge.get('updateAvailable'):return
                 if not newer_release(badge.get('latestVersion'),badge.get('currentVersion')):return
@@ -1157,6 +1185,7 @@ def auto_update_opencodex():
                 # Track an existing installer, including an update started outside this plugin.
                 save(target=job.get('latestVersion') or target,status='running',jobId=job.get('id'),startedAt=now,healthySince=0,message='正在自动更新')
                 return
+            if not module_enabled('opencodex'):return
             save(target=target,previous=current,status='running',startedAt=now,healthySince=0,jobId=None,message='正在自动更新')
             result,error=request('/api/update/run',method='POST',body={'tag':'latest','restart':True},timeout=30)
             job=(result or {}).get('job') or {}
@@ -1172,7 +1201,8 @@ def auto_update_opencodex():
 
 def update_rows(data):
     payload=data.get('app_updates') or (read_cache('app_updates').get('payload') or {})
-    rows=[dict(row) for row in payload.get('apps',[]) if isinstance(row,dict)]
+    selected=selected_update_ids()
+    rows=[dict(row) for row in payload.get('apps',[]) if isinstance(row,dict) and row.get('id') in selected]
     badge=data.get('badge') or (read_cache('badge').get('payload') or {})
     current=(data.get('healthz') or {}).get('version') or badge.get('currentVersion')
     oc={'id':'opencodex','name':'OpenCodex','href':RELEASES_URL,'current':current,'latest':badge.get('latestVersion'),
@@ -1198,8 +1228,11 @@ def update_rows(data):
                     if '失败' not in row.get('status',''):row['status']='有新版本' if row['available'] else '已是最新'
     existing={row['id'] for row in rows}
     rows += [{'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'status':'等待检查','available':False}
-             for key in ('claude','chatgpt','claude-code') if key not in existing]
-    return [oc]+rows
+             for key in selected if key!='opencodex' and key not in existing]
+    for row in rows:
+        if row['id'] in MANUAL_UPDATES:row.update(status='在官网查看更新',available=False,manual=True)
+    by_id={row['id']:row for row in [oc]+rows}
+    return [by_id[key] for key in selected]
 
 def send_update_notification(rows):
     body='；'.join(row['name']+' '+row['latest'] for row in rows)
@@ -1210,6 +1243,10 @@ def send_update_notification(rows):
     except (OSError,subprocess.TimeoutExpired):return False
 
 def notify_app_updates(rows):
+    if not module_enabled('updates'):return
+    selected=set(selected_update_ids())
+    rows=[row for row in rows if row.get('id') in selected]
+    if not rows:return
     state_dir=os.environ.get('SWIFTBAR_PLUGIN_DATA_PATH') or os.path.join(PLUGIN_DIR,'.opencodex-panel','state')
     path=os.path.join(state_dir,'updates-notified.json')
     try:
@@ -1234,17 +1271,23 @@ def update_attention_count(rows):
 
 def app_update_lines(data):
     rows=update_rows(data);count=update_attention_count(rows)
-    status=('%d 项待更新'%count) if count else ('自动更新中' if auto_update_state().get('status')=='running' else None)
+    running=any(r['id']=='opencodex' for r in rows) and auto_update_state().get('status')=='running'
+    status=('%d 项待更新'%count) if count else ('自动更新中' if running else None)
     lines=[item('应用更新',badge=status,panelattention=bool(count),sfimage='arrow.down.circle')]
+    if not rows:lines.append(item('尚未勾选 Harness',level=1,color=MUTED,size=11))
     for row in rows:
         label=row['name']+' · '+row['status'].replace('自动更新已开启 · ','')
-        detail=(row.get('current') or '版本待确认')
+        detail='尚未接入自动版本检查' if row.get('manual') else (row.get('current') or '版本待确认')
         if row.get('available'):detail+=' → '+str(row.get('latest'))
         lines.append(item(label,level=1,href=row['href'],paneldetail=detail))
-    lines.extend(['-----',item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')),
-                  item('OpenCodex 每小时自动检查并更新',level=1,color=MUTED,size=10),
-                  item('其他应用每 6 小时检查 · 仅提醒',level=1,color=MUTED,size=10)])
+    lines.append('-----')
+    if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
+    lines.append(item('选择 Harness…',level=1,sfimage='square.grid.2x2',**act('panel-modules')))
+    lines.append(item('仅跟随主页模块中勾选的 Harness',level=1,color=MUTED,size=10))
+    if any(r['id']=='opencodex' for r in rows):lines.append(item('OpenCodex 每小时自动检查并更新',level=1,color=MUTED,size=10))
+    if any(not r.get('manual') and r['id']!='opencodex' for r in rows):lines.append(item('其他已接入应用每 6 小时检查 · 仅提醒',level=1,color=MUTED,size=10))
     return lines
+
 
 def resource_lines(data):
     lines=[]
@@ -1360,10 +1403,10 @@ def range_usage_cached():
 
 def external_loaders():
     loaders={}
-    if ocx_configured():loaders['badge']=update_status_cached
+    if module_enabled('opencodex') and ocx_configured():loaders['badge']=update_status_cached
     if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
-    if module_enabled('updates'):loaders['app_updates']=app_updates_cached
+    if module_enabled('updates') and live_app_update_ids():loaders['app_updates']=app_updates_cached
     if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ('grok','minimax'):
         if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
@@ -1406,7 +1449,7 @@ def background_refresh():
                 if cache_due(read_cache(range_cache_name()),refresh_ttl(60)):futures.append(pool.submit(range_usage_cached))
                 for future in futures:
                     future.result()
-            if ocx_configured():auto_update_opencodex()
+            if ocx_configured() and (module_enabled('opencodex') or auto_update_state().get('status')=='running'):auto_update_opencodex()
             if module_enabled('updates'):notify_app_updates(update_rows({}))
         if futures:refresh_swiftbar()
         return 0
@@ -1845,7 +1888,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.5.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.5.1',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 

@@ -40,10 +40,11 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m.platform,'machine',return_value='arm64'):
    self.assertEqual(self.m.sparkle_release(xml),('26.1029.61003','24614'))
  def test_installed_desktop_update_immediately_clears_old_alert(self):
-  row=dict(self.row(),id='claude',latest='4.16336.0')
+  self.m.preferences.update(self.m.STATE_DIR,'module','codex','true')
+  row=dict(self.row(),id='chatgpt',latest='4.16336.0')
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.16336.0'}):
    rows=self.m.update_rows({'app_updates':{'apps':[row]}})
-  self.assertFalse(next(r for r in rows if r['id']=='claude')['available'])
+  self.assertFalse(next(r for r in rows if r['id']=='chatgpt')['available'])
  def test_home_balances_are_visible_and_not_nested_under_management(self):
   data={'healthz':{'version':'2.97.0'},'provider_quotas':{'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥229.61'}]}}]},'accounts':{'accounts':[{'id':'a','logLabel':'main'}]},'quota':{'quotas':{'a':{'weeklyPercent':76}}}}
   with patch.object(self.m,'deepseek_logo_image',return_value=None),patch.object(self.m,'chatgpt_source',return_value='proxy'):
@@ -52,4 +53,58 @@ class UpdateTests(unittest.TestCase):
   self.assertIn('229.61',by_name['DeepSeek API']['value']);self.assertIn('main 24%',by_name['ChatGPT 订阅']['value'])
   management=next(e for e in entries if e['label']=='OpenCodex 管理')
   self.assertFalse(any('DeepSeek' in e['label'] for e in management['children']))
+ def select(self,*harnesses,updates=True):
+  settings=self.m.preferences.read(self.m.STATE_DIR)
+  settings['visible']=list(harnesses)+(['updates'] if updates else [])
+  self.m.preferences.write(self.m.STATE_DIR,settings)
+ def test_default_updates_follow_only_selected_harnesses(self):
+  self.assertEqual(self.m.selected_update_ids(),['opencodex','claude-code'])
+  self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude-code'])
+ def test_subscription_and_api_choices_do_not_select_app_updates(self):
+  self.select('chatgpt','claude-subscription','deepseek','gemini-api')
+  with patch.object(self.m,'app_update_probe') as probe,patch.object(self.m,'update_status_cached') as proxy:
+   self.assertEqual(self.m.selected_update_ids(),[])
+   self.assertEqual(self.m.update_rows({}),[])
+   self.m.app_updates_cached();loaders=self.m.external_loaders()
+  probe.assert_not_called();proxy.assert_not_called()
+  self.assertNotIn('app_updates',loaders);self.assertNotIn('badge',loaders)
+  self.assertIn('尚未勾选 Harness','\n'.join(self.m.app_update_lines({})))
+ def test_selected_harness_is_the_only_network_probe(self):
+  self.select('claude')
+  with patch.object(self.m,'app_update_probe',return_value=self.row()) as probe:
+   self.m.app_updates_cached()
+  probe.assert_called_once_with('claude-code')
+ def test_switching_harness_invalidates_recent_update_cache(self):
+  self.select('claude')
+  def row(key):return dict(self.row(),id=key)
+  with patch.object(self.m,'app_update_probe',side_effect=row) as probe:
+   self.m.app_updates_cached();self.select('codex');self.m.app_updates_cached()
+  self.assertEqual([c.args[0] for c in probe.call_args_list],['claude-code','chatgpt'])
+ def test_deselected_cached_update_is_hidden_from_list_badge_and_notification(self):
+  self.select('codex')
+  with patch.object(self.m,'app_info',return_value={}):rows=self.m.update_rows({'app_updates':{'apps':[self.row()]}})
+  self.assertEqual([r['id'] for r in rows],['chatgpt'])
+  self.assertEqual(self.m.update_attention_count(rows),0)
+  with patch.object(self.m,'send_update_notification') as send:self.m.notify_app_updates([self.row()])
+  send.assert_not_called()
+ def test_turning_off_update_module_stops_checks_and_notifications(self):
+  self.select('claude',updates=False)
+  with patch.object(self.m,'app_update_probe') as probe,patch.object(self.m,'send_update_notification') as send:
+   self.m.app_updates_cached();self.m.notify_app_updates([self.row()])
+  probe.assert_not_called();send.assert_not_called();self.assertNotIn('app_updates',self.m.external_loaders())
+ def test_selected_sources_without_auto_check_have_honest_official_entries(self):
+  self.select('opencode','gemini')
+  with patch.object(self.m,'app_update_probe') as probe:
+   rows=self.m.update_rows({});self.m.app_updates_cached()
+  self.assertEqual([r['id'] for r in rows],['opencode','gemini']);probe.assert_not_called()
+  self.assertTrue(all(r['manual'] and not r['available'] for r in rows))
+  self.assertNotIn('已是最新','\n'.join(self.m.app_update_lines({})))
+ def test_selection_changed_in_flight_cannot_publish_a_fresh_wrong_scope(self):
+  self.select('claude')
+  def change_while_loading(key):
+   self.select('codex');return self.row()
+  with patch.object(self.m,'app_update_probe',side_effect=change_while_loading):self.m.app_updates_cached()
+  self.assertEqual(self.m.read_cache('app_updates'),{})
+  with patch.object(self.m,'app_update_probe',return_value=dict(self.row(),id='chatgpt')) as probe:self.m.app_updates_cached()
+  probe.assert_called_once_with('chatgpt')
 if __name__=='__main__':unittest.main()
