@@ -20,3 +20,11 @@ with tempfile.TemporaryDirectory(prefix='swiftbar-token-tests-') as scratch:
     subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s',
                     str(ROOT / 'tests'), '-p', 'test_*.py', '-v'],
                    check=True, env=environment)
+    if os.uname().sysname == 'Darwin':
+        declarations=(ROOT/'panel/Panel.swift').read_text().split('// Application entry point.',1)[0]
+        test_main=Path(scratch)/'main.swift'
+        test_main.write_text(declarations+'\n'+(ROOT/'tests/PanelInteractionTests.swift').read_text())
+        binary=Path(scratch)/'panel-interaction-tests'
+        cache=ROOT/'build/swift-module-cache';cache.mkdir(parents=True,exist_ok=True)
+        subprocess.run(['xcrun','swiftc','-module-cache-path',str(cache),str(test_main),'-o',str(binary)],check=True,env=environment)
+        subprocess.run([str(binary)],check=True,env=environment)

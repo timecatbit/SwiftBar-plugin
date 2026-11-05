@@ -83,5 +83,4 @@ def replace_selection(directory, detected):
     """Call only after the user confirms the concrete detected selection."""
     current=preferences.read(directory);chosen=set(detected)
     current['visible']=[key for key,label,group in preferences.MODULES if key in chosen]
-    if current.get('expandedProvider') not in chosen:current['expandedProvider']=''
     preferences.write(directory,current)

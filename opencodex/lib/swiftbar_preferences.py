@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 MODULES = (
@@ -27,7 +28,7 @@ USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbu
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProvider': ''}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
@@ -38,7 +39,13 @@ def read(directory):
         if value.get('appearance') in ('glass', 'solid'):
             defaults['appearance'] = value['appearance']
         if isinstance(value.get('allowCollapse'),bool):defaults['allowCollapse']=value['allowCollapse']
-        if value.get('expandedProvider') in USAGE or value.get('expandedProvider')=='':defaults['expandedProvider']=value['expandedProvider']
+        expanded=value.get('expandedProviders')
+        if isinstance(expanded,list):
+            defaults['expandedProviders']=[k for k in USAGE if k in expanded]
+        elif value.get('expandedProvider') in USAGE:
+            defaults['expandedProviders']=[value['expandedProvider']]  # Migrate 5.1.0 without losing the open section.
+        revision=value.get('revision')
+        if isinstance(revision,int) and 0<=revision<2**63:defaults['revision']=revision
         paths = value.get('paths')
         if isinstance(paths, dict):
             defaults['paths'] = {k: v for k, v in paths.items() if k in USAGE and isinstance(v, str) and v}
@@ -48,6 +55,7 @@ def read(directory):
 
 
 def write(directory, value):
+    value=dict(value,revision=max(time.time_ns(),read(directory)['revision']+1))
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(prefix='.preferences-', dir=root)
@@ -76,12 +84,14 @@ def update(directory, kind, key=None, value=None):
         if key not in ('true','false'):raise ValueError('invalid collapse setting')
         current['allowCollapse']=key=='true'
     elif kind == 'expanded':
-        if key not in USAGE and key!='':raise ValueError('invalid provider')
-        current['expandedProvider']=key
+        if key not in USAGE or value not in ('true','false'):raise ValueError('invalid expansion preference')
+        expanded=set(current['expandedProviders'])
+        expanded.add(key) if value=='true' else expanded.discard(key)
+        current['expandedProviders']=[k for k in USAGE if k in expanded]
     elif kind == 'reset':
         current['visible'] = list(DEFAULT_VISIBLE)
         current['appearance'] = 'glass'
-        current['allowCollapse']=True;current['expandedProvider']=''
+        current['allowCollapse']=True;current['expandedProviders']=[]
     elif kind == 'path':
         if key not in USAGE or not value or not Path(value).expanduser().exists():
             raise ValueError('invalid data directory')
@@ -89,4 +99,4 @@ def update(directory, kind, key=None, value=None):
     else:
         raise ValueError('invalid preference action')
     write(directory, current)
-    return current
+    return read(directory)

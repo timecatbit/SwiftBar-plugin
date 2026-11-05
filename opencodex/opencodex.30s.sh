@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.1.0</xbar.version>
+# <xbar.version>5.1.1</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -1798,7 +1798,7 @@ def detection_menu_lines():
 
 
 def module_options():
-    settings=view_settings();options=[{'label':'允许折叠','detail':'点标题展开一项，其他明细自动收起','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
+    settings=view_settings();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
     for key,label,category in preferences.MODULES:
         if category!=group:
             options.append({'label':category,'section':True,'children':[]});group=category
@@ -2292,7 +2292,7 @@ def dashboard_payload(data):
     if key=='all' and any(number(p.get('summary',{}).get('requests'))>sum(number(day.get('requests')) for day in p.get('days',[])) for p in usage_sources):chart_status='图表展示最近 366 天'
     return {'date':now.date().isoformat(),'dates':labels,'providers':providers,'rangeKey':key,'rangeLabel':RANGES[key],
             'chartUnit':unit,'chartSpan':span,'chartStatus':chart_status,'chartPositions':chart_positions,
-            'showSummary':module_enabled('summary'),'allowCollapse':view_settings()['allowCollapse'],'expandedProvider':view_settings()['expandedProvider'],'note':'费用为已知 API 等值估算；未定价项不计入费用。'}
+            'showSummary':module_enabled('summary'),'allowCollapse':view_settings()['allowCollapse'],'expandedProviders':view_settings()['expandedProviders'],'note':'费用为已知 API 等值估算；未定价项不计入费用。'}
 
 
 
@@ -2314,6 +2314,11 @@ def resource_panel_entries(data):
     return entries
 
 
+def presentation_settings():
+    settings=view_settings()
+    return {key:settings[key] for key in ('revision','visible','appearance','allowCollapse','expandedProviders')}
+
+
 def render(data):
     dashboard=dashboard_payload(data)
     options=module_options()
@@ -2331,7 +2336,7 @@ def render(data):
         return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data,include_swiftbar=False)+['---']+module_menu_lines()])
     write_json_cache(cache_path("panel-view"), {"schema":1,"dashboard":dashboard,
         "entries":resource_panel_entries(data),"rangeOptions":range_options(),
-        "moduleOptions":options,"appearance":view_settings()['appearance'],
+        "moduleOptions":options,"appearance":view_settings()['appearance'],"preferences":presentation_settings(),
         "updateCount":update_attention_count(update_rows(data))})
     return "\n".join([panel_title(title(data)),'---']+[native_menu_line(line) for line in native_rows])
 
@@ -2444,9 +2449,12 @@ def run_action(name, extra):
         if name=='set-module' and len(extra)==2 and extra[1]=='true' and extra[0] in RESOURCE_CACHES:
             invalidate_caches([RESOURCE_CACHES[extra[0]]])
         schedule_background_refresh()
-    elif name in ('set-collapse','set-expanded'):
+    elif name == 'set-collapse':
         if len(extra)!=1:raise ValueError('invalid display action')
-        preferences.update(STATE_DIR,'collapse' if name=='set-collapse' else 'expanded',extra[0])
+        preferences.update(STATE_DIR,'collapse',extra[0])
+    elif name == 'set-expanded':
+        if len(extra)!=2:raise ValueError('invalid expansion action')
+        preferences.update(STATE_DIR,'expanded',extra[0],extra[1])
     elif name == 'detect-modules':
         detected=detected_modules();current=set(view_settings()['visible']);labels={k:label for k,label,_ in preferences.MODULES}
         added=[labels[k] for k in detected if k not in current]
@@ -2580,6 +2588,7 @@ def consume_panel_action():
     except OSError:
         return
     request_id = None
+    action = None
     status = "rejected"
     reason = None
     try:
@@ -2598,8 +2607,7 @@ def consume_panel_action():
         allowed = []
         dashboard=snapshot.get('dashboard') or {}
         if dashboard.get('allowCollapse'):
-            allowed.append(['set-expanded',''])
-            allowed.extend([['set-expanded',p['id']] for p in dashboard.get('providers',[]) if p.get('id') in preferences.USAGE])
+            allowed.extend([['set-expanded',p['id'],value] for p in dashboard.get('providers',[]) if p.get('id') in preferences.USAGE for value in ('true','false')])
         while nodes:
             node = nodes.pop()
             if node.get("onOpenAction"):
@@ -2627,7 +2635,8 @@ def consume_panel_action():
             pass
         if isinstance(request_id, str):
             write_json_cache(cache_path("panel-action-receipt"), {
-                "schema": 1, "id": request_id, "status": status, "reason": reason, "finishedAt": time.time()})
+                "schema": 1, "id": request_id, "status": status, "reason": reason, "finishedAt": time.time(),
+                "preferences": presentation_settings() if status=="done" and action and action[0] in ("set-module","set-appearance","reset-modules","set-collapse","set-expanded","detect-modules") else None})
 
 
 def main():

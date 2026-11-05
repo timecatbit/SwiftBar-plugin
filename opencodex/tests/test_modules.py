@@ -143,22 +143,22 @@ class ModuleTests(unittest.TestCase):
 
     def test_fold_preferences_persist_without_changing_usage(self):
         original=self.m.dashboard_payload({})
-        preferences.update(self.m.STATE_DIR,'expanded','claude')
+        preferences.update(self.m.STATE_DIR,'expanded','claude','true')
         preferences.update(self.m.STATE_DIR,'collapse','false')
         folded=self.m.dashboard_payload({})
         self.assertEqual(folded['providers'],original['providers'])
-        self.assertFalse(folded['allowCollapse']);self.assertEqual(folded['expandedProvider'],'claude')
+        self.assertFalse(folded['allowCollapse']);self.assertEqual(folded['expandedProviders'],['claude'])
         preferences.update(self.m.STATE_DIR,'collapse','true')
-        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProvider'],'claude')
-        with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'expanded','komari')
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],['claude'])
+        with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'expanded','komari','true')
         with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'collapse','maybe')
         preferences.update(self.m.STATE_DIR,'reset')
         self.assertTrue(preferences.read(self.m.STATE_DIR)['allowCollapse'])
-        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProvider'],'')
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],[])
     def test_only_visible_usage_headers_can_expand(self):
         snapshot={'schema':1,'dashboard':{'allowCollapse':True,'providers':[{'id':'claude'}]},'entries':[],'moduleOptions':self.m.module_options()}
         self.m.write_json_cache(self.m.cache_path('panel-view'),snapshot)
-        for i,action in enumerate((['set-expanded','claude'],['set-expanded',''],['set-expanded','codex'],['set-expanded','komari'],['set-collapse','true'],['set-collapse','false'])):
+        for i,action in enumerate((['set-expanded','claude','true'],['set-expanded','claude','false'],['set-expanded','codex','true'],['set-expanded','komari','true'],['set-collapse','true'],['set-collapse','false'])):
             self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':str(i),'action':action,'createdAt':self.m.time.time()})
             with patch.object(self.m,'run_action') as run:self.m.consume_panel_action()
             if i in (2,3):run.assert_not_called()
@@ -174,7 +174,7 @@ class ModuleTests(unittest.TestCase):
         self.assertIn('将取消：OpenCodex',detail);self.assertEqual(confirm.call_args.kwargs['accept'],'覆盖当前选项')
     def test_detection_explicit_confirmation_replaces_selection_only(self):
         preferences.update(self.m.STATE_DIR,'appearance','solid')
-        preferences.update(self.m.STATE_DIR,'expanded','claude')
+        preferences.update(self.m.STATE_DIR,'expanded','claude','true')
         preferences.update(self.m.STATE_DIR,'collapse','false')
         before=preferences.read(self.m.STATE_DIR)
         with patch.object(self.m,'detected_modules',return_value=['summary','codex','updates']),patch.object(self.m,'confirm',return_value=True),patch.object(self.m,'schedule_background_refresh') as refresh:
@@ -182,7 +182,7 @@ class ModuleTests(unittest.TestCase):
         after=preferences.read(self.m.STATE_DIR)
         self.assertEqual(after['visible'],['summary','codex','updates']);refresh.assert_called_once()
         self.assertEqual(after['appearance'],before['appearance']);self.assertEqual(after['paths'],before['paths'])
-        self.assertFalse(after['allowCollapse']);self.assertEqual(after['expandedProvider'],'')
+        self.assertFalse(after['allowCollapse']);self.assertEqual(after['expandedProviders'],['claude'])
     def test_confirmation_is_cancel_by_default(self):
         response=types.SimpleNamespace(returncode=0,stdout='button returned:取消')
         with patch.object(self.m,'applescript',return_value=response) as dialog:
@@ -196,3 +196,37 @@ class ModuleTests(unittest.TestCase):
         self.assertTrue(any('确认后覆盖当前模块选择' in line for line in lines))
         self.assertTrue(any(line.startswith('--开始检测') and 'detect-modules' in line for line in lines))
         self.assertIn('不读取对话正文', '\n'.join(self.m.module_menu_lines()))
+
+    def test_multiple_expanded_modules_are_independent_and_survive_visibility_changes(self):
+        for key in ('opencodex','claude','codex'):preferences.update(self.m.STATE_DIR,'expanded',key,'true')
+        preferences.update(self.m.STATE_DIR,'expanded','claude','false')
+        self.toggle('codex',False);self.toggle('codex',True)
+        preferences.update(self.m.STATE_DIR,'collapse','false')
+        preferences.update(self.m.STATE_DIR,'collapse','true')
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],['opencodex','codex'])
+        self.assertEqual(self.m.dashboard_payload({})['expandedProviders'],['opencodex','codex'])
+    def test_legacy_single_expansion_migrates_without_touching_file(self):
+        p=Path(self.m.STATE_DIR)/'preferences.json';p.parent.mkdir(parents=True,exist_ok=True)
+        p.write_text(json.dumps({'schema':1,'expandedProvider':'claude','visible':['claude']}));before=p.read_bytes()
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],['claude'])
+        self.assertEqual(p.read_bytes(),before)
+        preferences.update(self.m.STATE_DIR,'expanded','opencodex','true')
+        current=json.loads(p.read_text())
+        self.assertEqual(current['expandedProviders'],['opencodex','claude']);self.assertNotIn('expandedProvider',current)
+    def test_receipt_contains_saved_display_state_before_slow_data_refresh(self):
+        self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'dashboard':{'allowCollapse':True,'providers':[{'id':'opencodex'},{'id':'claude'}]},'entries':[]})
+        last_revision=0
+        for i,(key,value) in enumerate((('opencodex','true'),('claude','true'),('opencodex','false'))):
+            self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':str(i),'action':['set-expanded',key,value],'createdAt':self.m.time.time()})
+            self.m.consume_panel_action()
+            receipt=self.m.read_cache('panel-action-receipt');saved=preferences.read(self.m.STATE_DIR)
+            self.assertEqual(receipt['status'],'done');self.assertEqual(receipt['preferences']['expandedProviders'],saved['expandedProviders'])
+            self.assertGreater(receipt['preferences']['revision'],last_revision);last_revision=receipt['preferences']['revision']
+            self.assertNotIn('paths',receipt['preferences'])
+        self.assertEqual(saved['expandedProviders'],['claude'])
+    def test_invalid_expansion_values_cannot_change_selection(self):
+        preferences.update(self.m.STATE_DIR,'expanded','claude','true')
+        p=Path(self.m.STATE_DIR)/'preferences.json';before=p.read_bytes()
+        for args in (['claude'],['claude','toggle'],['','false'],['unknown','true']):
+            with self.assertRaises(ValueError):self.m.run_action('set-expanded',args)
+        self.assertEqual(p.read_bytes(),before)

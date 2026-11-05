@@ -13,8 +13,8 @@ struct ProviderUsage:Decodable {
     var cost:Double?;var tokens:Double;var requests:Int;var output:Double;var cache:Double?;var coverage:Double?
     var sessions:Int;var unpriced:Int;var summaryIncluded:Bool?;var models:[ModelUsage];var history:[Double]
 }
-struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var note:String;var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProvider:String?}
-struct Snapshot:Decodable {var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?}
+struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var note:String;var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProviders:[String]?}
+struct Snapshot:Decodable {var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?;var preferences:PresentationPreferences?}
 func dark(_ view:NSView)->Bool {view.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua}
 func background(_ view:NSView)->NSColor {dark(view) ? NSColor(calibratedWhite:0.115,alpha:1) : NSColor(calibratedWhite:0.992,alpha:1)}
 func accent(_ id:String,_ view:NSView)->NSColor {
@@ -93,7 +93,21 @@ final class Panel:NSPanel {
     override var canBecomeKey:Bool {true}
     override func keyDown(with event:NSEvent){if event.keyCode==53{escape?()}else{super.keyDown(with:event)}}
 }
+final class ContentScrollView:NSScrollView {
+    var needsVerticalScrolling:Bool{(documentView?.frame.height ?? 0)>contentView.bounds.height+0.5}
+    func configureScrolling(){
+        hasHorizontalScroller=false;horizontalScrollElasticity = .none
+        hasVerticalScroller=needsVerticalScrolling
+        verticalScrollElasticity=needsVerticalScrolling ? .automatic : .none
+        if !needsVerticalScrolling{contentView.scroll(to:.zero);reflectScrolledClipView(contentView)}
+    }
+    override func scrollWheel(with event:NSEvent){
+        guard needsVerticalScrolling else{return}
+        super.scrollWheel(with:event)
+    }
+}
 final class DisclosureButton:NSButton {
+    override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
     var invoke:(()->Void)?;var hovered:((Bool)->Void)?;private var area:NSTrackingArea?
     init(label:String,frame:NSRect){super.init(frame:frame);title=label;isBordered=false;setButtonType(.momentaryChange);target=self;action=#selector(pressed);setAccessibilityLabel(label)}
     required init?(coder:NSCoder){fatalError()}
@@ -104,12 +118,12 @@ final class DisclosureButton:NSButton {
     override func mouseExited(with event:NSEvent){hovered?(false)}
 }
 final class DashboardView:FlippedView {
-    var data:Dashboard;var toggleProvider:((String)->Void)?;private var hoveredProvider:String?
+    var data:Dashboard;var toggleProvider:((String,Bool)->Void)?;private var hoveredProvider:String?
     private var summaryProviders:[ProviderUsage] {data.providers.filter{$0.summaryIncluded != false}}
     static func sectionHeight(_ p:ProviderUsage)->CGFloat {122+CGFloat(max(1,p.models.count))*18}
     static func providerHeight(_ p:ProviderUsage,_ d:Dashboard)->CGFloat {
         guard d.allowCollapse==true else{return sectionHeight(p)}
-        return d.expandedProvider==p.id ? 113+CGFloat(max(1,p.models.count))*18 : 56
+        return (d.expandedProviders ?? []).contains(p.id) ? 113+CGFloat(max(1,p.models.count))*18 : 56
     }
     static func chartExtra(_ d:Dashboard)->CGFloat {CGFloat(max(0,(d.providers.filter{$0.summaryIncluded != false}.count+3)/3-1))*17}
     static func summaryHeight(_ d:Dashboard)->CGFloat {d.showSummary==false ? 44 : 254+chartExtra(d)}
@@ -120,10 +134,10 @@ final class DashboardView:FlippedView {
         if data.allowCollapse==true {
             var y=Self.summaryHeight(data)
             for p in data.providers {
-                let expanded=data.expandedProvider==p.id
+                let expanded=(data.expandedProviders ?? []).contains(p.id)
                 let button=DisclosureButton(label:(expanded ? "收起 " : "展开 ")+p.name+" 明细",frame:NSRect(x:4,y:y+2,width:width-8,height:49))
                 button.setAccessibilityValue(expanded ? "已展开" : "已折叠")
-                button.invoke={[weak self] in self?.toggleProvider?(expanded ? "" : p.id)}
+                button.invoke={[weak self] in self?.toggleProvider?(p.id,!expanded)}
                 button.hovered={[weak self] over in self?.hoveredProvider=over ? p.id : nil;self?.needsDisplay=true}
                 addSubview(button);y+=Self.providerHeight(p,data)
             }
@@ -149,7 +163,7 @@ final class DashboardView:FlippedView {
         text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)
     }
     private func drawCollapsibleProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
-        let width=right-left,c=accent(p.id,self),expanded=data.expandedProvider==p.id
+        let width=right-left,c=accent(p.id,self),expanded=(data.expandedProviders ?? []).contains(p.id)
         if hoveredProvider==p.id {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.08 : 0.045).setFill();NSBezierPath(roundedRect:NSRect(x:4,y:y+2,width:bounds.width-8,height:49),xRadius:7,yRadius:7).fill()}
         c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+13,width:5,height:5)).fill()
         text(p.name,x:left+12,y:y+7,w:width-142,size:12,weight:.semibold)
@@ -332,6 +346,7 @@ enum MenuLayout {
 }
 
 final class Row:NSButton {
+    override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
     let entry:Entry;var invoke:((Entry,Row)->Void)?;var hover:((Entry,Row)->Void)?
     var expanded=false {didSet{needsDisplay=true}}
     var columnInset:CGFloat=12
@@ -395,13 +410,95 @@ final class Row:NSButton {
     }
 }
 struct Flyout {var panel:Panel;var key:String;weak var row:Row?}
+// Presentation is optimistic, but a saved preference revision wins over an older data refresh.
+struct PresentationPreferences:Decodable {
+    var revision:Int64;var visible:[String];var appearance:String;var allowCollapse:Bool;var expandedProviders:[String]
+}
+struct ActionReceipt:Decodable {var id:String;var status:String;var preferences:PresentationPreferences?}
+struct PanelInteraction {
+    enum Submission {case start,queued,ignored}
+    var source:Snapshot?;var confirmed:PresentationPreferences?;var active:[String]?;var queued:[[String]]=[]
+    static func isPreference(_ action:[String])->Bool {
+        guard let name=action.first else{return false}
+        return ["set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(name)
+    }
+    mutating func submit(_ action:[String])->Submission {
+        guard !action.isEmpty else{return .ignored}
+        guard active != nil else{active=action;return .start}
+        guard queued.count<64 else{return .ignored}
+        if !Self.isPreference(action) && (action==active || queued.contains(action)){return .ignored}
+        queued.append(action);return .queued
+    }
+    mutating func finish(_ preferences:PresentationPreferences?) {
+        if let preferences,preferences.revision >= (confirmed?.revision ?? -1){confirmed=preferences}
+        active=nil
+    }
+    mutating func next()->[String]? {
+        guard active==nil,!queued.isEmpty else{return nil}
+        let action=queued.removeFirst();active=action;return action
+    }
+    func displayed()->Snapshot? {
+        guard var value=source else{return nil}
+        var authoritative=value.preferences
+        if let confirmed,confirmed.revision > (authoritative?.revision ?? -1){authoritative=confirmed}
+        if let authoritative{Self.applySettings(authoritative,to:&value)}
+        for action in (active.map{[$0]} ?? [])+queued{Self.applyPreference(action,to:&value)}
+        return value
+    }
+    static func applySettings(_ settings:PresentationPreferences,to value:inout Snapshot) {
+        value.preferences=settings;value.appearance=settings.appearance
+        value.dashboard?.allowCollapse=settings.allowCollapse;value.dashboard?.expandedProviders=settings.expandedProviders
+        value.dashboard?.showSummary=settings.visible.contains("summary")
+        value.dashboard?.providers.removeAll{!settings.visible.contains($0.id)}
+        if let options=value.moduleOptions {
+            for option in options where option.action?.first=="set-module" {
+                guard let id=option.action?.dropFirst().first else{continue}
+                applyPreference(["set-module",id,settings.visible.contains(id) ? "true" : "false"],to:&value)
+            }
+        }
+        applyPreference(["set-collapse",settings.allowCollapse ? "true" : "false"],to:&value)
+        applyPreference(["set-appearance",settings.appearance],to:&value)
+    }
+    static func applyPreference(_ action:[String],to value:inout Snapshot){
+        guard let kind=action.first else{return}
+        if kind=="set-module",action.count==3 {
+            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.prefix(2).elementsEqual(action.prefix(2)) == true {
+                let enabled=action[2]=="true";value.moduleOptions?[i].checked=enabled
+                value.moduleOptions?[i].action=["set-module",action[1],enabled ? "false" : "true"]
+            }
+        }
+        if kind=="set-collapse",action.count==2 {
+            let enabled=action[1]=="true";value.dashboard?.allowCollapse=enabled
+            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.first=="set-collapse" {
+                value.moduleOptions?[i].checked=enabled;value.moduleOptions?[i].action=["set-collapse",enabled ? "false" : "true"]
+            }
+        }
+        if kind=="set-expanded",action.count==3 {
+            var expanded=Set(value.dashboard?.expandedProviders ?? [])
+            if action[2]=="true"{expanded.insert(action[1])}else{expanded.remove(action[1])}
+            value.dashboard?.expandedProviders=expanded.sorted()
+        }
+        if kind=="set-appearance",action.count==2 {
+            value.appearance=action[1]
+            func update(_ entries:inout [Entry]){
+                for i in entries.indices {
+                    if entries[i].action?.first=="set-appearance" {entries[i].checked=entries[i].action?.last==action[1]}
+                    update(&entries[i].children)
+                }
+            }
+            if var entries=value.moduleOptions{update(&entries);value.moduleOptions=entries}
+        }
+    }
+
+}
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
     private var rangePicker:NSPopUpButton?;private var rangeMenuOpen=false;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
-    private var timer:Timer?;private var monitors:[Any]=[];private var pendingAction:String?;private var running=false
-    private var activePreference:[String]?;private var queuedActions:[[String]]=[];private var sourceChecks:[String:Date]=[:]
+    private var timer:Timer?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
+    private var interaction=PanelInteraction();private var running:Bool{interaction.active != nil}
+    private var sourceChecks:[String:Date]=[:]
     private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private var hoverTask:DispatchWorkItem?;private var closeTask:DispatchWorkItem?
     private func setup(_ window:Panel){window.backgroundColor = .clear;window.isOpaque=false;window.hasShadow=true;window.level = .popUpMenu;window.hidesOnDeactivate=false;window.isReleasedWhenClosed=false;window.acceptsMouseMovedEvents=true;window.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.transient,.ignoresCycle];window.escape={[weak self] in self?.hide()}}
     func applicationDidFinishLaunching(_ notification:Notification){
@@ -428,7 +525,6 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     @objc private func accessibilityChanged(){if panel.isVisible{reload(force:true)}}
     private func showModuleMenu(_ event:NSEvent,in view:NSView){
-        guard !running else{return}
         rangePicker?.menu?.cancelTracking();rangeMenuOpen=false;hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0)
         managerOnly=true;scrollOffset=0;layout()
     }
@@ -451,7 +547,15 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil)}
     private func hide(){rangePicker?.menu?.cancelTracking();hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil)}
-    private func reload(force:Bool=false){guard !rangeMenuOpen else{return};let date=(try? FileManager.default.attributesOfItem(atPath:snapshotPath)[.modificationDate]) as? Date;guard force || date != modified else{return};guard let data=try? Data(contentsOf:URL(fileURLWithPath:snapshotPath)),let value=try? JSONDecoder().decode(Snapshot.self,from:data) else{return};modified=date;var current=value;if let activePreference{applyPreference(activePreference,to:&current)};for queued in queuedActions{applyPreference(queued,to:&current)};snapshot=current;layout()}
+    private func updatePresentation(){snapshot=interaction.displayed();layout()}
+    private func reload(force:Bool=false){
+        // Do not replace a button while the user is pressing it.
+        guard !rangeMenuOpen,NSEvent.pressedMouseButtons & 1 == 0 else{return}
+        let date=(try? FileManager.default.attributesOfItem(atPath:snapshotPath)[.modificationDate]) as? Date
+        guard force || date != modified else{return}
+        guard let data=try? Data(contentsOf:URL(fileURLWithPath:snapshotPath)),let value=try? JSONDecoder().decode(Snapshot.self,from:data) else{return}
+        modified=date;interaction.source=value;updatePresentation()
+    }
     private func fillRows(_ entries:[Entry],in content:NSView,y start:CGFloat,width:CGFloat,depth:Int)->CGFloat {
         while rows.count<=depth{rows.append([:])};rows[depth]=[:];var y=start
         for original in entries {var entry=original;if running,let name=entry.action?.first,["refresh","refresh-monitor","check-app-updates","set-range"].contains(name){entry.label="正在刷新…"}
@@ -469,14 +573,14 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         let body=entries.reduce(CGFloat(0)){$0+MenuLayout.rowHeight($1,width:inner,left:MenuLayout.column(entries))},contentHeight=top+body
         let height=min(contentHeight+16,screen.visibleFrame.height-16)
         let surface=Surface(frame:NSRect(x:0,y:0,width:width,height:height),glass:self.snapshot?.appearance != "solid")
-        let scroll=NSScrollView(frame:NSRect(x:8,y:8,width:inner,height:height-16));scroll.drawsBackground=false;scroll.hasVerticalScroller=contentHeight>scroll.frame.height;scroll.scrollerStyle = .overlay
+        let scroll=ContentScrollView(frame:NSRect(x:8,y:8,width:inner,height:height-16));scroll.drawsBackground=false;scroll.hasVerticalScroller=contentHeight>scroll.frame.height;scroll.scrollerStyle = .overlay
         let content=FlippedView(frame:NSRect(x:0,y:0,width:inner,height:contentHeight))
         if managerOnly {
             let heading=NSTextField(labelWithString:"主页模块");heading.font = .systemFont(ofSize:14,weight:.semibold);heading.frame=NSRect(x:12,y:7,width:inner-85,height:20);content.addSubview(heading)
             let count=entries.filter{$0.action?.first=="set-module" && $0.checked==true}.count
             let hint=NSTextField(labelWithString:"已启用 \(count) 项 · 可连续选择");hint.font = .systemFont(ofSize:10);hint.textColor = .secondaryLabelColor;hint.frame=NSRect(x:12,y:29,width:inner-24,height:15);content.addSubview(hint)
             let done=NSButton(title:"完成",target:self,action:#selector(finishModules));done.bezelStyle = .rounded;done.controlSize = .small;done.frame=NSRect(x:inner-65,y:8,width:53,height:25);content.addSubview(done)
-        } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);view.toggleProvider={[weak self] id in self?.performAction(["set-expanded",id])};content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
+        } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);view.toggleProvider={[weak self] id,expanded in self?.performAction(["set-expanded",id,expanded ? "true" : "false"])};content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
         let divider=NSBox(frame:NSRect(x:8,y:top-5,width:inner-16,height:1));divider.boxType = .separator;content.addSubview(divider)
         _=fillRows(entries,in:content,y:top,width:inner,depth:0)
         if !managerOnly,let dashboard=snapshot.dashboard,let choices=snapshot.rangeOptions {
@@ -488,11 +592,11 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             for choice in choices {
                 let option=NSMenuItem(title:choice.label,action:#selector(chooseRange(_:)),keyEquivalent:"")
                 option.target=self;option.representedObject=choice.action;option.state=choice.checked==true ? .on : .off
-                option.isEnabled = !running;menu.addItem(option)
+                option.isEnabled = true;menu.addItem(option)
             }
             picker.menu=menu;menu.delegate=self;rangePicker=picker;content.addSubview(picker)
         }
-        scroll.documentView=content;scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
+        scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
         panel.setFrame(NSRect(x:x,y:screen.visibleFrame.maxY-height-4,width:width,height:height),display:true)
         for (depth,key) in opened.enumerated(){guard rows.indices.contains(depth),let row=rows[depth][key] else{break};openFlyout(row.entry,row:row,depth:depth,checkSource:false)}
@@ -513,8 +617,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         let screen=parent.screen ?? NSScreen.main!,width=MenuLayout.flyoutWidth(entry),body=entry.children.reduce(CGFloat(0)){$0+MenuLayout.rowHeight($1,width:MenuLayout.flyoutWidth(entry)-16,left:MenuLayout.column(entry.children))}
         let height=min(body+40,screen.visibleFrame.height-16),surface=Surface(frame:NSRect(x:0,y:0,width:width,height:height),glass:self.snapshot?.appearance != "solid")
         let heading=NSTextField(labelWithString:entry.label);heading.font = .systemFont(ofSize:11,weight:.medium);heading.textColor = .secondaryLabelColor;let headingLeft=MenuLayout.column(entry.children)+8;heading.frame=NSRect(x:headingLeft,y:10,width:width-headingLeft-20,height:18);surface.content.addSubview(heading)
-        let scroll=NSScrollView(frame:NSRect(x:8,y:32,width:width-16,height:height-40));scroll.drawsBackground=false;scroll.hasVerticalScroller=body>scroll.frame.height;scroll.scrollerStyle = .overlay
-        let content=FlippedView(frame:NSRect(x:0,y:0,width:width-16,height:body));_=fillRows(entry.children,in:content,y:0,width:width-16,depth:depth+1);scroll.documentView=content;surface.content.addSubview(scroll);window.contentView=surface
+        let scroll=ContentScrollView(frame:NSRect(x:8,y:32,width:width-16,height:height-40));scroll.drawsBackground=false;scroll.hasVerticalScroller=body>scroll.frame.height;scroll.scrollerStyle = .overlay
+        let content=FlippedView(frame:NSRect(x:0,y:0,width:width-16,height:body));_=fillRows(entry.children,in:content,y:0,width:width-16,depth:depth+1);scroll.documentView=content;scroll.configureScrolling();surface.content.addSubview(scroll);window.contentView=surface
         var x=parent.frame.maxX+5;if x+width>screen.visibleFrame.maxX-4{x=parent.frame.minX-width-5}
         x=max(screen.visibleFrame.minX+4,min(x,screen.visibleFrame.maxX-width-4))
         let rect=rowRect(row),y=max(screen.visibleFrame.minY+4,min(rect.maxY+6-height,screen.visibleFrame.maxY-height-4))
@@ -554,44 +658,20 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             closeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:task)
         }
     }
-    private func applyPreference(_ action:[String],to value:inout Snapshot){
-        guard let kind=action.first else{return}
-        if kind=="set-module",action.count==3 {
-            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.prefix(2).elementsEqual(action.prefix(2)) == true {
-                let enabled=action[2]=="true";value.moduleOptions?[i].checked=enabled
-                value.moduleOptions?[i].action=["set-module",action[1],enabled ? "false" : "true"]
-            }
-        }
-        if kind=="set-collapse",action.count==2 {
-            let enabled=action[1]=="true";value.dashboard?.allowCollapse=enabled
-            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.first=="set-collapse" {
-                value.moduleOptions?[i].checked=enabled;value.moduleOptions?[i].action=["set-collapse",enabled ? "false" : "true"]
-            }
-        }
-        if kind=="set-expanded",action.count==2{value.dashboard?.expandedProvider=action[1]}
-        if kind=="set-appearance",action.count==2 {
-            value.appearance=action[1]
-            func update(_ entries:inout [Entry]){
-                for i in entries.indices {
-                    if entries[i].action?.first=="set-appearance" {entries[i].checked=entries[i].action?.last==action[1]}
-                    update(&entries[i].children)
-                }
-            }
-            if var entries=value.moduleOptions{update(&entries);value.moduleOptions=entries}
-        }
-    }
-
     private func checkAction(){
         guard let pendingAction else{return}
         let receipt=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action-receipt.json")
-        guard let data=try? Data(contentsOf:receipt),let value=try? JSONSerialization.jsonObject(with:data) as? [String:Any],value["id"] as? String==pendingAction else{return}
-        self.pendingAction=nil;activePreference=nil;running=false
-        if value["status"] as? String != "done" {
-            queuedActions=[];reload(force:true)
+        guard let data=try? Data(contentsOf:receipt),let value=try? JSONDecoder().decode(ActionReceipt.self,from:data),value.id==pendingAction else{
+            if let since=pendingSince,let active=interaction.active,PanelInteraction.isPreference(active),Date().timeIntervalSince(since)>20{abortAction()}
+            return
+        }
+        self.pendingAction=nil;pendingSince=nil;interaction.finish(value.preferences)
+        if value.status != "done" {
+            interaction.queued=[];reload(force:true)
             let alert=NSAlert();alert.messageText="操作未完成";alert.informativeText="请重新打开菜单后重试。";alert.addButton(withTitle:"好");alert.runModal();return
         }
         reload(force:true)
-        if !queuedActions.isEmpty {let next=queuedActions.removeFirst();performAction(next)}
+        if let next=interaction.next(){dispatchAction(next)}
     }
     private func activate(_ entry:Entry,row:Row,depth:Int){
         if !entry.children.isEmpty{openFlyout(entry,row:row,depth:depth);return}
@@ -604,29 +684,28 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
-        pendingAction=nil;activePreference=nil;queuedActions=[];running=false
+        pendingAction=nil;pendingSince=nil;interaction.active=nil;interaction.queued=[]
         try? FileManager.default.removeItem(at:URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json"))
         reload(force:true);NSSound.beep()
     }
     private func performAction(_ action:[String]){
-        guard !action.isEmpty else{return}
-        let preference=["set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
-        let passive=action[0]=="refresh-source"
-        if running {
-            if (preference || passive),queuedActions.count<64 {
-                if !passive || !queuedActions.contains(action) {queuedActions.append(action)}
-                if preference {if var value=snapshot{applyPreference(action,to:&value);snapshot=value};layout()}
-            }
-            return
+        switch interaction.submit(action) {
+        case .start:dispatchAction(action)
+        case .queued:updatePresentation()
+        case .ignored:break
         }
-        if preference {activePreference=action;if var value=snapshot{applyPreference(action,to:&value);snapshot=value}}
-        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0]);if !keepOpen{hide()};running=true;if keepOpen && !passive{layout()}
+    }
+    private func dispatchAction(_ action:[String]){
+        let passive=action[0]=="refresh-source"
+        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
+        if !keepOpen{hide()};if keepOpen && !passive{updatePresentation()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
-        do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id
+        do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id;pendingSince=Date()
             var url=URLComponents();url.scheme="swiftbar";url.host="refreshplugin";url.queryItems=[URLQueryItem(name:"name",value:URL(fileURLWithPath:pluginPath).lastPathComponent)]
             if !NSWorkspace.shared.open(url.url!){abortAction()}
         }catch{abortAction()}
     }
 }
+// Application entry point. The interaction tests compile the declarations above without launching the app.
 UserDefaults.standard.setVolatileDomain(["AppleAccentColor":4,"AppleAquaColorVariant":1],forName:UserDefaults.argumentDomain)
 let app=NSApplication.shared;app.setActivationPolicy(.accessory);let delegate=App();app.delegate=delegate;app.run()
