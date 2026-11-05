@@ -82,6 +82,7 @@ class ModuleTests(unittest.TestCase):
         with patch.object(self.m,'PANEL_APP',str(app)):
             result=self.m.render({'healthz':{'version':'test'}})
         self.assertIn('主页模块…',result)
+        self.assertIn('自动检测',result);self.assertIn('detect-modules',result)
         for label in ('DeepSeek 余额','OpenCodex 管理','Komari 监控','刷新数据'):self.assertNotIn(label,result)
     def test_native_manager_request_switches_existing_helper_mode(self):
         app=Path(self.temp.name)/'Panel.app';app.mkdir()

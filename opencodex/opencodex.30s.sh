@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.0.1</xbar.version>
+# <xbar.version>5.0.2</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -2297,7 +2297,8 @@ def resource_panel_entries(data):
 def render(data):
     dashboard=dashboard_payload(data)
     options=module_options()
-    native_rows=[item('主页模块…',sfimage='square.grid.2x2',**act('panel-modules'))]
+    native_rows=[item('主页模块…',sfimage='square.grid.2x2',**act('panel-modules')),
+                 item('自动检测',sfimage='sparkle.magnifyingglass',**act('detect-modules'))]
     if os.environ.get("OCX_NATIVE_LAYOUT") == "1" or not os.path.isdir(PANEL_APP):
         overview=[]
         if module_enabled('opencodex') and selected_range()=='today' and ((data.get('usage_today') or {}).get('error') or data.get('usage_today_error')):
