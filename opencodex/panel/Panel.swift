@@ -13,7 +13,7 @@ struct ProviderUsage:Decodable {
     var cost:Double?;var tokens:Double;var requests:Int;var output:Double;var cache:Double?;var coverage:Double?
     var sessions:Int;var unpriced:Int;var summaryIncluded:Bool?;var models:[ModelUsage];var history:[Double]
 }
-struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var note:String;var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?}
+struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var note:String;var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProvider:String?}
 struct Snapshot:Decodable {var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?}
 func dark(_ view:NSView)->Bool {view.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua}
 func background(_ view:NSView)->NSColor {dark(view) ? NSColor(calibratedWhite:0.115,alpha:1) : NSColor(calibratedWhite:0.992,alpha:1)}
@@ -93,14 +93,43 @@ final class Panel:NSPanel {
     override var canBecomeKey:Bool {true}
     override func keyDown(with event:NSEvent){if event.keyCode==53{escape?()}else{super.keyDown(with:event)}}
 }
+final class DisclosureButton:NSButton {
+    var invoke:(()->Void)?;var hovered:((Bool)->Void)?;private var area:NSTrackingArea?
+    init(label:String,frame:NSRect){super.init(frame:frame);title=label;isBordered=false;setButtonType(.momentaryChange);target=self;action=#selector(pressed);setAccessibilityLabel(label)}
+    required init?(coder:NSCoder){fatalError()}
+    @objc private func pressed(){invoke?()}
+    override func draw(_ dirtyRect:NSRect){}
+    override func updateTrackingAreas(){super.updateTrackingAreas();if let area{removeTrackingArea(area)};area=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(area!)}
+    override func mouseEntered(with event:NSEvent){hovered?(true)}
+    override func mouseExited(with event:NSEvent){hovered?(false)}
+}
 final class DashboardView:FlippedView {
-    var data:Dashboard
+    var data:Dashboard;var toggleProvider:((String)->Void)?;private var hoveredProvider:String?
     private var summaryProviders:[ProviderUsage] {data.providers.filter{$0.summaryIncluded != false}}
     static func sectionHeight(_ p:ProviderUsage)->CGFloat {122+CGFloat(max(1,p.models.count))*18}
+    static func providerHeight(_ p:ProviderUsage,_ d:Dashboard)->CGFloat {
+        guard d.allowCollapse==true else{return sectionHeight(p)}
+        return d.expandedProvider==p.id ? 113+CGFloat(max(1,p.models.count))*18 : 56
+    }
     static func chartExtra(_ d:Dashboard)->CGFloat {CGFloat(max(0,(d.providers.filter{$0.summaryIncluded != false}.count+3)/3-1))*17}
     static func summaryHeight(_ d:Dashboard)->CGFloat {d.showSummary==false ? 44 : 254+chartExtra(d)}
-    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+d.providers.reduce(0){$0+sectionHeight($1)}+22}
-    init(_ data:Dashboard,width:CGFloat){self.data=data;super.init(frame:NSRect(x:0,y:0,width:width,height:Self.height(data)));setAccessibilityElement(false);setAccessibilityRole(.group);setAccessibilityLabel("Summary. "+data.providers.map{"\($0.name): \(money($0.cost)), \(tokens($0.tokens)) Token, \($0.requests) 次请求"}.joined(separator:". "))}
+    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+d.providers.reduce(0){$0+providerHeight($1,d)}+22}
+    init(_ data:Dashboard,width:CGFloat){
+        self.data=data;super.init(frame:NSRect(x:0,y:0,width:width,height:Self.height(data)))
+        setAccessibilityElement(true);setAccessibilityRole(.group);setAccessibilityLabel("用量概览")
+        if data.allowCollapse==true {
+            var y=Self.summaryHeight(data)
+            for p in data.providers {
+                let expanded=data.expandedProvider==p.id
+                let button=DisclosureButton(label:(expanded ? "收起 " : "展开 ")+p.name+" 明细",frame:NSRect(x:4,y:y+2,width:width-8,height:49))
+                button.setAccessibilityValue(expanded ? "已展开" : "已折叠")
+                button.invoke={[weak self] in self?.toggleProvider?(expanded ? "" : p.id)}
+                button.hovered={[weak self] over in self?.hoveredProvider=over ? p.id : nil;self?.needsDisplay=true}
+                addSubview(button);y+=Self.providerHeight(p,data)
+            }
+        }
+    }
+
     required init?(coder:NSCoder){fatalError()}
     override func viewDidChangeEffectiveAppearance(){super.viewDidChangeEffectiveAppearance();needsDisplay=true}
     override func draw(_ dirtyRect:NSRect){
@@ -116,8 +145,40 @@ final class DashboardView:FlippedView {
         drawSummaryChart(left:left,right:right)
         }
         var y:CGFloat=Self.summaryHeight(data)
-        for p in data.providers {drawProvider(p,y:y,left:left,right:right);y+=Self.sectionHeight(p)}
+        for p in data.providers {if data.allowCollapse==true{drawCollapsibleProvider(p,y:y,left:left,right:right)}else{drawProvider(p,y:y,left:left,right:right)};y+=Self.providerHeight(p,data)}
         text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)
+    }
+    private func drawCollapsibleProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
+        let width=right-left,c=accent(p.id,self),expanded=data.expandedProvider==p.id
+        if hoveredProvider==p.id {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.08 : 0.045).setFill();NSBezierPath(roundedRect:NSRect(x:4,y:y+2,width:bounds.width-8,height:49),xRadius:7,yRadius:7).fill()}
+        c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+13,width:5,height:5)).fill()
+        text(p.name,x:left+12,y:y+7,w:width-142,size:12,weight:.semibold)
+        let status=p.available ? p.status : (p.status=="运行正常" ? "数据暂不可用" : p.status)
+        text(status,x:right-120,y:y+9,w:103,size:9,color:status=="运行正常" || status=="已同步" ? statusGreen(self) : .secondaryLabelColor,align:.right)
+        let arrow=NSBezierPath(),x=right-5,cy=y+15
+        arrow.move(to:NSPoint(x:x-3,y:cy-3));arrow.line(to:NSPoint(x:expanded ? x : x+0.5,y:cy));arrow.line(to:NSPoint(x:expanded ? x+3 : x-3,y:expanded ? cy-3 : cy+3))
+        arrow.lineWidth=1.2;arrow.lineCapStyle = .round;arrow.lineJoinStyle = .round;NSColor.secondaryLabelColor.setStroke();arrow.stroke()
+        text(p.available ? money(p.cost) : "—",x:left+12,y:y+29,w:100,size:14,weight:.medium,numeric:true)
+        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+120,y:y+30,w:width-120,size:12,weight:.medium,align:.right,numeric:true)
+        if expanded {
+            text(p.subtitle,x:left+12,y:y+52,w:width-12,size:9,color:.secondaryLabelColor)
+            let cache=p.cache.map{String(format:"%.1f%% 缓存",$0*100)} ?? "缓存 —"
+            text(p.available ? "\(p.requests) 请求 · \(cache)" : p.status,x:left+12,y:y+69,w:width-12,size:10,color:.secondaryLabelColor)
+            var extra=p.available ? "输出 \(tokens(p.output))" : "等待可用数据"
+            if p.id != "opencodex",p.available{extra += " · \(p.sessions) 会话"}
+            if p.id=="opencodex",p.available,let coverage=p.coverage{extra += String(format:" · 计费覆盖 %.0f%%",coverage*100)}
+            text(extra,x:left+12,y:y+84,w:width-12,size:9.5,color:.secondaryLabelColor)
+            if p.models.isEmpty{text(p.available ? "此时段暂无模型调用" : "模型明细暂不可用",x:left+12,y:y+106,w:width-12,size:10,color:.secondaryLabelColor)}
+            for (i,m) in p.models.enumerated(){
+                let top=y+106+CGFloat(i)*18
+                text(modelName(m.name),x:left+12,y:top,w:width-132,size:10.5)
+                text(tokens(m.tokens),x:right-115,y:top,w:72,size:10.5,align:.right,numeric:true)
+                text(share(m.share),x:right-38,y:top,w:38,size:10,color:.secondaryLabelColor,align:.right,numeric:true)
+                NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();NSRect(x:left+12,y:top+14,width:width-12,height:1.5).fill()
+                c.withAlphaComponent(0.55).setFill();NSRect(x:left+12,y:top+14,width:(width-12)*CGFloat(m.share),height:1.5).fill()
+            }
+        }
+        line(NSPoint(x:left+12,y:y+Self.providerHeight(p,data)-1),NSPoint(x:right,y:y+Self.providerHeight(p,data)-1),color:NSColor.separatorColor.withAlphaComponent(0.45))
     }
     private func drawProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
         let width=right-left,c=accent(p.id,self)
@@ -415,7 +476,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             let count=entries.filter{$0.action?.first=="set-module" && $0.checked==true}.count
             let hint=NSTextField(labelWithString:"已启用 \(count) 项 · 可连续选择");hint.font = .systemFont(ofSize:10);hint.textColor = .secondaryLabelColor;hint.frame=NSRect(x:12,y:29,width:inner-24,height:15);content.addSubview(hint)
             let done=NSButton(title:"完成",target:self,action:#selector(finishModules));done.bezelStyle = .rounded;done.controlSize = .small;done.frame=NSRect(x:inner-65,y:8,width:53,height:25);content.addSubview(done)
-        } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
+        } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);view.toggleProvider={[weak self] id in self?.performAction(["set-expanded",id])};content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
         let divider=NSBox(frame:NSRect(x:8,y:top-5,width:inner-16,height:1));divider.boxType = .separator;content.addSubview(divider)
         _=fillRows(entries,in:content,y:top,width:inner,depth:0)
         if !managerOnly,let dashboard=snapshot.dashboard,let choices=snapshot.rangeOptions {
@@ -501,6 +562,13 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
                 value.moduleOptions?[i].action=["set-module",action[1],enabled ? "false" : "true"]
             }
         }
+        if kind=="set-collapse",action.count==2 {
+            let enabled=action[1]=="true";value.dashboard?.allowCollapse=enabled
+            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.first=="set-collapse" {
+                value.moduleOptions?[i].checked=enabled;value.moduleOptions?[i].action=["set-collapse",enabled ? "false" : "true"]
+            }
+        }
+        if kind=="set-expanded",action.count==2{value.dashboard?.expandedProvider=action[1]}
         if kind=="set-appearance",action.count==2 {
             value.appearance=action[1]
             func update(_ entries:inout [Entry]){
@@ -542,7 +610,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func performAction(_ action:[String]){
         guard !action.isEmpty else{return}
-        let preference=["set-module","set-appearance","reset-modules","detect-modules"].contains(action[0])
+        let preference=["set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
         let passive=action[0]=="refresh-source"
         if running {
             if (preference || passive),queuedActions.count<64 {
@@ -552,7 +620,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             return
         }
         if preference {activePreference=action;if var value=snapshot{applyPreference(action,to:&value);snapshot=value}}
-        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","detect-modules"].contains(action[0]);if !keepOpen{hide()};running=true;if keepOpen && !passive{layout()}
+        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0]);if !keepOpen{hide()};running=true;if keepOpen && !passive{layout()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
         do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id
             var url=URLComponents();url.scheme="swiftbar";url.host="refreshplugin";url.queryItems=[URLQueryItem(name:"name",value:URL(fileURLWithPath:pluginPath).lastPathComponent)]

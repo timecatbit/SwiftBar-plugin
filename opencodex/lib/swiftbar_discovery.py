@@ -61,15 +61,13 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     return [key for key,label,group in preferences.MODULES if key in found]
 
 
-def initialize(directory, detected, add=False):
-    """Existing choices survive upgrades. Explicit rescan only adds discovered modules."""
+def initialize(directory, detected):
+    """Only first installs are initialized. Existing choices survive upgrades."""
     root=Path(directory);target=root/'preferences.json'
-    if target.exists() and not add:return False
+    if target.exists():return False
     current=preferences.read(directory)
-    chosen=set(current['visible']) if add else set()
-    chosen.update(detected)
+    chosen=set(detected)
     current['visible']=[key for key,label,group in preferences.MODULES if key in chosen]
-    if add:preferences.write(directory,current);return True
     root.mkdir(parents=True,exist_ok=True,mode=0o700)
     import tempfile
     fd,temporary=tempfile.mkstemp(prefix='.discovery-',dir=root)
@@ -79,3 +77,11 @@ def initialize(directory, detected, add=False):
         except FileExistsError:return False  # Don't overwrite a concurrent manual choice.
         return True
     finally:os.unlink(temporary)
+
+
+def replace_selection(directory, detected):
+    """Call only after the user confirms the concrete detected selection."""
+    current=preferences.read(directory);chosen=set(detected)
+    current['visible']=[key for key,label,group in preferences.MODULES if key in chosen]
+    if current.get('expandedProvider') not in chosen:current['expandedProvider']=''
+    preferences.write(directory,current)

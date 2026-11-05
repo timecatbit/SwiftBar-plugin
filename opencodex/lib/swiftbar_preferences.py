@@ -27,7 +27,7 @@ USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbu
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProvider': ''}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
@@ -37,6 +37,8 @@ def read(directory):
             defaults['visible'] = list(dict.fromkeys(v for v in visible if v in KNOWN))
         if value.get('appearance') in ('glass', 'solid'):
             defaults['appearance'] = value['appearance']
+        if isinstance(value.get('allowCollapse'),bool):defaults['allowCollapse']=value['allowCollapse']
+        if value.get('expandedProvider') in USAGE or value.get('expandedProvider')=='':defaults['expandedProvider']=value['expandedProvider']
         paths = value.get('paths')
         if isinstance(paths, dict):
             defaults['paths'] = {k: v for k, v in paths.items() if k in USAGE and isinstance(v, str) and v}
@@ -70,9 +72,16 @@ def update(directory, kind, key=None, value=None):
         if key not in ('glass', 'solid'):
             raise ValueError('invalid appearance')
         current['appearance'] = key
+    elif kind == 'collapse':
+        if key not in ('true','false'):raise ValueError('invalid collapse setting')
+        current['allowCollapse']=key=='true'
+    elif kind == 'expanded':
+        if key not in USAGE and key!='':raise ValueError('invalid provider')
+        current['expandedProvider']=key
     elif kind == 'reset':
         current['visible'] = list(DEFAULT_VISIBLE)
         current['appearance'] = 'glass'
+        current['allowCollapse']=True;current['expandedProvider']=''
     elif kind == 'path':
         if key not in USAGE or not value or not Path(value).expanduser().exists():
             raise ValueError('invalid data directory')

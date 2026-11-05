@@ -50,8 +50,8 @@ class DiscoveryTests(unittest.TestCase):
         preferences.write(state,original);before=(state/'preferences.json').read_bytes()
         self.assertFalse(discovery.initialize(state,['summary','claude']))
         self.assertEqual((state/'preferences.json').read_bytes(),before)
-        discovery.initialize(state,['claude'],add=True)
-        after=preferences.read(state);self.assertEqual(after['visible'],['summary','claude']);self.assertEqual(after['appearance'],'solid');self.assertEqual(after['paths'],original['paths'])
+        discovery.replace_selection(state,['claude'])
+        after=preferences.read(state);self.assertEqual(after['visible'],['claude']);self.assertEqual(after['appearance'],'solid');self.assertEqual(after['paths'],original['paths'])
     def test_first_install_preferences_are_private_and_only_detected(self):
         state=self.home/'state';self.assertTrue(discovery.initialize(state,['summary','workbuddy','updates']))
         self.assertEqual(preferences.read(state)['visible'],['summary','workbuddy','updates'])

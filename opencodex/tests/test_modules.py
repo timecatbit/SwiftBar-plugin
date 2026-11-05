@@ -140,3 +140,59 @@ class ModuleTests(unittest.TestCase):
         with patch.object(self.m,'external_loaders',return_value={'grok':loader}),patch.object(self.m,'ocx_configured',return_value=False),patch.object(self.m,'notify_app_updates'),patch.object(self.m,'refresh_swiftbar') as refresh:
             self.m.background_refresh()
         loader.assert_called_once();refresh.assert_called_once()
+
+    def test_fold_preferences_persist_without_changing_usage(self):
+        original=self.m.dashboard_payload({})
+        preferences.update(self.m.STATE_DIR,'expanded','claude')
+        preferences.update(self.m.STATE_DIR,'collapse','false')
+        folded=self.m.dashboard_payload({})
+        self.assertEqual(folded['providers'],original['providers'])
+        self.assertFalse(folded['allowCollapse']);self.assertEqual(folded['expandedProvider'],'claude')
+        preferences.update(self.m.STATE_DIR,'collapse','true')
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProvider'],'claude')
+        with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'expanded','komari')
+        with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'collapse','maybe')
+        preferences.update(self.m.STATE_DIR,'reset')
+        self.assertTrue(preferences.read(self.m.STATE_DIR)['allowCollapse'])
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProvider'],'')
+    def test_only_visible_usage_headers_can_expand(self):
+        snapshot={'schema':1,'dashboard':{'allowCollapse':True,'providers':[{'id':'claude'}]},'entries':[],'moduleOptions':self.m.module_options()}
+        self.m.write_json_cache(self.m.cache_path('panel-view'),snapshot)
+        for i,action in enumerate((['set-expanded','claude'],['set-expanded',''],['set-expanded','codex'],['set-expanded','komari'],['set-collapse','true'],['set-collapse','false'])):
+            self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':str(i),'action':action,'createdAt':self.m.time.time()})
+            with patch.object(self.m,'run_action') as run:self.m.consume_panel_action()
+            if i in (2,3):run.assert_not_called()
+            else:run.assert_called_once_with(action[0],action[1:])
+    def test_detection_cancel_preserves_preferences_and_does_not_refresh(self):
+        preferences.update(self.m.STATE_DIR,'appearance','solid')
+        target=Path(self.m.STATE_DIR)/'preferences.json';before=target.read_bytes()
+        with patch.object(self.m,'detected_modules',return_value=['summary','codex','updates']),patch.object(self.m,'confirm',return_value=False) as confirm,patch.object(self.m,'schedule_background_refresh') as refresh:
+            self.m.run_action('detect-modules',[])
+        self.assertEqual(target.read_bytes(),before);refresh.assert_not_called()
+        message,detail=confirm.call_args.args
+        self.assertIn('覆盖当前模块选择',message);self.assertIn('将启用：Codex 本机用量',detail)
+        self.assertIn('将取消：OpenCodex',detail);self.assertEqual(confirm.call_args.kwargs['accept'],'覆盖当前选项')
+    def test_detection_explicit_confirmation_replaces_selection_only(self):
+        preferences.update(self.m.STATE_DIR,'appearance','solid')
+        preferences.update(self.m.STATE_DIR,'expanded','claude')
+        preferences.update(self.m.STATE_DIR,'collapse','false')
+        before=preferences.read(self.m.STATE_DIR)
+        with patch.object(self.m,'detected_modules',return_value=['summary','codex','updates']),patch.object(self.m,'confirm',return_value=True),patch.object(self.m,'schedule_background_refresh') as refresh:
+            self.m.run_action('detect-modules',[])
+        after=preferences.read(self.m.STATE_DIR)
+        self.assertEqual(after['visible'],['summary','codex','updates']);refresh.assert_called_once()
+        self.assertEqual(after['appearance'],before['appearance']);self.assertEqual(after['paths'],before['paths'])
+        self.assertFalse(after['allowCollapse']);self.assertEqual(after['expandedProvider'],'')
+    def test_confirmation_is_cancel_by_default(self):
+        response=types.SimpleNamespace(returncode=0,stdout='button returned:取消')
+        with patch.object(self.m,'applescript',return_value=response) as dialog:
+            self.assertFalse(self.m.confirm('覆盖?',accept='覆盖当前选项'))
+        self.assertIn('default button "取消"',dialog.call_args.args[0])
+        response.stdout='button returned:覆盖当前选项'
+        with patch.object(self.m,'applescript',return_value=response):self.assertTrue(self.m.confirm('覆盖?',accept='覆盖当前选项'))
+    def test_discovery_help_is_hoverable_and_fallback_menu_renders(self):
+        lines=self.m.detection_menu_lines()
+        self.assertNotIn('param1=',lines[0]);self.assertIn('自动检测',lines[0])
+        self.assertTrue(any('确认后覆盖当前模块选择' in line for line in lines))
+        self.assertTrue(any(line.startswith('--开始检测') and 'detect-modules' in line for line in lines))
+        self.assertIn('不读取对话正文', '\n'.join(self.m.module_menu_lines()))
