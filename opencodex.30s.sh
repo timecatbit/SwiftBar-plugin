@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.5.3</xbar.version>
+# <xbar.version>5.5.4</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -1889,7 +1889,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.5.3',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.5.4',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2154,7 +2154,12 @@ def configure_connection(key,clear=False):
 
 
 def module_options():
-    settings=view_settings();connections=module_connections();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
+    settings=view_settings();connections=module_connections()
+    settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
+    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
+    options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},
+             {'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows},
+             {'label':'','separator':True,'children':[]}];group=None
     for key,label,category in preferences.MODULES:
         if category!=group:
             options.append({'label':catalog.GROUP_LABELS.get(category,category),'section':True,'children':[]});group=category
@@ -2163,10 +2168,6 @@ def module_options():
         row={'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':connection.get('children',[])}
         if connection.get('value'):row['value']=connection['value']
         options.append(row)
-    options.append({'label':'','separator':True,'children':[]})
-    settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
-    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
-    options.append({'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows})
     return options
 
 
