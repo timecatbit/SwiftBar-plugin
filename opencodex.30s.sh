@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.5.1</xbar.version>
+# <xbar.version>5.5.2</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -999,8 +999,8 @@ UPDATE_LINKS = {'opencodex': RELEASES_URL, 'claude': 'https://claude.ai/download
                 'chatgpt': 'https://chatgpt.com/download',
                 'claude-code': 'https://github.com/anthropics/claude-code/releases'}
 UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT', 'claude-code':'Claude Code'}
-# Only Harness selections control application updates. Subscription/API choices
-# must not opt a user into unrelated desktop or command-line update checks.
+# Harness selections control application updates, with one explicit exception:
+# a configured OpenCodex also checks ChatGPT. Subscription/API choices do not opt in.
 HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude-code', 'codex':'chatgpt',
                    'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'gemini':'gemini'}
 MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
@@ -1012,6 +1012,7 @@ UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
 
 def selected_update_ids():
     visible=set(view_settings()['visible'])
+    if ocx_configured():visible.add('codex')
     return [HARNESS_UPDATES[key] for key in preferences.USAGE if key in visible]
 
 def live_app_update_ids():
@@ -1283,7 +1284,8 @@ def app_update_lines(data):
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
     lines.append(item('选择 Harness…',level=1,sfimage='square.grid.2x2',**act('panel-modules')))
-    lines.append(item('仅跟随主页模块中勾选的 Harness',level=1,color=MUTED,size=10))
+    hint='按勾选检查 · OpenCodex 联动 ChatGPT' if ocx_configured() else '仅跟随主页模块中勾选的 Harness'
+    lines.append(item(hint,level=1,color=MUTED,size=10))
     if any(r['id']=='opencodex' for r in rows):lines.append(item('OpenCodex 每小时自动检查并更新',level=1,color=MUTED,size=10))
     if any(not r.get('manual') and r['id']!='opencodex' for r in rows):lines.append(item('其他已接入应用每 6 小时检查 · 仅提醒',level=1,color=MUTED,size=10))
     return lines
@@ -1888,7 +1890,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.5.1',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.5.2',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 

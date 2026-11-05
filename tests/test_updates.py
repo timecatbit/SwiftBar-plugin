@@ -8,6 +8,7 @@ class UpdateTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OS_APPEARANCE':'Dark','OCX_CACHE_DIR':self.tmp.name,'SWIFTBAR_PLUGIN_DATA_PATH':self.tmp.name,'OCX_PLUGIN_PATH':str(SOURCE.resolve())});env.start();self.addCleanup(env.stop)
   self.m=types.ModuleType('updates_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  configured=patch.object(self.m,'ocx_configured',return_value=False);configured.start();self.addCleanup(configured.stop)
  def row(self,version='2.1.318'):
   return {'id':'claude-code','name':'Claude Code','latest':version,'current':'2.1.308','available':True,'checkedAt':time.time()}
  def test_numeric_versions_and_unknown_values(self):
@@ -60,6 +61,42 @@ class UpdateTests(unittest.TestCase):
  def test_default_updates_follow_only_selected_harnesses(self):
   self.assertEqual(self.m.selected_update_ids(),['opencodex','claude-code'])
   self.assertEqual([r['id'] for r in self.m.update_rows({})],['opencodex','claude-code'])
+ def test_configured_opencodex_also_checks_chatgpt_without_changing_home_selection(self):
+  self.select('claude')
+  before=self.m.preferences.read(self.m.STATE_DIR)
+  with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'app_info',return_value={}),patch.object(self.m,'app_update_probe',side_effect=lambda key:dict(self.row(),id=key,href=self.m.UPDATE_LINKS[key],status='有新版本')) as probe:
+   self.assertEqual(self.m.selected_update_ids(),['claude-code','chatgpt'])
+   self.m.app_updates_cached()
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude-code','chatgpt'])
+   self.assertNotIn('badge',self.m.external_loaders())
+   self.assertIn('OpenCodex 联动 ChatGPT','\n'.join(self.m.app_update_lines({})))
+  self.assertEqual(self.m.preferences.read(self.m.STATE_DIR),before)
+ def test_configured_opencodex_adds_chatgpt_once_even_with_no_selected_harness(self):
+  with patch.object(self.m,'ocx_configured',return_value=True):
+   for selected in ((),('codex',)):
+    self.select(*selected)
+    self.assertEqual(self.m.selected_update_ids(),['chatgpt'])
+    with patch.object(self.m,'app_info',return_value={}):
+     self.assertEqual([r['id'] for r in self.m.update_rows({})],['chatgpt'])
+ def test_opencodex_presence_changes_invalidate_cache_and_remove_unselected_chatgpt_alerts(self):
+  self.select('claude')
+  with patch.object(self.m,'ocx_configured',return_value=False) as configured,patch.object(self.m,'app_update_probe',side_effect=lambda key:dict(self.row(),id=key,href='https://example.test',status='有新版本')) as probe:
+   self.m.app_updates_cached()
+   configured.return_value=True
+   self.assertEqual(self.m.read_cache('app_updates'),{})
+   self.m.app_updates_cached()
+   self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude-code','claude-code','chatgpt'])
+   payload=self.m.read_cache('app_updates')['payload']
+   linked=[r for r in payload['apps'] if r['id']=='chatgpt']
+   with patch.object(self.m,'send_update_notification',return_value=True) as send:
+    self.m.notify_app_updates(linked);send.assert_called_once()
+   configured.return_value=False
+   self.assertEqual(self.m.read_cache('app_updates'),{})
+   rows=self.m.update_rows({'app_updates':payload})
+   self.assertEqual([r['id'] for r in rows],['claude-code'])
+   self.assertEqual(self.m.update_attention_count(rows),1)
+   with patch.object(self.m,'send_update_notification') as send:
+    self.m.notify_app_updates([dict(linked[0],latest='99.0.0')]);send.assert_not_called()
  def test_subscription_and_api_choices_do_not_select_app_updates(self):
   self.select('chatgpt','claude-subscription','deepseek','gemini-api')
   with patch.object(self.m,'app_update_probe') as probe,patch.object(self.m,'update_status_cached') as proxy:
@@ -89,9 +126,10 @@ class UpdateTests(unittest.TestCase):
   send.assert_not_called()
  def test_turning_off_update_module_stops_checks_and_notifications(self):
   self.select('claude',updates=False)
-  with patch.object(self.m,'app_update_probe') as probe,patch.object(self.m,'send_update_notification') as send:
-   self.m.app_updates_cached();self.m.notify_app_updates([self.row()])
-  probe.assert_not_called();send.assert_not_called();self.assertNotIn('app_updates',self.m.external_loaders())
+  with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'app_update_probe') as probe,patch.object(self.m,'send_update_notification') as send:
+   self.m.app_updates_cached();self.m.notify_app_updates([self.row(),dict(self.row(),id='chatgpt')])
+   self.assertNotIn('app_updates',self.m.external_loaders())
+  probe.assert_not_called();send.assert_not_called()
  def test_selected_sources_without_auto_check_have_honest_official_entries(self):
   self.select('opencode','gemini')
   with patch.object(self.m,'app_update_probe') as probe:

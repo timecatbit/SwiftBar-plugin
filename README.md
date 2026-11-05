@@ -33,7 +33,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | MiniMax 订阅 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
 | ChatGPT / Claude / MiniMax / Gemini / Kimi API | 识别已有 API 密钥配置或引用用户选择的密钥文件；本版仅提供官网账单入口，未接入余额自动查询 |
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
-| 应用更新 | 仅跟随已勾选的 Harness；OpenCodex 自动更新，Claude Code、ChatGPT 检测后提醒；其他来源提供官网入口 |
+| 应用更新 | 跟随已勾选的 Harness；已配置 OpenCodex 时也检查 ChatGPT。OpenCodex 自动更新，其他应用仅提醒或提供官网入口 |
 
 订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块选择与连接设置合并在同一列表，分类与主页一致。
 
@@ -128,7 +128,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 按系统时区统计，可通过 `OCX_TIMEZONE` 覆盖。周从周一开始；近 24 小时为滚动窗口，近 7/30 天含当天。
 - 本机日志只索引用量元数据，不保存对话正文；数据库只读，增量索引和设置仅当前用户可读。余额和订阅额度不加入费用汇总。
 - ChatGPT 额度通过客户端已有的 ChatGPT 登录查询，不自动登录、不调用模型；API-key-only 登录不能提供该订阅额度。此模块不声称覆盖 ChatGPT 网页所有聊天限额。
-- 应用更新只跟随 Harness 分组的勾选：OpenCodex 对应自动更新，Claude Code 对应命令行客户端，ChatGPT 本机用量对应 ChatGPT 桌面客户端。订阅、API 和本机仅安装但未选中的应用不会触发检查或提醒；取消勾选立即移除其更新条目和数量。
+- 应用更新跟随 Harness 分组的勾选：OpenCodex 对应自动更新，Claude Code 对应命令行客户端，ChatGPT 本机用量对应 ChatGPT 桌面客户端。另有一项联动：已配置 OpenCodex 时，无论其主页模块是否勾选，都会把 ChatGPT 纳入更新检查；不改变主页勾选。没有 OpenCodex 配置时只按 Harness 勾选，订阅/API 勾选不触发应用更新。移出检查范围的应用立即移除其更新条目和数量。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 
 接口与格式依据：[Apple 原生玻璃](https://developer.apple.com/documentation/appkit/nsglasseffectview)、[Codex App Server](https://learn.chatgpt.com/docs/app-server)、[DeepSeek 余额](https://api-docs.deepseek.com/api/get-user-balance/)、[DeepSeek Harness 存储](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/session/session-persistence-jsonl)、[OpenCode 数据目录](https://opencode.ai/docs/troubleshooting/)、[Gemini 会话格式](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingTypes.ts)、[xAI 账单接口](https://docs.x.ai/developers/rest-api-reference/management/billing)、[MiniMax 官方额度解析](https://github.com/MiniMax-AI/cli/blob/main/src/utils/quota.ts)。
