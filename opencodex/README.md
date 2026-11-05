@@ -26,8 +26,8 @@ SwiftBar 菜单栏插件，以原生 AppKit 面板汇总 OpenCodex 和本机 Cla
 克隆仓库并进入 `opencodex/` 插件目录：
 
 ```sh
-git clone https://github.com/timecatbit/swiftbar-token-monitor.git
-cd swiftbar-token-monitor/opencodex
+git clone https://github.com/timecatbit/SwiftBar-plugin.git
+cd SwiftBar-plugin/opencodex
 cp config.example.sh config.local.sh
 # 编辑 config.local.sh，填写自己的 Komari 地址。
 # 不使用 Komari 时，删除或注释该配置行。

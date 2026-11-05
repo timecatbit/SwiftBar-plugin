@@ -6,7 +6,7 @@
 - 侧栏宽度自适应，当前主要栏目为 224–248pt。
 - 对齐图标与无图标行，恢复分组分隔线；更新时间改为两列。
 - 减少侧栏里的重复标题和重复更新时间。
-- 建立独立维护仓库 `timecatbit/swiftbar-token-monitor`，插件源码位于 `opencodex/` 子目录，补齐构建、安装、测试与 CI；个人 Komari 地址改由未跟踪的本机配置提供。
+- 建立独立维护仓库 `timecatbit/SwiftBar-plugin`，插件源码位于 `opencodex/` 子目录，补齐构建、安装、测试与 CI；个人 Komari 地址改由未跟踪的本机配置提供。
 
 ## 4.10.1
 
