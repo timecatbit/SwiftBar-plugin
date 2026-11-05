@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import swiftbar_accounts as accounts
 import swiftbar_preferences as preferences
+from swiftbar_config import monitor_url
 
 
 def read_object(path):
@@ -57,7 +58,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
     if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
     if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
-    if komari_url:found.add('komari')
+    if monitor_url(komari_url):found.add('komari')
     return [key for key,label,group in preferences.MODULES if key in found]
 
 

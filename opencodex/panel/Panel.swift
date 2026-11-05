@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Darwin
 
 struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
@@ -339,6 +340,17 @@ enum MenuLayout {
         }
         return min(296,max(224,ceil(needed/8)*8))
     }
+    // Prefer the same side as the previous level; never bounce back over the root if there is room.
+    static func flyoutX(parent:NSRect,ancestor:NSRect?,width:CGFloat,screen:NSRect)->CGFloat {
+        let left=parent.minX-width-5,right=parent.maxX+5
+        let preferLeft=ancestor.map{parent.minX<$0.minX} ?? false
+        let candidates=preferLeft ? [left,right] : [right,left]
+        if let fits=candidates.first(where:{$0>=screen.minX+4 && $0+width<=screen.maxX-4}){return fits}
+        return max(screen.minX+4,min(candidates[0],screen.maxX-width-4))
+    }
+    static func topmostIndex(at point:NSPoint,frames:[NSRect])->Int? {
+        frames.indices.reversed().first{frames[$0].contains(point)}
+    }
     static func draw(_ value:String,in rect:NSRect,font:NSFont,color:NSColor,alignment:NSTextAlignment = .left){
         let style=NSMutableParagraphStyle();style.alignment=alignment;style.lineBreakMode = .byWordWrapping
         (value as NSString).draw(in:rect,withAttributes:[.font:font,.foregroundColor:color,.paragraphStyle:style])
@@ -347,7 +359,7 @@ enum MenuLayout {
 
 final class Row:NSButton {
     override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
-    let entry:Entry;var invoke:((Entry,Row)->Void)?;var hover:((Entry,Row)->Void)?
+    let entry:Entry;var pointerAllowed:(()->Bool)?;var invoke:((Entry,Row)->Void)?;var hover:((Entry,Row)->Void)?
     var expanded=false {didSet{needsDisplay=true}}
     var columnInset:CGFloat=12
     private var hovering=false;private var tracking:NSTrackingArea?;private var glyph:NSImage?
@@ -362,10 +374,11 @@ final class Row:NSButton {
     @objc private func activate(){invoke?(entry,self)}
     override func viewDidChangeEffectiveAppearance(){super.viewDidChangeEffectiveAppearance();needsDisplay=true}
     override func updateTrackingAreas(){super.updateTrackingAreas();if let tracking{removeTrackingArea(tracking)};tracking=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(tracking!)}
-    override func mouseEntered(with event:NSEvent){hovering=true;needsDisplay=true;hover?(entry,self)}
+    override func mouseDown(with event:NSEvent){guard pointerAllowed?() ?? true else{return};super.mouseDown(with:event)}
+    override func mouseEntered(with event:NSEvent){guard pointerAllowed?() ?? true else{return};hovering=true;needsDisplay=true;hover?(entry,self)}
     override func mouseExited(with event:NSEvent){hovering=false;needsDisplay=true}
     override func draw(_ dirtyRect:NSRect){
-        let pointerInside=window.map{$0.isVisible && $0.convertToScreen(convert(bounds,to:nil)).contains(NSEvent.mouseLocation)} ?? false
+        let pointerInside=(pointerAllowed?() ?? true) && (window.map{$0.isVisible && $0.convertToScreen(convert(bounds,to:nil)).contains(NSEvent.mouseLocation)} ?? false)
         if (pointerInside || expanded) && isEnabled {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.12 : 0.09).setFill();NSBezierPath(roundedRect:bounds,xRadius:7,yRadius:7).fill()}
         let left=columnInset
         if let checked=entry.checked {
@@ -491,12 +504,37 @@ struct PanelInteraction {
     }
 
 }
+// Atomic JSON publication replaces files, so observe the containing directory.
+// A closed panel has no polling timer and no global pointer monitors.
+final class SnapshotObserver {
+    private var source:DispatchSourceFileSystemObject?
+    private var debounce:DispatchWorkItem?
+    var active:Bool {source != nil}
+    func start(directory:String,changed:@escaping ()->Void) {
+        stop()
+        let fd=open(directory,O_EVTONLY)
+        guard fd>=0 else{return}
+        let watcher=DispatchSource.makeFileSystemObjectSource(fileDescriptor:fd,eventMask:[.write,.delete,.rename,.revoke],queue:.main)
+        watcher.setCancelHandler{close(fd)}
+        watcher.setEventHandler{[weak self] in
+            guard let self else{return}
+            if let events=self.source?.data,!events.intersection([.delete,.rename,.revoke]).isEmpty {self.stop();changed();return}
+            self.debounce?.cancel()
+            let task=DispatchWorkItem(block:changed);self.debounce=task
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task)
+        }
+        source=watcher;watcher.resume()
+    }
+    func stop(){debounce?.cancel();debounce=nil;source?.cancel();source=nil}
+    deinit{stop()}
+}
+
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
     private var rangePicker:NSPopUpButton?;private var rangeMenuOpen=false;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
-    private var timer:Timer?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
+    private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
     private var interaction=PanelInteraction();private var running:Bool{interaction.active != nil}
     private var sourceChecks:[String:Date]=[:]
     private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private var hoverTask:DispatchWorkItem?;private var closeTask:DispatchWorkItem?
@@ -505,6 +543,21 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         let args=CommandLine.arguments
         guard let si=args.firstIndex(of:"--snapshot"),si+1<args.count,let pi=args.firstIndex(of:"--plugin"),pi+1<args.count else{NSApp.terminate(nil);return}
         snapshotPath=args[si+1];pluginPath=args[pi+1];setup(panel);panel.setAccessibilityLabel("AI 用量面板")
+        observeSnapshot()
+        NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(accessibilityChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
+        NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingBegan(_:)),name:NSMenu.didBeginTrackingNotification,object:nil)
+        NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingEnded(_:)),name:NSMenu.didEndTrackingNotification,object:nil)
+        show()
+    }
+    private func observeSnapshot(){
+        guard !observer.active else{return}
+        observer.start(directory:URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().path){[weak self] in
+            guard let self else{return};self.checkAction();self.updateFallback();if self.panel.isVisible{self.reload()}
+        }
+        updateFallback()
+    }
+    private func installPointerMonitors(){
+        guard monitors.isEmpty else{return}
         if let monitor=NSEvent.addGlobalMonitorForEvents(matching:[.leftMouseDown,.rightMouseDown],handler:{[weak self] event in
             guard let self else{return}
             // SwiftBar routes right-click and Option-click to its native menu.
@@ -517,12 +570,23 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             guard let self,let window=event.window,(window === self.panel || self.flyouts.contains(where:{$0.panel === window})),let view=window.contentView else{return event}
             self.showModuleMenu(event,in:view);return nil
         }){monitors.append(monitor)}
-        NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(accessibilityChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
-        timer=Timer.scheduledTimer(withTimeInterval:1,repeats:true){[weak self] _ in guard let self else{return};self.checkAction();if self.panel.isVisible{if self.nativeMenuVisible(){self.hide()}else{self.reload()}}}
-        NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingBegan(_:)),name:NSMenu.didBeginTrackingNotification,object:nil)
-        NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingEnded(_:)),name:NSMenu.didEndTrackingNotification,object:nil)
-        show()
     }
+    private func removePointerMonitors(){for monitor in monitors{NSEvent.removeMonitor(monitor)};monitors=[]}
+    private func publishVisibility(_ visible:Bool){
+        let url=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-state.json")
+        if let data=try? JSONSerialization.data(withJSONObject:["schema":1,"visible":visible,"pid":ProcessInfo.processInfo.processIdentifier]) {
+            try? data.write(to:url,options:.atomic);try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
+        }
+        updateFallback()
+    }
+    private func updateFallback(){
+        fallbackTimer?.invalidate();fallbackTimer=nil
+        guard !observer.active,(panel.isVisible || pendingAction != nil) else{return}
+        fallbackTimer=Timer.scheduledTimer(withTimeInterval:1,repeats:true){[weak self] _ in
+            guard let self else{return};self.observeSnapshot();self.checkAction();if self.panel.isVisible{self.reload()}
+        };fallbackTimer?.tolerance=0.25
+    }
+    func applicationWillTerminate(_ notification:Notification){publishVisibility(false);observer.stop();removePointerMonitors();fallbackTimer?.invalidate()}
     @objc private func accessibilityChanged(){if panel.isVisible{reload(force:true)}}
     private func showModuleMenu(_ event:NSEvent,in view:NSView){
         rangePicker?.menu?.cancelTracking();rangeMenuOpen=false;hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0)
@@ -545,12 +609,16 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             return (bounds["Width"] ?? 0)>80 && (bounds["Height"] ?? 0)>30
         }
     }
-    private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil)}
-    private func hide(){rangePicker?.menu?.cancelTracking();hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil)}
+    private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil);observeSnapshot();installPointerMonitors();publishVisibility(true);if !managerOnly{performAction(["refresh-view"])}}
+    private func hide(){rangePicker?.menu?.cancelTracking();hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
     private func updatePresentation(){snapshot=interaction.displayed();layout()}
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
-        guard !rangeMenuOpen,NSEvent.pressedMouseButtons & 1 == 0 else{return}
+        guard !rangeMenuOpen else{return}
+        if NSEvent.pressedMouseButtons & 1 != 0 {
+            reloadTask?.cancel();let task=DispatchWorkItem{[weak self] in self?.reload(force:force)};reloadTask=task
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task);return
+        }
         let date=(try? FileManager.default.attributesOfItem(atPath:snapshotPath)[.modificationDate]) as? Date
         guard force || date != modified else{return}
         guard let data=try? Data(contentsOf:URL(fileURLWithPath:snapshotPath)),let value=try? JSONDecoder().decode(Snapshot.self,from:data) else{return}
@@ -561,7 +629,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         for original in entries {var entry=original;if running,let name=entry.action?.first,["refresh","refresh-monitor","check-app-updates","set-range"].contains(name){entry.label="正在刷新…"}
             let left=MenuLayout.column(entries),h=MenuLayout.rowHeight(entry,width:width,left:left)
             if entry.separator==true {let divider=NSBox(frame:NSRect(x:8,y:y+5,width:width-16,height:1));divider.boxType = .separator;content.addSubview(divider)}
-            else {let row=Row(entry,frame:NSRect(x:0,y:y,width:width,height:h));row.columnInset=entry.section==true ? 12 : left;row.invoke={[weak self] e,r in self?.activate(e,row:r,depth:depth)};row.hover={[weak self] e,r in self?.hover(e,row:r,depth:depth)};content.addSubview(row);rows[depth][entry.key]=row}
+            else {let row=Row(entry,frame:NSRect(x:0,y:y,width:width,height:h));row.columnInset=entry.section==true ? 12 : left;row.pointerAllowed={[weak self,weak row] in guard let self,let row else{return false};return self.pointerHits(row)};row.invoke={[weak self] e,r in self?.activate(e,row:r,depth:depth)};row.hover={[weak self] e,r in self?.hover(e,row:r,depth:depth)};content.addSubview(row);rows[depth][entry.key]=row}
             y+=h
         };return y
     }
@@ -603,10 +671,16 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         DispatchQueue.main.async{[weak self] in self?.checkPointer()}
     }
     private func rowRect(_ row:Row)->NSRect{guard let window=row.window else{return .zero};return window.convertToScreen(row.convert(row.bounds,to:nil))}
+    private func topPanel(at point:NSPoint)->NSWindow? {
+        let windows=([panel]+flyouts.map{$0.panel}).filter{$0.isVisible}
+        guard let index=MenuLayout.topmostIndex(at:point,frames:windows.map{$0.frame}) else{return nil}
+        return windows[index]
+    }
+    private func pointerHits(_ row:Row)->Bool {topPanel(at:NSEvent.mouseLocation) === row.window && rowRect(row).contains(NSEvent.mouseLocation)}
     private func hover(_ entry:Entry,row:Row,depth:Int){
-        guard !rangeMenuOpen else{return}
+        guard !rangeMenuOpen,pointerHits(row) else{return}
         closeTask?.cancel();hoverTask?.cancel()
-        let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.rowRect(row).contains(NSEvent.mouseLocation) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
+        let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.pointerHits(row) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
         hoverTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task)
     }
     private func openFlyout(_ entry:Entry,row:Row,depth:Int,checkSource:Bool=true){
@@ -619,8 +693,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         let heading=NSTextField(labelWithString:entry.label);heading.font = .systemFont(ofSize:11,weight:.medium);heading.textColor = .secondaryLabelColor;let headingLeft=MenuLayout.column(entry.children)+8;heading.frame=NSRect(x:headingLeft,y:10,width:width-headingLeft-20,height:18);surface.content.addSubview(heading)
         let scroll=ContentScrollView(frame:NSRect(x:8,y:32,width:width-16,height:height-40));scroll.drawsBackground=false;scroll.hasVerticalScroller=body>scroll.frame.height;scroll.scrollerStyle = .overlay
         let content=FlippedView(frame:NSRect(x:0,y:0,width:width-16,height:body));_=fillRows(entry.children,in:content,y:0,width:width-16,depth:depth+1);scroll.documentView=content;scroll.configureScrolling();surface.content.addSubview(scroll);window.contentView=surface
-        var x=parent.frame.maxX+5;if x+width>screen.visibleFrame.maxX-4{x=parent.frame.minX-width-5}
-        x=max(screen.visibleFrame.minX+4,min(x,screen.visibleFrame.maxX-width-4))
+        let ancestor=depth>0 ? (depth==1 ? panel.frame : flyouts[depth-2].panel.frame) : nil
+        let x=MenuLayout.flyoutX(parent:parent.frame,ancestor:ancestor,width:width,screen:screen.visibleFrame)
         let rect=rowRect(row),y=max(screen.visibleFrame.minY+4,min(rect.maxY+6-height,screen.visibleFrame.maxY-height-4))
         window.setFrame(NSRect(x:x,y:y,width:width,height:height),display:true);parent.addChildWindow(window,ordered:.above);window.orderFront(nil);flyouts.append(Flyout(panel:window,key:entry.key,row:row))
         if checkSource,let action=entry.onOpenAction,action.count==2 {
@@ -638,10 +712,10 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func checkPointer(){
         guard panel.isVisible,!rangeMenuOpen else{return}
-        let p=NSEvent.mouseLocation
+        let p=NSEvent.mouseLocation,top=topPanel(at:NSEvent.mouseLocation)
         for group in rows{for row in group.values{row.needsDisplay=true}}
         for depth in rows.indices.reversed(){
-            if let row=rows[depth].values.first(where:{rowRect($0).contains(p)}) {
+            if let row=rows[depth].values.first(where:{$0.window === top && rowRect($0).contains(p)}) {
                 closeTask?.cancel()
                 if row.entry.children.isEmpty {
                     if flyouts.count>depth{hover(row.entry,row:row,depth:depth)}
@@ -652,7 +726,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             }
         }
         guard !flyouts.isEmpty else{return}
-        if flyouts.contains(where:{$0.panel.frame.contains(p)}){closeTask?.cancel();return}
+        if top != nil{closeTask?.cancel();return}
         if closeTask==nil || closeTask!.isCancelled {
             let task=DispatchWorkItem{[weak self] in self?.closeFlyouts(from:0);self?.closeTask=nil}
             closeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:task)
@@ -665,7 +739,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             if let since=pendingSince,let active=interaction.active,PanelInteraction.isPreference(active),Date().timeIntervalSince(since)>20{abortAction()}
             return
         }
-        self.pendingAction=nil;pendingSince=nil;interaction.finish(value.preferences)
+        actionTimeout?.cancel();self.pendingAction=nil;pendingSince=nil;interaction.finish(value.preferences);updateFallback()
         if value.status != "done" {
             interaction.queued=[];reload(force:true)
             let alert=NSAlert();alert.messageText="操作未完成";alert.informativeText="请重新打开菜单后重试。";alert.addButton(withTitle:"好");alert.runModal();return
@@ -684,7 +758,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
-        pendingAction=nil;pendingSince=nil;interaction.active=nil;interaction.queued=[]
+        actionTimeout?.cancel();pendingAction=nil;pendingSince=nil;updateFallback();interaction.active=nil;interaction.queued=[]
         try? FileManager.default.removeItem(at:URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json"))
         reload(force:true);NSSound.beep()
     }
@@ -696,11 +770,13 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         }
     }
     private func dispatchAction(_ action:[String]){
-        let passive=action[0]=="refresh-source"
-        let keepOpen=["refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
+        let passive=["refresh-source","refresh-view"].contains(action[0])
+        let keepOpen=["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
         if !keepOpen{hide()};if keepOpen && !passive{updatePresentation()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
-        do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id;pendingSince=Date()
+        do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id;pendingSince=Date();updateFallback()
+            actionTimeout?.cancel()
+            if PanelInteraction.isPreference(action){let task=DispatchWorkItem{[weak self] in if self?.pendingAction==id{self?.abortAction()}};actionTimeout=task;DispatchQueue.main.asyncAfter(deadline:.now()+20,execute:task)}
             var url=URLComponents();url.scheme="swiftbar";url.host="refreshplugin";url.queryItems=[URLQueryItem(name:"name",value:URL(fileURLWithPath:pluginPath).lastPathComponent)]
             if !NSWorkspace.shared.open(url.url!){abortAction()}
         }catch{abortAction()}

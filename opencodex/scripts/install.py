@@ -10,6 +10,8 @@ import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'lib'))
+from swiftbar_config import migrate_config
 
 def copy(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -23,7 +25,7 @@ def main():
     parser.add_argument('--plugin-dir', type=Path, help='Defaults to the folder configured in SwiftBar.')
     parser.add_argument('--no-refresh', action='store_true', help='Copy files without closing the panel or refreshing SwiftBar.')
     parser.add_argument('--skip-build', action='store_true', help='Install an already built helper.')
-    parser.add_argument('--config', type=Path, default=ROOT / 'config.local.sh')
+    parser.add_argument('--config', type=Path, help='Explicit first-install config import; existing user settings are never overwritten.')
     args = parser.parse_args()
     if args.plugin_dir is None:
         detected = subprocess.run(['defaults', 'read', 'com.ameba.SwiftBar', 'PluginDirectory'], capture_output=True, text=True)
@@ -33,6 +35,10 @@ def main():
     destination = args.plugin_dir.expanduser().resolve()
     if destination == ROOT:
         parser.error('Use the SwiftBar runtime directory, not the source directory.')
+    if args.config and (Path.home() / 'Library/Application Support/SwiftBarToken/config.local.sh').exists():
+        parser.error('User config already exists; edit it through connection settings.')
+    if args.config and not args.config.expanduser().is_file():
+        parser.error('--config must name an existing file.')
     if not args.skip_build:
         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'build.py')], check=True)
     relative_app = Path('.opencodex-panel/OpenCodexPanel.app')
@@ -56,9 +62,7 @@ def main():
     copy(ROOT / 'assets/deepseek-logo.svg', destination / 'assets/deepseek-logo.svg')
     shutil.copytree(ROOT / 'lib', destination / '.opencodex-panel/lib', dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    if args.config.exists():
-        copy(args.config, destination / local_config)
-        (destination / local_config).chmod(0o600)
+    migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
     # Publish the script last; other plugins and runtime state are preserved.
     destination.mkdir(parents=True, exist_ok=True)
     temporary = destination / '.opencodex-install.tmp'

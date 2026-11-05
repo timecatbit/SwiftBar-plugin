@@ -112,7 +112,9 @@ class ModuleTests(unittest.TestCase):
         for key in ('grok','minimax'):self.toggle(key,True)
         lines='\n'.join(self.m.resource_lines({'grok':{'balance':12.3},'minimax':{'windows':[{'name':'text','remaining':65}]}}))
         self.assertIn('Grok API 余额',lines);self.assertIn('$12.30',lines);self.assertIn('65% 可用',lines)
-        self.assertIn('grok',self.m.external_loaders());self.assertIn('minimax',self.m.external_loaders())
+        self.assertNotIn('grok',self.m.external_loaders());self.assertNotIn('minimax',self.m.external_loaders())
+        with patch.dict(os.environ,{'XAI_MANAGEMENT_API_KEY':'test-key','XAI_TEAM_ID':'test-team','MINIMAX_API_KEY':'test-key'}):
+            self.assertIn('grok',self.m.external_loaders());self.assertIn('minimax',self.m.external_loaders())
     def test_resource_open_forces_one_target_and_debounces(self):
         self.toggle('grok',True)
         loader=unittest.mock.Mock()

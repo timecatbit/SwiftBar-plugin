@@ -92,6 +92,9 @@ def update(directory, kind, key=None, value=None):
         current['visible'] = list(DEFAULT_VISIBLE)
         current['appearance'] = 'glass'
         current['allowCollapse']=True;current['expandedProviders']=[]
+    elif kind == 'auto-path':
+        if key not in USAGE:raise ValueError('invalid data source')
+        current['paths'].pop(key,None)
     elif kind == 'path':
         if key not in USAGE or not value or not Path(value).expanduser().exists():
             raise ValueError('invalid data directory')

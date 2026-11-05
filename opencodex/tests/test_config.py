@@ -25,7 +25,7 @@ class LocalConfigTests(unittest.TestCase):
             self.assertIsNone(error)
             self.assertIn('未配置', module.komari_lines({})[0])
 
-    def test_shell_loads_runtime_config_before_selecting_python(self):
+    def test_shell_uses_user_config_and_ignores_legacy_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             plugin = root / 'plugin with spaces.sh'
@@ -35,11 +35,14 @@ class LocalConfigTests(unittest.TestCase):
             spy.write_text('#!' + sys.executable + '\nfrom pathlib import Path\nimport os\n'
                            + 'Path(' + repr(str(observed)) + ').write_text(os.environ["KOMARI_BASE_URL"])\n')
             spy.chmod(0o755)
-            config = root / '.opencodex-panel/config.local.sh'
+            legacy = root / '.opencodex-panel/config.local.sh'
+            legacy.parent.mkdir()
+            legacy.write_text('export KOMARI_BASE_URL=https://old.invalid\n')
+            config = root / 'settings/config.local.sh'
             config.parent.mkdir()
             config.write_text('export KOMARI_BASE_URL=https://komari.example.test\n'
                               + 'export OCX_PYTHON=' + shlex.quote(str(spy)) + '\n')
-            subprocess.run(['/bin/bash', str(plugin), '--refresh'], check=True, capture_output=True)
+            subprocess.run(['/bin/bash', str(plugin), '--refresh'], check=True, capture_output=True, env=dict(os.environ, OCX_STATE_DIR=str(config.parent)))
             self.assertEqual(observed.read_text(), 'https://komari.example.test')
 
 if __name__ == '__main__':

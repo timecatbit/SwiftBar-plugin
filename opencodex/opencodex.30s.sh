@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.1.1</xbar.version>
+# <xbar.version>5.2.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -25,10 +25,6 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export PYTHONIOENCODING=utf-8
 export OCX_PLUGIN_PATH
 OCX_USER_CONFIG="${OCX_STATE_DIR:-$HOME/Library/Application Support/SwiftBarToken}/config.local.sh"
-OCX_LOCAL_CONFIG="$(dirname "$OCX_PLUGIN_PATH")/.opencodex-panel/config.local.sh"
-if [ -f "$OCX_LOCAL_CONFIG" ]; then
-    source "$OCX_LOCAL_CONFIG"
-fi
 if [ -f "$OCX_USER_CONFIG" ]; then source "$OCX_USER_CONFIG"; fi
 
 PYTHON_BIN="$OCX_PYTHON"
@@ -114,6 +110,8 @@ import swiftbar_preferences as preferences
 import swiftbar_sources as sources
 import swiftbar_accounts as accounts
 import swiftbar_discovery as discovery
+import swiftbar_config as connections
+KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
      os.path.join(HOME, 'Library', 'Application Support', 'SwiftBarToken')))
@@ -157,11 +155,82 @@ def range_cache_name(key=None):
 def ocx_configured():
     return bool(os.environ.get('OCX_BASE_URL') or os.path.isfile(TOKEN_FILE) or os.path.isfile(os.path.join(OCX_HOME, 'runtime-port.json')))
 
-CACHE_SCOPE = hashlib.sha256((BASE + "\n" + KOMARI_BASE_URL).encode()).hexdigest()[:16]
+CACHE_SCOPE = hashlib.sha256(os.path.abspath(STATE_DIR).encode()).hexdigest()[:16]
 CACHE_DIR = os.path.join(os.environ.get("OCX_CACHE_DIR") or tempfile.gettempdir(),
-                         "opencodex-swiftbar-v4-%s-%s" % (os.getuid(), CACHE_SCOPE))
+                         "opencodex-swiftbar-v5-%s-%s" % (os.getuid(), CACHE_SCOPE))
 UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
 EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300}
+
+
+def chatgpt_configured():
+    auth=discovery.read_object(os.path.join(os.environ.get('CODEX_HOME') or os.path.join(HOME,'.codex'),'auth.json'))
+    tokens=auth.get('tokens') if isinstance(auth.get('tokens'),dict) else {}
+    return bool(shutil.which('codex') and (auth.get('auth_mode') in ('chatgpt','chatgptAuthTokens') or tokens.get('access_token')))
+
+
+def connection_ready(key):
+    if key=='deepseek':
+        if os.environ.get('DEEPSEEK_API_KEY') or os.environ.get('DEEPSEEK_API_KEY_FILE'):
+            return bool(accounts.credential('DEEPSEEK_API_KEY'))
+        config=discovery.read_object(CONFIG_FILE);providers=config.get('providers') or {}
+        provider=providers.get('deepseek') if isinstance(providers,dict) else {}
+        return bool(isinstance(provider,dict) and provider.get('apiKey') and str(provider.get('baseUrl') or '').rstrip('/') in ('https://api.deepseek.com','https://api.deepseek.com/v1'))
+    if key=='komari':return bool(KOMARI_BASE_URL)
+    if key=='grok':return bool(accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip())
+    if key=='minimax':return bool(accounts.credential('MINIMAX_API_KEY'))
+    return False
+
+
+def refresh_ttl(base):
+    """Closed panels use a relaxed cadence; visible panels keep their normal TTL."""
+    state=read_cache('panel-state')
+    try:
+        visible=state.get('visible') is True and isinstance(state.get('pid'),int) and state['pid']>0
+        if visible:os.kill(state['pid'],0)
+    except OSError:visible=False
+    if visible:return base
+    power=read_cache('power-state');now=time.time()
+    if now-power.get('checkedAt',0)>300:
+        try:
+            result=subprocess.run(['/usr/bin/pmset','-g','batt'],capture_output=True,text=True,timeout=2)
+            power={'schema':1,'battery':"'Battery Power'" in result.stdout,'checkedAt':now}
+            write_json_cache(cache_path('power-state'),power)
+        except (OSError,subprocess.SubprocessError):pass
+    return max(base,300 if power.get('battery') else 180)
+
+
+CONNECTION_KEYS={'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+                 'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
+                 'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
+
+def connection_fingerprint(name):
+    parts=[]
+    for key in CONNECTION_KEYS.get(name,[]):
+        parts.append(os.environ.get(key,''))
+        if key.endswith('_FILE') and os.environ.get(key):
+            try:
+                stat=os.stat(os.path.expanduser(os.environ[key]));parts.extend([stat.st_mtime_ns,stat.st_size])
+            except OSError:parts.append('unavailable')
+    if name not in CONNECTION_KEYS or name=='provider_quotas':parts.extend([BASE,TOKEN_FILE])
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
+
+
+def sync_connection_cache():
+    """Stable IPC directory; discard old service data when its connection changes."""
+    previous=read_cache('connection-fingerprints');current={'schema':1}
+    for name in CONNECTION_KEYS:
+        fingerprint=connection_fingerprint(name);current[name]=fingerprint
+        if previous.get(name)!=fingerprint:
+            try:os.unlink(cache_path(name))
+            except FileNotFoundError:pass
+    current['proxy']=connection_fingerprint('proxy')
+    if previous.get('proxy')!=current['proxy']:
+        for name in ('healthz','ready','quota','accounts','active','startup','usage_today','usage_7d','badge'):
+            try:os.unlink(cache_path(name))
+            except FileNotFoundError:pass
+        from pathlib import Path
+        for path in Path(CACHE_DIR).glob('range_usage_*.json'):path.unlink(missing_ok=True)
+    write_json_cache(cache_path('connection-fingerprints'),current)
 
 
 def macos_dark_mode():
@@ -500,6 +569,7 @@ def read_cache(name):
             record = json.load(handle)
         if not isinstance(record, dict) or record.get("schema") != 1:
             return {}
+        if record.get("connection") and record["connection"] != connection_fingerprint(name):return {}
         if not all(isinstance(record.get(k, 0), (int, float)) for k in ("fetchedAt", "retryAt")):
             return {}
         if record.get("payload") is not None and not isinstance(record["payload"], dict):
@@ -515,6 +585,10 @@ def write_json_cache(path, payload):
     """原子替换，防止并发刷新读到半个 JSON；缓存只允许当前用户读取。"""
     temporary = None
     try:
+        try:
+            with open(path, encoding="utf-8") as current:
+                if json.load(current) == payload:return
+        except (OSError, ValueError):pass
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".cache-", dir=os.path.dirname(path))
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -569,6 +643,7 @@ def cached_fetch(name, loader, ttl):
         # Failed requests retry after a minute, retaining the last successful data.
         record.update(schema=1, error=str((error or (0, "数据格式异常", None))[1]),
                       retryAt=time.time() + 60, day=datetime.now().strftime("%Y-%m-%d"))
+    record["connection"]=connection_fingerprint(name)
     write_json_cache(cache_path(name), record)
     return cache_result(record, ttl)
 
@@ -1249,22 +1324,18 @@ def range_usage_cached():
             pending={source:pool.submit(collect,source) for source in enabled}
             for source,future in pending.items():bundle[source]=future.result()
         return bundle,None
-    value,error=cached_fetch(name,load,60)
-    if range_cache_name()==name:
-        try:subprocess.run(['/usr/bin/open','-g','swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))],capture_output=True,timeout=4)
-        except Exception:pass
-    return value,error
+    return cached_fetch(name,load,refresh_ttl(60))
 
 
 def external_loaders():
     loaders={}
     if ocx_configured():loaders['badge']=update_status_cached
     if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
-    if module_enabled('komari'):loaders['komari']=komari_snapshot
+    if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates'):loaders['app_updates']=app_updates_cached
-    if module_enabled('chatgpt'):loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=os.environ.get('CODEX_HOME')),None),EXTERNAL_TTLS['chatgpt'])
+    if module_enabled('chatgpt') and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=os.environ.get('CODEX_HOME')),None),EXTERNAL_TTLS['chatgpt'])
     for key in ('grok','minimax'):
-        if module_enabled(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
+        if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
     return loaders
 
 
@@ -1298,11 +1369,10 @@ def background_refresh():
             loaders = external_loaders()
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(loader) for name, loader in loaders.items()
-                           if cache_due(read_cache(name), EXTERNAL_TTLS[name])]
-                if cache_due(read_cache(range_cache_name()),60):futures.append(pool.submit(range_usage_cached))
+                           if cache_due(read_cache(name), refresh_ttl(EXTERNAL_TTLS[name]))]
+                if cache_due(read_cache(range_cache_name()),refresh_ttl(60)):futures.append(pool.submit(range_usage_cached))
                 for future in futures:
                     future.result()
-            if cache_due(read_cache(range_cache_name()),60):range_usage_cached()
             if ocx_configured():auto_update_opencodex()
             if module_enabled('updates'):notify_app_updates(update_rows({}))
         if futures:refresh_swiftbar()
@@ -1312,7 +1382,7 @@ def background_refresh():
 
 
 def schedule_background_refresh():
-    if not any(cache_due(read_cache(name), EXTERNAL_TTLS[name]) for name in external_loaders()) and not cache_due(read_cache(range_cache_name()),60):
+    if not any(cache_due(read_cache(name), refresh_ttl(EXTERNAL_TTLS[name])) for name in external_loaders()) and not cache_due(read_cache(range_cache_name()),refresh_ttl(60)):
         return
     try:
         subprocess.Popen(["/bin/bash", PLUGIN, "--background-refresh"], stdin=subprocess.DEVNULL,
@@ -1326,23 +1396,26 @@ def gather():
     started = time.monotonic()
     data = {}
     schedule_background_refresh()
-    health, health_error = request("/healthz", timeout=1.5, auth=False) if ocx_configured() else (None,(0,'未配置 OpenCodex',None))
+    health, health_error = cached_fetch("healthz",lambda:request("/healthz", timeout=1.5, auth=False),refresh_ttl(30)) if ocx_configured() else (None,(0,'未配置 OpenCodex',None))
     if health_error or not isinstance(health, dict):
         health = None
     data["healthz"], data["healthz_error"] = health, health_error
     for name, ttl in EXTERNAL_TTLS.items():
         data[name], data[name + "_error"] = cache_result(read_cache(name), ttl)
-    data["range_usage"],data["range_usage_error"]=cache_result(read_cache(range_cache_name()),60)
+    for key in ('grok','minimax'):
+        if not connection_ready(key):data[key]=accounts.account(key);data[key+'_error']=None
+    if not chatgpt_configured():data['chatgpt']={'state':'未找到 Codex 的 ChatGPT 登录'};data['chatgpt_error']=None
+    data["range_usage"],data["range_usage_error"]=cache_result(read_cache(range_cache_name()),refresh_ttl(60))
     if not health:
         data["_elapsed"] = time.monotonic() - started
         return data
     jobs = {
-        "ready": ("/readyz", False, 0),
+        "ready": ("/readyz", False, refresh_ttl(30)),
         "startup": ("/api/startup-health", True, 300),
-        "quota": ("/api/codex-auth/quota", True, 0),
-        "accounts": ("/api/codex-auth/accounts", True, 0),
-        "active": ("/api/codex-auth/active", True, 0),
-        "usage_today": ("/api/usage?range=today", True, 60),
+        "quota": ("/api/codex-auth/quota", True, refresh_ttl(30)),
+        "accounts": ("/api/codex-auth/accounts", True, refresh_ttl(30)),
+        "active": ("/api/codex-auth/active", True, refresh_ttl(30)),
+        "usage_today": ("/api/usage?range=today", True, refresh_ttl(60)),
         "usage_7d": ("/api/usage?range=7d", True, 300),
     }
     with ThreadPoolExecutor(max_workers=7) as pool:
@@ -1657,7 +1730,7 @@ def komari_expiry(row):
 def komari_lines(data):
     if not KOMARI_BASE_URL:
         return [item("Komari 监控 · 未配置",sfimage="server.rack"),
-                item("请在本机配置中填写 KOMARI_BASE_URL",level=1,color=MUTED,size=11)]
+                item("设置面板地址…",level=1,**act("configure-connection","komari"))]
     payload = data.get("komari") or {}
     servers = payload.get("servers") or []
     error = data.get("komari_error")
@@ -1797,6 +1870,105 @@ def detection_menu_lines():
     return lines
 
 
+def source_locations(key):
+    """The actual collector roots, not merely the application installation path."""
+    root=source_path(key)
+    if key=='workbuddy':
+        roots=[os.path.join(root,n,'projects') for n in ('.workbuddy-ai','.workbuddy') if os.path.isdir(os.path.join(root,n,'projects'))]
+        if roots:return roots
+        if root==HOME:return [os.path.join(HOME,'.workbuddy-ai','projects')]
+        if os.path.isdir(os.path.join(root,'projects')):return [os.path.join(root,'projects')]
+    if key=='codex':
+        roots=[os.path.join(root,n) for n in ('sessions','archived_sessions') if os.path.isdir(os.path.join(root,n))]
+        if roots:return roots
+    if key=='gemini' and os.path.isdir(os.path.join(root,'tmp')):return [os.path.join(root,'tmp')]
+    return [os.path.abspath(root)] if root else []
+
+
+def location_entry(label,paths):
+    return {'label':label,'detail':'\n'.join(paths),'children':[]}
+
+
+def connection_options():
+    scope=hashlib.sha256(json.dumps([(k,source_path(k)) for k in preferences.USAGE]).encode()).hexdigest()[:12]
+    detected,_=cached_fetch('configured-sources-'+scope,lambda:({'modules':detected_modules()},None),300)
+    found=set((detected or {}).get('modules',[]))
+    rows=[{'label':'配置状态 · 不代表连接验证结果','children':[]}]
+    rows.append({'label':'OpenCodex','detail':'已配置' if ocx_configured() else '未配置','symbol':'network','children':[{'label':'自动读取本机运行端口与管理凭据','children':[]},location_entry('配置目录',[OCX_HOME])]})
+    for key,label,_ in preferences.MODULES:
+        if key in preferences.USAGE and key!='opencodex':
+            custom=bool(view_settings()['paths'].get(key))
+            configured=key in found or bool(custom and os.path.exists(source_path(key)))
+            children=[{'label':('来源 · 自定记录目录' if custom else '来源 · 自动读取本机客户端') if configured else '未发现客户端或用量记录','children':[]},{'label':'选择记录目录…','action':['choose-source',key],'children':[]},
+                      {'label':'恢复自动查找','action':['auto-source',key],'children':[]}]
+            if configured:
+                locations=source_locations(key)
+                if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
+                if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
+            rows.append({'label':label,'detail':'已配置' if configured else '未配置','symbol':'folder','children':children})
+    rows.append({'label':'','separator':True,'children':[]})
+    for key,label in [('deepseek','DeepSeek API'),('grok','Grok API'),('minimax','MiniMax 套餐'),('komari','Komari 监控')]:
+        status='已配置' if connection_ready(key) else '未配置'
+        children=[{'label':'设置面板地址…' if key=='komari' else '选择密钥文件…','action':['configure-connection',key],'children':[]}]
+        if key=='deepseek' and connection_ready(key):children.insert(0,{'label':'来源 · 指定的密钥' if accounts.credential('DEEPSEEK_API_KEY') else '来源 · OpenCodex 官方连接','children':[]})
+        if connection_ready(key):
+            envkey={'deepseek':'DEEPSEEK_API_KEY','grok':'XAI_MANAGEMENT_API_KEY','minimax':'MINIMAX_API_KEY'}.get(key)
+            if key=='komari':children.insert(0,location_entry('面板地址',[KOMARI_BASE_URL]))
+            elif envkey and os.environ.get(envkey):children.insert(0,{'label':'密钥来源 · 进程环境变量','children':[]})
+            elif envkey and os.environ.get(envkey+'_FILE'):children.insert(0,location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE']))]))
+            elif key=='deepseek':children.insert(0,location_entry('配置文件',[CONFIG_FILE]))
+        children.append({'label':'恢复自动读取' if key=='deepseek' else '清除连接设置…','action':['clear-connection',key],'children':[]})
+        rows.append({'label':label,'detail':status,'symbol':'server.rack' if key=='komari' else 'key','children':children})
+    rows.extend([{'label':'ChatGPT / Codex 额度','detail':'已配置' if chatgpt_configured() else '未配置','symbol':'person.crop.circle','children':[{'label':'使用 Codex 客户端的 ChatGPT 登录','children':[]}]+([location_entry('登录配置文件',[os.path.join(os.path.expanduser(os.environ.get('CODEX_HOME') or os.path.join(HOME,'.codex')),'auth.json')])] if chatgpt_configured() else [])},
+                 {'label':'','separator':True,'children':[]},
+                 {'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]}])
+    return rows
+
+
+def configure_connection(key,clear=False):
+    global KOMARI_BASE_URL
+    names={'komari':['KOMARI_BASE_URL'], 'deepseek':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+           'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
+           'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION']}
+    if key not in names:raise ValueError('invalid connection')
+    values={name:'' for name in names[key]}
+    def text_input(message,default=''):
+        result=applescript('text returned of (display dialog '+as_literal(message)+' default answer '+as_literal(default)+' buttons {"取消", "保存"} default button "保存" cancel button "取消" with title "连接设置")')
+        return result.stdout.strip() if result.returncode==0 else None
+    if clear:
+        if not confirm('清除连接设置？','只清除插件保存的地址或密钥文件引用。原始密钥文件不会删除。',accept='清除设置'):return
+    elif key=='komari':
+        value=text_input('Komari 面板地址（http:// 或 https://）',KOMARI_BASE_URL)
+        if value is None:return
+        url=connections.monitor_url(value)
+        if not url:
+            applescript('display alert "地址无效" message "请填写实际面板地址，不使用示例地址、账号密码或查询参数。"');return
+        values['KOMARI_BASE_URL']=url
+    else:
+        response=applescript('POSIX path of (choose file with prompt '+as_literal('选择 '+key+' 的密钥文本文件；只保存路径，不复制或展示密钥。')+')')
+        if response.returncode:return
+        filename=response.stdout.strip()
+        if not os.path.isfile(filename):return
+        values[names[key][1]]=filename
+        if key=='grok':
+            team=text_input('xAI Team ID（需要管理密钥，普通推理 API Key 不适用）',os.environ.get('XAI_TEAM_ID',''))
+            if team is None:return
+            if not re.fullmatch(r'[A-Za-z0-9_-]+',team):
+                applescript('display alert "Team ID 无效" message "请填写 xAI 控制台中的 Team ID。"');return
+            values['XAI_TEAM_ID']=team
+        elif key=='minimax':
+            region=applescript('choose from list {"国际站", "中国站"} with title "MiniMax 套餐" with prompt "选择密钥所属地区" default items {"国际站"}')
+            if region.returncode or region.stdout.strip() not in ('国际站','中国站'):return
+            values['MINIMAX_REGION']='china' if region.stdout.strip()=='中国站' else 'international'
+    connections.write_overrides(STATE_DIR,values)
+    os.environ.update(values)
+    KOMARI_BASE_URL=connections.monitor_url(os.environ.get('KOMARI_BASE_URL'))
+    sync_connection_cache()
+    if not clear:preferences.update(STATE_DIR,'module',key,'true')
+    elif key!='deepseek':preferences.update(STATE_DIR,'module',key,'false')
+    schedule_background_refresh()
+
+
 def module_options():
     settings=view_settings();options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},{'label':'','separator':True,'children':[]}];group=None
     for key,label,category in preferences.MODULES:
@@ -1805,10 +1977,9 @@ def module_options():
         enabled=key in settings['visible']
         options.append({'label':label,'checked':enabled,'action':['set-module',key,'false' if enabled else 'true'],'children':[]})
     options.append({'label':'','separator':True,'children':[]})
-    paths=[{'label':label+' 记录目录…','symbol':'folder','action':['choose-source',key],'children':[]} for key,label,category in preferences.MODULES if key in preferences.USAGE and key!='opencodex']
-    options.append({'label':'数据来源','symbol':'folder','children':paths})
+    options.append({'label':'连接与数据','symbol':'link','children':connection_options()})
     settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
-    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]},{'label':'打开本机配置','action':['open-settings'],'children':[]}])
+    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
     options.append({'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows})
     return options
 
@@ -1838,6 +2009,7 @@ def provider_account_lines(key,data):
     if payload.get('_stale'):badge+=' · 上次'
     rows=[item(label,badge=badge,sfimage='creditcard' if is_grok else 'chart.pie')]
     rows.append(item('xAI API 预付余额 · USD' if is_grok else 'MiniMax 套餐 · 按服务端额度',level=1,color=MUTED,size=10))
+    if not connection_ready(key):rows.append(item('设置连接…',level=1,**act('configure-connection',key)))
     if not windows and not ('balance' in payload):rows.append(item(payload.get('state','正在读取'),level=1,color=MUTED,size=10))
     for w in windows:rows.append(item(w['name'],level=1,badge='%g%% 可用'%w['remaining']))
     rows.append(item('打开用量与账单',level=1,href='https://console.x.ai' if is_grok else 'https://platform.minimax.io/user-center/payment/token-plan',sfimage='arrow.up.right'))
@@ -2423,6 +2595,7 @@ def api_action(path, method, body, ok_message, fail_prefix="操作失败"):
     if error:
         notify("%s：%s" % (fail_prefix, error[1] or error[0]), subtitle=path)
     else:
+        invalidate_caches(["healthz","ready","quota","accounts","active"])
         notify(ok_message, subtitle=path)
 
 
@@ -2462,15 +2635,23 @@ def run_action(name, extra):
         detail='检测到 %d 个模块。确认后将替换当前勾选。\n\n将启用：%s\n将取消：%s'%(len(detected),'、'.join(added) or '无','、'.join(removed) or '无')
         if confirm('自动检测将覆盖当前模块选择',detail,accept='覆盖当前选项'):
             discovery.replace_selection(STATE_DIR,detected);schedule_background_refresh()
+    elif name == 'refresh-view':
+        schedule_background_refresh()
     elif name == 'refresh-source':
         refresh_resource(extra[0] if len(extra)==1 else '')
+    elif name in ('configure-connection','clear-connection'):
+        configure_connection(extra[0] if len(extra)==1 else '',name=='clear-connection')
+    elif name == 'auto-source':
+        preferences.update(STATE_DIR,'auto-path',extra[0] if len(extra)==1 else '')
+        schedule_background_refresh()
     elif name == 'open-settings':
-        path=os.path.join(STATE_DIR,'config.local.sh')
-        if not os.path.exists(path):
-            os.makedirs(STATE_DIR,mode=0o700,exist_ok=True)
-            with open(path,'w') as handle:handle.write('# Local settings only; never commit API keys.\n# export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"\n# export KOMARI_BASE_URL="https://your-komari.example"\n# export XAI_MANAGEMENT_API_KEY_FILE="$HOME/.config/xai/management-key"\n# export XAI_TEAM_ID="your-team-id"\n# export MINIMAX_API_KEY_FILE="$HOME/.config/minimax/subscription-key"\n# export MINIMAX_REGION="international"  # or china\n')
-            os.chmod(path,0o600)
-        subprocess.run(['/usr/bin/open','-t',path],check=True,timeout=5)
+        path=connections.ensure_file(STATE_DIR)
+        subprocess.run(['/usr/bin/open','-t',str(path)],check=True,timeout=5)
+    elif name == 'reveal-source':
+        key=extra[0] if len(extra)==1 else ''
+        if key not in preferences.USAGE:raise ValueError('invalid source')
+        locations=[p for p in source_locations(key) if os.path.exists(p)]
+        if locations:subprocess.run(['/usr/bin/open',locations[0] if os.path.isdir(locations[0]) else os.path.dirname(locations[0])],check=True,timeout=5)
     elif name == 'choose-source':
         key=extra[0] if extra else ''
         if key not in preferences.USAGE:raise ValueError('invalid source')
@@ -2485,7 +2666,7 @@ def run_action(name, extra):
     elif name == "swiftbar-folder":
         subprocess.run(["/usr/bin/open", PLUGIN_DIR], check=True, timeout=5)
     elif name == "refresh":
-        invalidate_caches(["usage_today", "usage_7d", "startup", range_cache_name()] + list(EXTERNAL_TTLS))
+        invalidate_caches(["healthz", "ready", "quota", "accounts", "active", "usage_today", "usage_7d", "startup", range_cache_name()] + list(EXTERNAL_TTLS))
         schedule_background_refresh()
     elif name == "check-app-updates":
         invalidate_caches(["app_updates", "badge"])
@@ -2604,7 +2785,7 @@ def consume_panel_action():
         # Only an action already present in the rendered menu can be requested.
         snapshot=read_cache("panel-view")
         nodes = list(snapshot.get("entries") or [])+list(snapshot.get("rangeOptions") or [])+list(snapshot.get("moduleOptions") or [])
-        allowed = []
+        allowed = [["refresh-view"]]
         dashboard=snapshot.get('dashboard') or {}
         if dashboard.get('allowCollapse'):
             allowed.extend([['set-expanded',p['id'],value] for p in dashboard.get('providers',[]) if p.get('id') in preferences.USAGE for value in ('true','false')])
@@ -2640,6 +2821,7 @@ def consume_panel_action():
 
 
 def main():
+    sync_connection_cache()
     argv = sys.argv[1:]
     if argv and argv[0] == "--initialize-modules":
         if os.path.exists(os.path.join(STATE_DIR,'preferences.json')):

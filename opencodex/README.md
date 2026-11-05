@@ -1,6 +1,6 @@
 # OpenCodex Token 面板
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.1.1**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.2.0**。
 
 ## 主页与模块
 
@@ -64,32 +64,43 @@ SwiftBar 插件目录/
   .opencodex-panel/
     OpenCodexPanel.app/
     lib/
-    config.local.sh       # 可选，旧版配置兼容
 ```
 
 仓库中的 `panel/`、`tests/`、`scripts/` 和文档用于开发维护，不需要全部放入 SwiftBar 插件目录。安装器会保留其他插件以及本机设置。
 
 ## 本机配置
 
-模块面板“外观与设置”中的“打开本机配置”会打开当前用户的：
+常用设置在 **右键星星 → 主页模块 → 连接与数据**，不需要修改脚本。每项明确显示“已配置”或“未配置”；自动读取或手动指定是配置来源，不代替状态，已配置也不等于网络验证成功：
 
-```text
-~/Library/Application Support/SwiftBarToken/config.local.sh
-```
+- 本机客户端自动读取标准记录目录；已配置项在下一级显示实际读取目录，可在 Finder 中打开、手动选择或恢复自动查找。API 只显示配置/密钥文件路径，不显示密钥内容。
+- ChatGPT 额度复用 Codex 的本机登录；不要求粘贴 API Key。
+- DeepSeek 优先使用明确指定的密钥文件，否则读取 OpenCodex 的官方 DeepSeek 连接。
+- Komari 必须明确提供实际面板地址；空值、注释和示例地址不算配置，不会自动启用。
+- Grok 选择管理密钥文件并填写 Team ID；MiniMax 选择套餐密钥文件和地区。全部确认后才保存，任一步取消都不改变设置。
+- 配置成功会启用对应模块；清除连接会关闭它，原始密钥文件不会删除。模块也可独立隐藏。
 
-这里的配置优先于插件旁边旧版 `config.local.sh`。模块选择、折叠状态和材质偏好单独保存在同目录的 `preferences.json`，不会随源码移动或缓存清除而丢失。安装前也可复制 `config.example.sh` 为仓库内忽略的 `config.local.sh`，随安装复制到运行目录。
+文件各有用途：
 
-```sh
-export KOMARI_BASE_URL="https://your-komari.example"
-export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"
-# key 文件只放 API key，建议权限 600；不要提交到 Git。
-```
+| 文件 | 何时写入 |
+| --- | --- |
+| `~/Library/Application Support/SwiftBarToken/preferences.json` | 模块选择、目录覆盖、材质、各模块展开状态改变时 |
+| 同目录 `config.local.sh` | 明确设置地址或密钥文件引用时；也可通过“高级配置文件”编辑 |
+| 系统临时目录中的插件缓存 | 数据同步时；连接变更会清除对应旧数据，清缓存不丢偏好 |
+| 客户端日志和密钥原文件 | 仅只读访问；插件不修改、不复制密钥 |
 
-Claude Code、Codex、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“数据来源”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
+`config.local.sh` 是唯一的插件用户配置。注释只作说明，不是已启用的设置。安装器不会再自动复制仓库中的私有配置；旧运行目录配置仅在用户配置不存在时迁移一次，已存在的用户配置（即使只有注释）始终优先，旧文件备份后移出。首次安装需要显式导入时可传 `--config /path/to/config.local.sh`；已有用户配置时拒绝覆盖。
+
+Claude Code、Codex、OpenCode、Gemini CLI 按各客户端的标准目录自动检测。WorkBuddy 同时检测 `~/.workbuddy-ai/projects` 和旧版 `~/.workbuddy/projects`，按响应 ID 去重。自定义目录可在“连接与数据”旁边的子菜单中选择，或用 `config.example.sh` 中的环境变量指定。DeepSeek Harness 的存储目录由部署决定，请选择实际的会话日志根目录。读取其压缩日志需要 `zstd`，或支持 Zstandard 的 Node.js；不支持的旧格式会明确标记。
 
 Grok 需设置 `XAI_MANAGEMENT_API_KEY_FILE` 和 `XAI_TEAM_ID`，使用具备账单读取权限的管理密钥；普通推理 API key 不适用。MiniMax 需设置 `MINIMAX_API_KEY_FILE`（套餐密钥），可选 `MINIMAX_REGION=china`，默认国际区。只发送读取请求，不调用模型或充值；未配置的模块会给出提示。
 
 自动检测只查看客户端安装状态、标准目录中的记录文件是否存在，以及当前环境变量、插件本机配置、OpenCodex 官方 DeepSeek 配置与 Codex 登录状态。不扫描对话内容、浏览器或钥匙串，不复制凭据、不发送验证请求；检测到配置不代表凭据一定有效，实际状态在打开模块时查询。刚安装但尚无记录的客户端会显示暂无数据；DeepSeek Harness 可能还需要指定记录目录。
+
+## 后台开销
+
+SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数据改为约 3 分钟检查，电池供电时约 5 分钟；余额等低频来源保持自身较长间隔。打开面板立即按正常刷新时效检查，资源侧栏和手动刷新仍可主动更新。电源状态最多每 5 分钟读取一次。
+
+原生面板通过目录变化事件接收快照和动作回执，关闭时不运行每秒计时器，也不监听全局鼠标移动。相同快照不重复写入；一次后台同步只触发一次 SwiftBar 刷新。未配置的 Komari、Grok、MiniMax 和未登录的 ChatGPT 不发起查询。
 
 ## 统计口径与隐私
 

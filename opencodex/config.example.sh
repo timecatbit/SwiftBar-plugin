@@ -1,5 +1,6 @@
 # Optional local configuration. No user-specific path is required.
-# Use “主页模块… → 外观与设置 → 打开本机配置” to edit the persistent user configuration.
+# Examples only. Use “主页模块 → 连接与数据” for guided setup, or its “高级配置文件”.
+# This file is never automatically loaded or copied during installation.
 # export KOMARI_BASE_URL="https://komari.example.com"
 # export DEEPSEEK_API_KEY_FILE="$HOME/.config/deepseek/api-key"
 # export OCX_BASE_URL="http://127.0.0.1:10100"
