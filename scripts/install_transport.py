@@ -17,7 +17,8 @@ def prepare(root,python):
     marker=target/'.requirements-sha256'
     def usable(path):
         probe='import sys; sys.path.insert(0,sys.argv[1]); from curl_cffi import requests; requests.Session(impersonate="chrome").close()'
-        return subprocess.run([python,'-c',probe,str(path)],capture_output=True,timeout=15).returncode==0
+        # -B: the probe must not leave bytecode that records this build folder's path.
+        return subprocess.run([python,'-B','-c',probe,str(path)],capture_output=True,timeout=15).returncode==0
     if marker.is_file() and marker.read_text().strip()==fingerprint and usable(target):return target
     target.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.claude-http-',dir=target.parent) as scratch:
@@ -30,6 +31,7 @@ def prepare(root,python):
         result=subprocess.run(command,capture_output=True,text=True,timeout=180,env=environment)
         if result.returncode or not usable(staging):
             raise RuntimeError('Claude HTTP component installation failed; check Python pip and access to pypi.org. No installed files were changed.')
+        for cache in list(staging.rglob('__pycache__')):shutil.rmtree(cache)
         (staging/'.requirements-sha256').write_text(fingerprint+'\n')
         if target.exists():shutil.rmtree(target)
         os.replace(staging,target)
