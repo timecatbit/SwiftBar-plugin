@@ -121,6 +121,22 @@ class DesktopTests(unittest.TestCase):
   self.assertEqual([w['used'] for w in payload['windows']],[12])
   entries=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload}))
   self.assertEqual(entries[0]['usageLevel'],'normal')
+ def test_enabled_oauth_queries_without_cookie_or_waiting_for_callback(self):
+  preferences.update(self.m.STATE_DIR,'claude-oauth','true')
+  payload={'source':'claude-oauth','updatedAt':self.m.time.time(),'stale':False,'windows':[{'label':'本周','used':88}]}
+  with patch.object(self.m.claude_oauth,'fetch',return_value=(payload,None)) as query,patch.object(live,'live_subscription') as cookie,patch.object(self.m.claude_local,'snapshot') as callback:
+   result,error=self.m.claude_subscription_load()
+  query.assert_called_once();cookie.assert_not_called();callback.assert_not_called();self.assertIsNone(error)
+  self.assertEqual(result,payload)
+  entries=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload}))
+  self.assertEqual(entries[0]['usageLevel'],'warning')
+ def test_oauth_failure_never_falls_back_to_a_different_app_account(self):
+  preferences.update(self.m.STATE_DIR,'claude-oauth','true')
+  payload={'source':'claude-oauth','stale':True,'windows':[],'state':'登录失效'}
+  with patch.object(self.m.claude_oauth,'fetch',return_value=(payload,(0,'登录失效',None))),patch.object(self.m.claude_desktop,'subscription') as app:
+   result,error=self.m.claude_subscription_load()
+  app.assert_not_called();self.assertEqual(result['fetchError'],'登录失效');self.assertIsNone(error)
+  self.assertEqual(result['windows'],[])
 
 class LiveSchemaTests(unittest.TestCase):
  def test_missing_cookie_store_does_not_open_keychain(self):

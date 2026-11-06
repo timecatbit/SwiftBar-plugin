@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.9.0</xbar.version>
+# <xbar.version>5.10.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -117,6 +117,7 @@ import swiftbar_claude as claude_desktop
 import swiftbar_claude_usage as claude_records
 import swiftbar_claude_live as claude_live
 import swiftbar_claude_local as claude_local
+import swiftbar_claude_oauth as claude_oauth
 import swiftbar_terminal as terminal_jobs
 import swiftbar_update_channels as update_channels
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
@@ -188,7 +189,7 @@ def chatgpt_source():
 
 
 def connection_ready(key):
-    if key=='claude-subscription':return claude_local.enabled(STATE_DIR) or bool(claude_desktop.subscription(source_path('claude')).get('windows'))
+    if key=='claude-subscription':return view_settings()['claudeOAuthUsage'] or claude_local.enabled(STATE_DIR) or bool(claude_desktop.subscription(source_path('claude')).get('windows'))
     if key in catalog.MANUAL_SUBSCRIPTIONS:return key in view_settings()['configuredSubscriptions']
     if key in catalog.PORTAL_APIS:return any(accounts.credential(name) for name in catalog.credential_names(key))
     if key=='chatgpt':return ocx_configured() if chatgpt_source()=='proxy' else chatgpt_configured()
@@ -238,7 +239,7 @@ def connection_fingerprint(name):
             except (OSError,TypeError):parts.append('unavailable')
             if key=='codex-cli' and binary:parts.append(update_channels.codex_channel(binary))
     if name=='claude_subscription':
-        parts.extend([source_path('claude'),view_settings()['claudeLiveUsage'],'local-v3'])
+        parts.extend([source_path('claude'),view_settings()['claudeLiveUsage'],view_settings()['claudeOAuthUsage'],os.environ.get('CLAUDE_CONFIG_DIR',''),'oauth-v1'])
         for filename in ('plan-usage-history.json','config.json',os.path.join(STATE_DIR,claude_local.SNAPSHOT)):
             try:
                 stat=os.stat(os.path.join(source_path('claude'),filename));parts.extend([stat.st_mtime_ns,stat.st_size])
@@ -1333,8 +1334,13 @@ def claude_usage_stale(payload):
 
 
 def claude_subscription_load():
-    # Normal refresh and flyout opening are always local. Login is read only by
-    # the explicit one-shot online action below, never as an automatic fallback.
+    # Code OAuth is independent of browser cookies and does not invoke a model.
+    if view_settings()['claudeOAuthUsage']:
+        requested=read_cache('resource-checks').get('claude-subscription',0)
+        payload,error=claude_oauth.fetch(STATE_DIR,consent=True,requested_at=requested)
+        if error:payload=dict(payload,fetchError=error[1])
+        # Publish errors as their own state; don't reuse a different App account.
+        return payload,None
     app=dict(claude_desktop.subscription(source_path('claude')),source='app-snapshot')
     app['stale']=claude_usage_stale(app)
     code=claude_local.snapshot(STATE_DIR) if claude_local.enabled(STATE_DIR) else None
@@ -1358,13 +1364,14 @@ def usage_level(percent,stale=False):
 def claude_subscription_lines(data):
     payload=data.get('claude_subscription') or claude_subscription_load()[0]
     windows=payload.get('windows') or []
-    live=payload.get('source')=='live';error=data.get('claude_subscription_error')
+    live=payload.get('source') in ('live','claude-oauth');error=data.get('claude_subscription_error')
+    if payload.get('fetchError'):error=(0,payload['fetchError'],None)
     stale=claude_usage_stale(payload)
     value=' · '.join(w['label']+' %g%%'%w['used'] for w in windows[:2]) if windows and not stale else payload.get('state','暂无本机用量快照')
     if windows and stale:value='用量待更新' if live else '本机用量待更新'
     failed=bool(error and error[1]!='正在后台读取')
     if failed:value='刷新失败' if windows else '暂不可用'
-    source={'live':'手动在线查询','claude-code':'Claude Code 本机回传','app-snapshot':'Claude App 本机快照'}.get(payload.get('source'),'Claude App 本机快照')
+    source={'claude-oauth':'Claude Code 登录 · 主动查询','live':'App 登录 · 手动查询','claude-code':'Claude Code 本机回传','app-snapshot':'Claude App 本机快照'}.get(payload.get('source'),'Claude App 本机快照')
     rows=[item('Claude 订阅',badge=value,sfimage='person.crop.circle',panelusagelevel=usage_level(max((w['used'] for w in windows),default=0),stale or failed or not windows)),
           item('来源 · '+source,level=1,color=MUTED,size=10)]
     for w in windows:
@@ -1379,10 +1386,14 @@ def claude_subscription_lines(data):
         rows.append(item(w['label'],badge='%g%% 已用'%w['used'],paneldetail=reset,level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
     if windows:rows.append(item('更新时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
     if failed:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
-    if stale:rows.append(item('旧快照仅供参考，等待客户端更新',level=1,color=MUTED,size=10))
-    if not claude_local.enabled(STATE_DIR):rows.append(item('启用本机用量回传…',level=1,sfimage='arrow.triangle.2.circlepath',**act('set-claude-local','true')))
-    else:rows.append(item('Code 响应后更新，无需登录凭据',level=1,color=MUTED,size=10))
-    rows.append(item('在线查询一次…',level=1,sfimage='arrow.clockwise',paneldetail='仅此操作读取 Claude App 登录；不在后台查询',**act('refresh-claude-online')))
+    if view_settings()['claudeOAuthUsage']:
+        if stale and windows:rows.append(item('保留上次用量，当前数据待刷新',level=1,color=MUTED,size=10))
+        rows.append(item('约 5 分钟自动更新，无需调用模型',level=1,color=MUTED,size=10))
+        rows.append(item('立即刷新用量',level=1,sfimage='arrow.clockwise',**act('refresh-source','claude-subscription')))
+        if failed:rows.append(item('重新授权读取登录…',level=1,**act('set-claude-oauth','true')))
+    else:
+        if stale:rows.append(item('旧快照仅供参考，等待客户端更新',level=1,color=MUTED,size=10))
+        rows.append(item('启用 Claude Code 登录查询…',level=1,sfimage='arrow.triangle.2.circlepath',paneldetail='主动获取订阅用量，不读取 Cookie',**act('set-claude-oauth','true')))
     rows.extend([item('打开 Claude',level=1,sfimage='macwindow',**act('open-claude')),
                  item('打开订阅用量',level=1,sfimage='arrow.up.right',href=catalog.BY_KEY['claude-subscription'].url)])
     return rows
@@ -1970,7 +1981,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.9.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.10.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2121,10 +2132,12 @@ def service_connection_entry(key):
     service=catalog.BY_KEY.get(key);configured=connection_ready(key)
     if key=='claude-subscription':
         return {'label':service.label,'value':'已配置' if configured else '未配置','symbol':'person.crop.circle','children':[
-            {'label':'来源 · 本机优先，不自动读取 Cookie','children':[]},
+            {'label':'Claude Code 登录查询','checked':view_settings()['claudeOAuthUsage'],'action':['set-claude-oauth','false' if view_settings()['claudeOAuthUsage'] else 'true'],'children':[]},
+            {'label':'主动查用量，不读取 Cookie、不调用模型','children':[]},
+            location_entry('Code 登录来源',[str(claude_oauth.config_root())]),
             {'label':'关闭本机回传' if claude_local.enabled(STATE_DIR) else '启用本机用量回传…','action':['set-claude-local','false' if claude_local.enabled(STATE_DIR) else 'true'],'children':[]},
             location_entry('本机快照',[os.path.join(STATE_DIR,claude_local.SNAPSHOT)]) if claude_local.enabled(STATE_DIR) else location_entry('App 快照文件',[os.path.join(source_path('claude'),'plan-usage-history.json')]),
-            {'label':'在线查询一次…','action':['refresh-claude-online'],'children':[]},
+            {'label':'使用 App 登录查询一次…','action':['refresh-claude-online'],'children':[]},
             *([{'label':'清除在线查询授权','action':['set-claude-live','false'],'children':[]}] if view_settings()['claudeLiveUsage'] else []),
             {'label':'正常 <70% · 橙色 70–89% · 红色 ≥90%','children':[]},
             {'label':'选择 Claude 数据目录…','action':['choose-source','claude'],'children':[]},
@@ -2955,6 +2968,16 @@ def run_action(name, extra):
     elif name == 'open-claude':
         if extra:raise ValueError('invalid app action')
         subprocess.run(['/usr/bin/open','-a','Claude'],check=True,timeout=5)
+    elif name == 'set-claude-oauth':
+        value=extra[0] if len(extra)==1 else ''
+        if value not in ('true','false'):raise ValueError('invalid Claude OAuth preference')
+        if value=='true':
+            if not view_settings()['claudeOAuthUsage'] and not confirm('使用 Claude Code 登录查询用量？','读取 Claude Code 现有登录，仅向 api.anthropic.com 查询订阅用量。无需 Cookie 或模型调用。登录过期时可启动 Code 自检续期，不发送消息。\n凭据只在内存；不写入插件配置或日志。macOS 可能询问钥匙串权限。',accept='启用'):return
+            preferences.update(STATE_DIR,'claude-oauth','true')
+            claude_oauth.fetch(STATE_DIR,consent=True,force=True)
+        else:
+            preferences.update(STATE_DIR,'claude-oauth','false');claude_oauth.clear(STATE_DIR)
+        invalidate_caches(['claude_subscription']);schedule_background_refresh()
     elif name == 'set-claude-live':
         value=extra[0] if len(extra)==1 else ''
         if value not in ('true','false'):raise ValueError('invalid Claude usage preference')
