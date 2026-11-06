@@ -50,6 +50,7 @@
 - 动作通过 `panel-action.json` → SwiftBar 刷新 → 白名单执行 → 回执传递。不要从原生面板直接运行插件脚本，以免触发 Documents/TCC 访问问题。
 - 保存回执携带不含目录/凭据的显示偏好及版本号，旧数据刷新不能覆盖已保存的选择；连续点击按顺序应用，后台检查期间不能静默丢弃用户动作。
 - 菜单展开期间不得重建范围下拉控件。只在跟踪结束后更新布局。
+- 发布前另用较新的 Python（如 Homebrew 的 3.14）再跑一遍 `scripts/check.py`：GitHub 发布机用最新 Python，3.11 起关闭连接不再重置未读完的 SQLite 游标，出错路径必须显式关闭游标或回滚。
 - 使用 `python3 scripts/check.py` 验证，它同时扫描 `lib/`、`scripts/` 中未被引用的函数与导入。改动 Swift 代码时运行 `scripts/build.py`。
 - 插件主体在 `lib/swiftbar_plugin.py`，`token-monitor.30s.sh`（SwiftBar 中名为 token-monitor，元数据作者 minicoke、GitHub 指向本仓库）只加载配置并启动；不要把 Python 重新内嵌进入口脚本。菜单渲染只读缓存，网络请求与日志索引放在后台进程；一次渲染内的偏好与本机元数据使用同一份快照。
 - 价格表 `lib/codex-pricing.json`（OpenAI/Codex）与 `lib/model-pricing.json`（DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 官方模型名）均由 `python3 scripts/update_pricing.py <ccusage 检出目录>` 从 ccusage 价格快照生成，不要手改；`.github/workflows/update-pricing.yml` 每天用最新 ccusage 运行并提交；表中 `source.committedAt` 决定新旧。已安装插件每天后台 GET 一次本仓库 raw 地址的两张表（不带 Cookie/标识，`OCX_PRICING_UPDATES=0` 关闭），必须经 `valid_pricing` 逐项校验且更新于当前副本才写入 `SwiftBarToken/pricing/`；统计缓存键含价格快照提交，换表即重算。这是“未配置不发请求”的唯一例外。客户端自己记录的费用优先，仅缺失时按表估算；表中没有的名字（如 `default-model`）保持未计价，不按相近模型猜价。更新时同步 README 中的复核提交。

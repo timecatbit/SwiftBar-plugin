@@ -317,6 +317,9 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
         if not paths:
             return {'error': '暂无用量记录'}
         return result
+    except BaseException:
+        # Python 3.11+ no longer resets open cursors on close; never leave the write lock behind.
+        conn.rollback(); raise
     finally:
         conn.close()
 

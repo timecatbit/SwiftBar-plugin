@@ -190,8 +190,10 @@ def read_events(files,db_path,allowed_sessions=None,start=0,end=float('inf')):
         if rebuild or not old_scope or old_scope[0]!=scope or (added and not isolated(conn,added,allowed)):
             # Deduplicate before date filtering, once per file/ownership change.
             rows=conn.execute('SELECT '+COLUMNS+' FROM records ORDER BY file,offset,slot')
-            events=(stored_event(row) for row in rows if allowed is None or row[3] in allowed)
-            unique=deduplicate(events)
+            # Close the streaming cursor even when deduplication fails: an open read would keep
+            # a shared lock that blocks the next run's commit.
+            try:unique=deduplicate(stored_event(row) for row in rows if allowed is None or row[3] in allowed)
+            finally:rows.close()
             conn.execute('DELETE FROM canonical')
             store_canonical(conn,unique)
             conn.execute("INSERT OR REPLACE INTO metadata VALUES ('dedupe-scope',?)",(scope,))
@@ -202,4 +204,8 @@ def read_events(files,db_path,allowed_sessions=None,start=0,end=float('inf')):
                 for ts,model,i,o,w5,w1,r,cost,speed,geo,tier,session in conn.execute(
                     'SELECT ts,model,i,o,w5,w1,r,cost,speed,geo,tier,session FROM canonical WHERE ts>=? AND ts<=?',(start,end))]
         return events,failures
+    except BaseException:
+        # Python 3.11+ no longer resets open cursors on close, so an interrupted reindex would
+        # keep its write lock until the cursor is collected. Roll back explicitly instead.
+        conn.rollback();raise
     finally:conn.close()

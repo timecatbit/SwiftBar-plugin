@@ -4,6 +4,7 @@
 
 - 插件可以自己更新：GitHub 有新版本时，主页“Harness 更新”下方出现“Token Monitor · 可更新”一行，确认后自动下载、校验 SHA-256、备份并安装，完成后刷新；没有新版本时不显示。`OCX_SELF_UPDATES=0` 可关闭检查。
 - “应用更新”改名为“Harness 更新”；通知和确认框标题改为 Token Monitor。
+- 修复在 Python 3.11 及更新版本中，Claude 用量索引被中断后数据库一直被锁、之后无法再统计的问题。
 - README 精简为功能、安装、更新、使用、隐私和致谢，换上新的运行截图。
 - 新增预编译发布包：GitHub Release 附带 `token-monitor-5.12.0.zip`（Apple 芯片与 Intel 通用面板），下载解压后运行其中的 `install.py` 即可安装，无需 git 或 Xcode Command Line Tools；从源码安装仍可用，两种方式都保留备份与本机设置。
 
