@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.10.2**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.11.0**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -21,24 +21,26 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Summary | 汇总当前显示的用量来源；共用趋势图显示总量及各来源 |
 | OpenCodex | 本机或自定义管理接口的 Token、请求、费用、模型分布；附代理管理 |
 | Claude | Claude 桌面 App 登记的可读取会话用量；排除未登记的独立 CLI 会话，未知价格显示未计价 |
-| ChatGPT 本机用量 | Codex 普通/归档会话，支持 `.jsonl` 和 `.jsonl.zst`；优先单次用量，兼容仅累计计数，不重复加缓存或 reasoning |
+| ChatGPT 本机用量 | Codex 普通/归档会话，支持 `.jsonl` 和 `.jsonl.zst`；优先单次用量，兼容仅累计计数，不重复加缓存或 reasoning；按 ccusage 价格表估算 API 等值费用，含单次请求长上下文分档与 fast/flex 服务等级倍率 |
 | OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用 |
 | DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志 |
 | WorkBuddy | 当前与旧版 `projects` JSONL；按响应 ID 去重，缓存与 reasoning 不重复计数，Credit 不视作美元 |
 | Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token |
 | DeepSeek API 余额 | 官方 `/user/balance`；可独立配置 API key 文件，也可复用 OpenCodex 已配置的官方 DeepSeek 凭据 |
-| ChatGPT 订阅 | 本机 ChatGPT 登录的编程工具额度，或 OpenCodex 管理的 ChatGPT 账户额度；支持选择来源，不代表网页聊天全部限额 |
-| Claude 订阅 | 可复用 Claude Code 登录主动查询最新订阅用量，无需 Cookie 或模型调用；也可只读本机快照。仅显示用量与重置时间 |
+| ChatGPT 订阅 | 勾选并配置了 OpenCodex 时显示其管理的 ChatGPT 账户额度，否则读取本机 ChatGPT 登录的编程工具额度；不代表网页聊天全部限额 |
+| Claude 订阅 | 可复用 Claude Code 登录主动查询最新订阅用量，无需 Cookie 或模型调用；也可只读本机快照。显示用量、重置时间及同一响应中的额外用量（本月已用/上限，返回时含余额） |
 | Gemini / Grok / Kimi 订阅 | 独立模块、手动配置标记与官网入口；尚未接入自动额度查询，不读取浏览器登录 |
 | Grok API 余额 | xAI 官方 Management API 的团队预付余额，需管理密钥和 Team ID；不是 SuperGrok 订阅额度 |
 | MiniMax 订阅 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
-| ChatGPT / Claude / MiniMax / Gemini / Kimi API | 识别已有 API 密钥配置或引用用户选择的密钥文件；本版仅提供官网账单入口，未接入余额自动查询 |
+| Kimi API 余额 | Moonshot 官方 `/v1/users/me/balance`，区分中国站（人民币）与国际站（美元）；显示可用余额及现金、代金券明细 |
+| ChatGPT / Claude / Gemini API | 官方没有用普通 API Key 查询余额的接口；可直接输入或选择 Key，并手动“测试 Key”确认可用，余额与账单仍在官网查看 |
+| MiniMax API | 识别已有 API 密钥配置或引用用户选择的密钥文件；官方未提供余额接口，仅提供官网账单入口 |
 | Komari 监控 | 已配置的 Komari 面板、在线状态与服务器详情 |
 | 应用更新 | 跟随已勾选的 Harness；OpenCodex 联动 ChatGPT 与 Codex CLI，Claude 联动 Claude Code。OpenCodex 自动更新，其他应用提示并提供更新入口 |
 
 订阅顺序为 **ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi**；API 顺序为 **ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi**。两组单独勾选、单独配置，安装客户端或存在 API Key 不代表已订阅。模块选择与连接设置合并在同一列表，分类与主页一致。
 
-“已配置”旁为绿色实心圆点，“未配置”旁为灰色空心圆点，文字始终保留。圆点只说明存在配置引用或用户保存的手动标记，不代表已验证凭据或付费状态。尚未接入查询的模块显示“官网查看”，不显示伪造的零余额；未设置则显示“未配置”。订阅手动标记保存在本机偏好文件，不复制登录信息。API 官网入口模块不会发送密钥请求。MiniMax API 使用独立的 `MINIMAX_PLATFORM_API_KEY_FILE`，不复用订阅的 `MINIMAX_API_KEY_FILE`。
+“已配置”旁为绿色实心圆点，“未配置”旁为灰色空心圆点，文字始终保留。圆点只说明存在配置引用或用户保存的手动标记，不代表已验证凭据或付费状态。尚未接入查询的模块显示“官网查看”，不显示伪造的零余额；未设置则显示“未配置”。订阅手动标记保存在本机偏好文件，不复制登录信息。API 官网入口模块不会在后台发送密钥请求；只有点击“测试 Key”时才向官方地址发送一次只读请求，不保存响应内容。MiniMax API 使用独立的 `MINIMAX_PLATFORM_API_KEY_FILE`，不复用订阅的 `MINIMAX_API_KEY_FILE`。
 
 升级会把原来的 OpenCodex 账户额度迁入 ChatGPT 订阅，并继续使用原有代理来源，不改变已选择的主页模块。界面统一使用 ChatGPT 名称；`codex` 命令、`~/.codex` 路径、内部数据 ID 与模型原名保持兼容。OpenCodex 是独立产品名称。
 
@@ -69,7 +71,7 @@ python3 scripts/install.py --plugin-dir '/你的/SwiftBar插件目录'
 
 脚本会编译、签名、备份并复制运行所需文件，首次安装自动选择模块，然后刷新 SwiftBar。**安装后可移动或删除源码仓库，插件不依赖仓库路径。** 没有写死用户名或个人 Documents 目录。
 
-安装会从 PyPI 下载固定版本的 `curl_cffi` 及依赖，放在插件自己的 `.opencodex-panel/python/` 中，不修改系统 Python 包；后续安装复用已验证的构建缓存。该组件用于 Claude 官方网站兼容的 HTTPS 连接，菜单刷新不会运行 pip。需要 Python 自带的 pip 和首次安装时的网络连接；更换 `OCX_PYTHON` 或 Python 主/次版本后重新运行安装脚本。
+安装会从 PyPI 下载固定版本并逐一校验 SHA-256 的 `curl_cffi` 及依赖，放在插件自己的 `.opencodex-panel/python/` 中，不修改系统 Python 包；后续安装复用已验证的构建缓存。该组件用于 Claude 官方网站兼容的 HTTPS 连接，菜单刷新不会运行 pip。需要 Python 自带的 pip 和首次安装时的网络连接；更换 `OCX_PYTHON` 或 Python 主/次版本后重新运行安装脚本。
 
 SwiftBar 只执行一个入口，但完整的原生界面需要配套运行文件：
 
@@ -91,8 +93,9 @@ SwiftBar 插件目录/
 每项连接明确显示“已配置”或“未配置”；配置状态不等于连接验证结果。通用外观、自动检测、高级配置文件和恢复默认集中放在“允许折叠”下方的“外观与设置”：
 
 - 本机客户端自动读取标准记录目录；已配置项在下一级显示实际读取目录，可在 Finder 中打开、手动选择或恢复自动查找。API 只显示配置/密钥文件路径，不显示密钥内容。
-- ChatGPT 订阅支持自动、本机登录和 OpenCodex 账户三种来源选择；支持选择含 `auth.json` 的配置目录、恢复自动读取及在 Finder 中打开；默认使用 `CODEX_HOME` 或 `~/.codex`。只改变插件读取位置，不修改客户端登录文件，也不影响 ChatGPT 本机用量目录。
+- ChatGPT 订阅的来源跟随 OpenCodex 勾选：勾选且已配置时使用 OpenCodex 账户，否则读取本机 ChatGPT 登录，无需单独选择；取消勾选 OpenCodex 后也不再轮询其管理接口。支持选择含 `auth.json` 的配置目录、恢复自动读取及在 Finder 中打开；默认使用 `CODEX_HOME` 或 `~/.codex`。只改变插件读取位置，不修改客户端登录文件，也不影响 ChatGPT 本机用量目录。
 - OpenCodex 位于 Harness 分组：可选择配置目录、修改管理地址、选择管理令牌文件及恢复自动读取。选择配置目录时改为读取该目录内的端口和令牌，不保留上一个目录的连接覆盖。
+- API 模块可“输入 API Key…”直接粘贴 Key（隐藏输入），保存到 `~/Library/Application Support/SwiftBarToken/keys/`（目录 700、文件 600），`config.local.sh` 只记录其路径；也可继续“选择密钥文件…”。清除连接或改选文件时，删除插件保存的 Key 副本，不删除你自己选择的文件。
 - DeepSeek 优先使用明确指定的密钥文件，否则读取 OpenCodex 的官方 DeepSeek 连接。
 - Komari 必须明确提供实际面板地址；空值、注释和示例地址不算配置，不会自动启用。
 - Grok 选择管理密钥文件并填写 Team ID；MiniMax 选择套餐密钥文件和地区。全部确认后才保存，任一步取消都不改变设置。
@@ -121,9 +124,13 @@ Claude App 的会话仍由桌面 App 登记决定；用量记录同时查找 `~/
 
 ## 后台开销
 
-SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数据改为约 3 分钟检查，电池供电时约 5 分钟；余额等低频来源保持自身较长间隔。打开面板立即按正常刷新时效检查，资源侧栏和手动刷新仍可主动更新。电源状态最多每 5 分钟读取一次。
+SwiftBar 的 30 秒入口只读取缓存并输出菜单，不等待网络：OpenCodex 管理接口、各类账户查询和本机日志索引都在单独的后台进程中更新，完成后再刷新一次 SwiftBar。OpenCodex 无法连接时，其他管理接口等健康检查恢复后再查询，不会反复触发刷新。
+
+缓存按需复用：面板关闭时短周期数据改为约 3 分钟检查，电池供电时约 5 分钟；余额等低频来源保持自身较长间隔。打开面板立即按正常刷新时效检查，资源侧栏和手动刷新仍可主动更新。电源状态最多每 5 分钟读取一次。
 
 原生面板通过目录变化事件接收快照和动作回执，关闭时不运行每秒计时器，也不监听全局鼠标移动。相同快照不重复写入；一次后台同步只触发一次 SwiftBar 刷新。未配置的 Komari、Grok、MiniMax 和未登录的 ChatGPT 不发起查询。
+
+Claude 用量索引只保存规范化计数与 128 位哈希 ID；只追加新响应时直接扩展已去重的索引；新响应与已有响应共用 ID 或会话路由、文件被改写或删除时才整体重新去重。Codex、DeepSeek Harness、WorkBuddy 与 Gemini 按文件保存事件副本并在读取时去重，会话归档或删除只移除对应文件的数据，不重新解析其他日志。旧版本索引、已失效的范围快照与残留临时文件每小时最多清理一次，只涉及插件自己的缓存目录。
 
 ## 统计口径与隐私
 
@@ -139,7 +146,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update`、`codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。优先直接在 iTerm 新标签或 Terminal 新窗口执行，显示真实命令、更新器输出、前后版本和最终结果，完成后保留窗口。系统不允许自动控制终端时才降级为独立 `.command` 文件，结果仍保留。
 - CLI 更新日志仅保存在本机 `~/Library/Application Support/SwiftBarToken/logs/updates/`，每个 CLI 保留最近 20 次，文件权限为 600；“应用更新”中可打开已勾选客户端最近的日志。退出码非零明确显示失败；命令成功但版本没变时显示“检查完成，版本未变化”，不误报升级成功。其他桌面客户端仍只提示和打开官方入口。
 - Claude Harness 默认读取 `~/Library/Application Support/Claude` 的会话登记，再读取对应的共享用量记录；只统计 App 登记的可读取会话，并不声称覆盖所有 Chat/Cowork 调用。旧版指定的 CLI 日志目录不会被误用为 App 目录。
-- Claude 订阅只显示已用百分比与重置时间，不查询或展示额度余额。有效用量低于 70% 使用正常文字色（浅色为黑、深色为浅色），70–89% 为系统橙色，90% 起为系统红色；旧数据不套用当前用量的警示颜色。
+- Claude 订阅显示已用百分比、重置时间，以及 OAuth 用量响应中的额外用量：本月已用、每月上限与剩余；响应带有额外用量余额时一并显示。全部取自已在使用的同一个用量接口，插件不访问 prepaid/credits 等其他接口；没有返回余额就不显示，也不推算；未开启时显示“未开启”。有效用量低于 70% 使用正常文字色（浅色为黑、深色为浅色），70–89% 为系统橙色，90% 起为系统红色；旧数据不套用当前用量的警示颜色。
 - 推荐在 Claude 订阅侧栏启用 **Claude Code 登录查询**：只读复用当前 Code 登录，通过 `GET https://api.anthropic.com/api/oauth/usage` 主动获取用量，无需浏览器 Cookie，也不用等待模型响应。默认约 5 分钟更新，打开侧栏和手动刷新会主动检查，30 秒内复用成功结果；429 按服务端 `Retry-After` 退避，缺失时至少等 5 分钟，手动刷新也不会绕过限流。接口属于客户端内部接口，服务端变更可能影响可用性。
 - OAuth 凭据只在内存中使用，只发送到固定的 Anthropic 用量地址，不跟随重定向、不查询余额。缓存仅含解析后的用量、不可逆的登录指纹和重试状态。令牌过期时由 Claude Code 的启动自检自行续期；插件不提交提示词，不调用模型，不直接轮换或写回令牌。自检在临时空目录运行，禁用工具、MCP、钩子和自动更新，完成后关闭自己的进程组。续期失败不反复启动 CLI，等待登录变化或用户明确重试。钥匙串读取失败后暂停自动读取，直到用户在侧栏重新授权。
 - 未启用 OAuth 时只读取 App 历史快照或已启用的 Code 本机回传，比较新鲜程度并标出来源和时间；超过 10 分钟或已过重置时间标记待更新，不将旧值当当前值。OAuth 启用后失败也不会悄悄拼入 App 数据，以免不同客户端登录的账号不同。
@@ -154,7 +161,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 
 ## 参考实现与许可
 
-本版参考并适配了 [ccusage](https://github.com/ccusage/ccusage) 的采集逻辑，固定参考版本为 [`615bd802`](https://github.com/ccusage/ccusage/tree/615bd802bc5c50246b84e98406f20ab048e27cf6)。重点采用其 [Claude 响应去重与 advisor 规则](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/claude/src/lib.rs)、[缓存计费](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/crates/ccusage-core/src/cost.rs)、[Codex 单次/累计用量解析](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/codex/src/parser.rs)和压缩日志选择逻辑，改为适合菜单栏刷新的 Python/SQLite 增量实现。
+本版参考并适配了 [ccusage](https://github.com/ccusage/ccusage) 的采集逻辑，固定参考版本为 [`615bd802`](https://github.com/ccusage/ccusage/tree/615bd802bc5c50246b84e98406f20ab048e27cf6)。重点采用其 [Claude 响应去重与 advisor 规则](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/claude/src/lib.rs)、[缓存计费](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/crates/ccusage-core/src/cost.rs)、[Codex 单次/累计用量解析](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/codex/src/parser.rs)和压缩日志选择逻辑，改为适合菜单栏刷新的 Python/SQLite 增量实现。2026-11-06 复核 ccusage 最新提交 [`2c92293e`](https://github.com/ccusage/ccusage/tree/2c92293e0a1d6a395c6a10a23267855e3205a1a6)：自固定版本以来只更新了依赖和价格快照，Claude、Codex 适配器与 Claude 模型价格均无变化，因此继续沿用上述规则。ChatGPT 本机用量的价格表 `lib/codex-pricing.json` 由 `scripts/update_codex_pricing.py` 从该提交的 models.dev 价格快照、服务等级倍率与 `codex-auto-review` 回退表生成。
 
 ccusage 为 MIT 许可，版权声明及完整许可证保存在 [lib/CCUSAGE_LICENSE](lib/CCUSAGE_LICENSE)，安装时一并复制。运行插件不需要安装 ccusage、Node 或 Rust；读取压缩日志仍需要 `zstd` 或具备 Zstandard 支持的 Node.js。
 
@@ -176,10 +183,10 @@ OAuth 实现参考 [CodexBar 的 Claude 接入](https://github.com/steipete/Code
 
 ## 开发维护
 
-`opencodex.30s.sh` 负责采集协调、缓存与 SwiftBar 入口；`lib/` 负责独立采集器与偏好设置；`panel/Panel.swift` 负责原生界面。
+`opencodex.30s.sh` 是 SwiftBar 入口，只加载用户配置并启动 Python；`lib/swiftbar_plugin.py` 负责采集协调、缓存与菜单输出，Python 能缓存其字节码；其余 `lib/` 模块负责独立采集器与偏好设置；`panel/Panel.swift` 负责原生界面。
 
 ```sh
-python3 scripts/check.py   # 隔离测试，不运行实际插件
+python3 scripts/check.py   # 未使用代码扫描与隔离测试，不运行实际插件
 python3 scripts/build.py   # 仅构建到忽略的 build/
 python3 scripts/install.py # 安装、保留备份、刷新
 ```

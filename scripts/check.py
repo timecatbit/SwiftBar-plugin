@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Syntax checks and isolated unit tests; does not run the live plugin."""
+"""Syntax checks, an unused-code scan and isolated unit tests; does not run the live plugin."""
+import ast
 import os
 import hashlib
 from pathlib import Path
@@ -8,7 +9,39 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def unused_code():
+    """No linter dependency: top-level functions, classes and imports nothing refers to."""
+    files = sorted(ROOT.glob('lib/*.py')) + sorted(ROOT.glob('scripts/*.py'))
+    trees = {path: ast.parse(path.read_text(), str(path)) for path in files}
+    used = {'main'}
+    for tree in trees.values():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                used.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                used.add(node.attr)
+            elif isinstance(node, ast.ImportFrom):
+                used.update(alias.name for alias in node.names)
+    problems = []
+    for path, tree in trees.items():
+        local = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name not in used:
+                problems.append('%s:%d unused %s' % (path.relative_to(ROOT), node.lineno, node.name))
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    name = (alias.asname or alias.name).split('.')[0]
+                    if name not in local:
+                        problems.append('%s:%d unused import %s' % (path.relative_to(ROOT), node.lineno, name))
+    return problems
+
+
 subprocess.run(['/bin/bash', '-n', str(ROOT / 'opencodex.30s.sh')], check=True)
+problems = unused_code()
+if problems:
+    sys.exit('Unused code:\n' + '\n'.join(problems))
 with tempfile.TemporaryDirectory(prefix='swiftbar-token-tests-') as scratch:
     private_prefixes = ('OCX_', 'KOMARI_', 'DEEPSEEK_', 'XAI_', 'MINIMAX_', 'CLAUDE_',
                         'OPENAI_', 'ANTHROPIC_', 'MOONSHOT_', 'GOOGLE_', 'KIMI_', 'CODEX_', 'GEMINI_', 'WORKBUDDY_', 'OPENCODE_', 'DSH_')

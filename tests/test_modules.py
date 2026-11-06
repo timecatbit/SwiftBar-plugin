@@ -17,7 +17,7 @@ class ModuleTests(unittest.TestCase):
         env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/settings','OCX_PLUGIN_PATH':str(ROOT/'opencodex.30s.sh'),'OS_APPEARANCE':'Light'})
         env.start();self.addCleanup(env.stop)
         self.m=types.ModuleType('module_test')
-        code=(ROOT/'opencodex.30s.sh').read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        code=(ROOT/'lib/swiftbar_plugin.py').read_text()
         exec(compile(code,'plugin','exec'),self.m.__dict__)
     def toggle(self,key,value):
         return preferences.update(self.m.STATE_DIR,'module',key,'true' if value else 'false')
@@ -29,6 +29,24 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual((Path(self.m.STATE_DIR)/'preferences.json').stat().st_mode & 0o777,0o600)
         preferences.update(self.m.STATE_DIR,'reset')
         self.assertIn('komari',preferences.read(self.m.STATE_DIR)['visible'])
+    def test_one_render_reads_a_single_settings_snapshot(self):
+        self.toggle('komari',True)
+        self.m.RENDER_MEMO={}
+        try:
+            self.assertTrue(self.m.module_enabled('komari'))
+            self.toggle('komari',False)
+            self.assertTrue(self.m.module_enabled('komari'))
+        finally:self.m.RENDER_MEMO=None
+        self.assertFalse(self.m.module_enabled('komari'))
+    def test_render_snapshot_starts_after_panel_actions_and_is_released(self):
+        reads=[];marks=[]
+        original=preferences.read
+        with patch.object(self.m.preferences,'read',side_effect=lambda d:reads.append(d) or original(d)), \
+             patch.object(self.m,'consume_panel_action',side_effect=lambda:marks.append(len(reads))), \
+             patch.object(self.m,'schedule_background_refresh'),patch('sys.argv',['plugin']),patch('builtins.print'):
+            self.m.main()
+        self.assertIsNone(self.m.RENDER_MEMO)
+        self.assertEqual(len(reads)-marks[0],1)
     def test_unknown_or_malformed_preference_is_not_an_action(self):
         with self.assertRaises(ValueError):self.toggle('arbitrary-command',True)
         Path(self.m.STATE_DIR).mkdir(exist_ok=True)

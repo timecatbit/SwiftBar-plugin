@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -54,7 +55,7 @@ class PowerTests(unittest.TestCase):
         env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/state','OCX_PLUGIN_PATH':str(ROOT/'opencodex.30s.sh'),'OS_APPEARANCE':'Light'})
         env.start();self.addCleanup(env.stop)
         self.m=types.ModuleType('power_test')
-        code=(ROOT/'opencodex.30s.sh').read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        code=(ROOT/'lib/swiftbar_plugin.py').read_text()
         exec(compile(code,'plugin','exec'),self.m.__dict__)
         self.write('power-state',{'battery':False,'checkedAt':self.m.time.time()})
     def write(self,name,value):self.m.write_json_cache(self.m.cache_path(name),dict(schema=1,**value) if "schema" not in value else value)
@@ -83,10 +84,52 @@ class PowerTests(unittest.TestCase):
         responses=[types.SimpleNamespace(returncode=0,stdout=str(key)),types.SimpleNamespace(returncode=1,stdout='')]
         with patch.object(self.m,'applescript',side_effect=responses),patch.object(self.m.connections,'write_overrides') as write:
             self.m.configure_connection('grok');write.assert_not_called()
-    def test_cached_foreground_does_not_repeat_local_network_calls(self):
+    def test_foreground_reads_caches_and_background_reuses_them(self):
         with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'schedule_background_refresh'),patch.object(self.m,'request',return_value=({'status':'ready'},None)) as request:
-            self.m.gather();count=request.call_count;self.m.gather()
-        self.assertGreater(count,0);self.assertEqual(request.call_count,count)
+            self.m.gather();self.assertEqual(request.call_count,0)
+            self.m.opencodex_refresh();count=request.call_count;self.m.opencodex_refresh()
+            data=self.m.gather()
+        self.assertEqual(count,len(self.m.OPENCODEX_ENDPOINTS));self.assertEqual(request.call_count,count)
+        self.assertEqual(data['ready']['status'],'ready')
+    def test_unreachable_opencodex_does_not_loop_background_refreshes(self):
+        calls=[]
+        def request(path,**kwargs):
+            calls.append(path);return (None,(0,'Connection refused',None)) if path=='/healthz' else ({'ok':True},None)
+        with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'request',side_effect=request):
+            self.m.cached_fetch('quota',lambda:({'quotas':{}},None),30)
+            self.m.invalidate_caches(['quota'])
+            self.m.opencodex_refresh()
+            self.assertEqual(calls,['/healthz'])
+            self.assertFalse(self.m.loader_due('opencodex'))
+            data=self.m.gather()
+            self.assertIn('未连接',self.m.title(data).split('|')[1])
+        self.assertIsNone(data['healthz']);self.assertIsNone(data['quota'])
+    def test_starting_readiness_body_is_cached_as_state(self):
+        def request(path,**kwargs):
+            return ({'version':'1.0'},None) if path=='/healthz' else (None,(503,'starting',{'status':'starting'})) if path=='/readyz' else ({},None)
+        with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'request',side_effect=request):
+            self.m.opencodex_refresh()
+            data=self.m.gather()
+            self.assertIn('正在启动',self.m.title(data))
+        self.assertEqual(self.m.ready_state(data)['status'],'starting')
+    def test_first_health_check_is_shown_as_pending_not_disconnected(self):
+        with patch.object(self.m,'ocx_configured',return_value=True),patch.object(self.m,'schedule_background_refresh'):
+            data=self.m.gather()
+            self.assertIn('正在连接',self.m.title(data))
+        self.assertTrue(self.m.opencodex_pending(data))
+        self.assertTrue(any('OpenCodex 管理 · 正在连接' in line for line in self.m.unfiltered_management_lines(data)))
+    def test_cache_cleanup_drops_superseded_files_and_keeps_current_ones(self):
+        cache=Path(self.m.CACHE_DIR);cache.mkdir(parents=True,exist_ok=True)
+        current=self.m.range_cache_name();old=time.time()-2*86400
+        keep=['claude-app-usage-v3-abc.sqlite3','harness-v4-codex-abc.sqlite3','harness-gemini-v2-abc.sqlite3',current+'.json','range_usage_all_'+current.rsplit('_',1)[1]+'.json','quota.json','.cache-fresh','configured-sources-new.json']
+        drop=['claude-app-usage-v2-abc.sqlite3','claude-app-usage-v2-abc.sqlite3-journal','claude-usage-v3-abc.sqlite3','harness-codex-abc.sqlite3','harness-v2-codex-abc.sqlite3','harness-v3-codex-abc.sqlite3','harness-gemini-abc.sqlite3',
+              'range_usage_today_000000000000.json','usage_7d.json','startup.json','.cache-old','panel-action.processing-42','configured-sources-old.json']
+        for name in keep+drop:(cache/name).write_text('{}')
+        for name in ('.cache-old','panel-action.processing-42','configured-sources-old.json'):os.utime(cache/name,(old,old))
+        self.m.collect_cache_garbage()
+        self.assertEqual(sorted(n for n in keep+drop if (cache/n).exists()),sorted(keep))
+        (cache/'harness-codex-abc.sqlite3').write_text('{}');self.m.collect_cache_garbage()
+        self.assertTrue((cache/'harness-codex-abc.sqlite3').exists())
     def test_range_collection_never_requests_a_second_host_refresh(self):
         with patch.object(self.m,'cached_fetch',return_value=({},None)),patch.object(self.m.subprocess,'run') as run:
             self.m.range_usage_cached();run.assert_not_called()

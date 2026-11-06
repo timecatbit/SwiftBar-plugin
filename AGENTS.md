@@ -8,7 +8,9 @@
 - ChatGPT 和 OpenCodex 连接可修改；通常只更改插件的目录/地址/文件引用。启用 Claude 本机回传时可单独设置 statusLine，必须备份、保留已有行为并支持恢复，其余客户端设置不变。
 - 主页模块管理使用 280pt 紧凑列表，各模块右侧保留配置状态圆点与文字；连接目录设置跟随模块，“外观与设置”紧接顶部“允许折叠”，模块分类在其后。复选框/名称点击切换显示，箭头点击只打开配置，复选框悬停不主动弹出侧栏，鼠标经过复选框进入已有侧栏时必须保持展开；配置状态不受显示勾选影响。
 - 订阅固定为 ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi；API 为 ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi。独立 Codex 显示名称统一为 ChatGPT，但真实命令、路径、数据 ID、模型名称和 OpenCodex 名称保持兼容。
-- API 配置不能作为订阅证明；未接入查询的模块显示官网查看，手动标记明确声明未验证。禁止推算/伪造额度。
+- API 配置不能作为订阅证明；未接入查询的模块显示官网查看，手动标记明确声明未验证。禁止推算/伪造额度。有官方余额接口的 API（DeepSeek、Kimi、Grok 管理接口）显示余额；没有的（ChatGPT/Claude/Gemini API）只在用户点击“测试 Key”时发一次只读校验，结果仅表示 Key 可用。
+- API Key 可直接输入：存于用户应用支持目录 `keys/`（700/600），配置只记录路径；全部提示确认后才写入，清除或改选文件时只删除插件自己保存的副本。
+- ChatGPT 订阅来源不再单独选择：OpenCodex 被勾选且已配置时用 OpenCodex 账户，否则用本机 ChatGPT 登录；未勾选 OpenCodex 时不轮询其管理接口。
 - 保持 360pt 主页；Summary 与范围筛选器对齐。
 - 范围筛选使用点击展开的原生下拉框；其他分栏悬停在旁边展开。
 - Summary 概览不可选中，不显示悬停提示，不铺深色高亮。客户端标题可点击展开；仅使用轻微悬停反馈。
@@ -27,7 +29,7 @@
 - 账户/监控/更新侧栏打开即检查对应来源，5 秒内去重，后台完成立即刷新；布局重绘不能再次触发网络检查。
 - DeepSeek 主页金额在正常刷新期间保持稳定，不追加“上次”；侧栏显示刷新状态与成功更新时间，真实失败仍明确标记并说明保留最近余额。
 - Claude Harness 的名称和来源均为 Claude 桌面 App，仅统计其登记的可读取会话；独立 CLI 会话不可混入。Claude 被勾选时检查 Claude 桌面 App 和 Claude Code；ChatGPT 被勾选时检查桌面客户端和 Codex CLI；OpenCodex 被勾选时检查自身、ChatGPT 和 Codex CLI。CLI 更新条目手动执行 `claude update` / `codex update`，不能静默升级。
-- Claude 订阅只显示用量与重置时间，禁止查询或显示余额。用户启用 Code OAuth 后可主动/定时查用量，不用 Cookie、不等模型调用；未启用则只读本机快照/可选状态栏回传。数据标明来源与时间，超过 10 分钟或重置后不可当当前值。颜色为 <70 正常文字色、70–89 系统橙、>=90 系统红；暗色正常值使用浅色文字。
+- Claude 订阅显示用量、重置时间，以及 OAuth 用量响应自带的额外用量：优先 `spend` 的金额字段（`amount_minor`/`exponent`），否则 `extra_usage` 按 `decimal_places` 换算；显示本月已用/上限/剩余，响应含 `spend.balance` 时显示额外用量余额。仍禁止访问 prepaid/credits 等其他接口，缺失时不推算余额。用户启用 Code OAuth 后可主动/定时查用量，不用 Cookie、不等模型调用；未启用则只读本机快照/可选状态栏回传。数据标明来源与时间，超过 10 分钟或重置后不可当当前值。颜色为 <70 正常文字色、70–89 系统橙、>=90 系统红；暗色正常值使用浅色文字。
 - Code OAuth 仅允许 GET https://api.anthropic.com/api/oauth/usage，令牌只在内存，不记录响应原文。定时 5 分钟、主动刷新成功结果至少间隔 30 秒；429 严守 Retry-After。续期委托 Code 启动自检，禁用工具/MCP/钩子/自动升级，不输入任何命令或消息，限时终止自己的进程组；不直接刷新或写回客户端令牌。续期失败不能反复启动 CLI；钥匙串失败暂停自动读取，等待明确重试。OAuth 失败不能混入不同 App 账号的快照。参考实现保留 CODEXBAR_LICENSE。
 - Claude 手动在线连接只允许 GET 同组织 usage，不跟随重定向，不访问 prepaid/credits。凭据只在内存且只发往 claude.ai；本机回传只保存允许的百分比/重置/采样字段，不保存整个状态栏输入。HTTP 依赖安装时按解释器/架构隔离，刷新不得安装依赖。
 - Codex CLI 更新检查必须匹配实际安装渠道：官方 Homebrew 查其 Cask/Formula，npm 查 npm；不确定渠道不能显示“已是最新”或错误的升级徽标。
@@ -43,7 +45,10 @@
 - 动作通过 `panel-action.json` → SwiftBar 刷新 → 白名单执行 → 回执传递。不要从原生面板直接运行插件脚本，以免触发 Documents/TCC 访问问题。
 - 保存回执携带不含目录/凭据的显示偏好及版本号，旧数据刷新不能覆盖已保存的选择；连续点击按顺序应用，后台检查期间不能静默丢弃用户动作。
 - 菜单展开期间不得重建范围下拉控件。只在跟踪结束后更新布局。
-- 使用 `python3 scripts/check.py` 验证。改动 Swift 代码时运行 `scripts/build.py`。
+- 使用 `python3 scripts/check.py` 验证，它同时扫描 `lib/`、`scripts/` 中未被引用的函数与导入。改动 Swift 代码时运行 `scripts/build.py`。
+- 插件主体在 `lib/swiftbar_plugin.py`，`opencodex.30s.sh` 只加载配置并启动；不要把 Python 重新内嵌进入口脚本。菜单渲染只读缓存，网络请求与日志索引放在后台进程；一次渲染内的偏好与本机元数据使用同一份快照。
+- `lib/codex-pricing.json` 由 `python3 scripts/update_codex_pricing.py <ccusage 检出目录>` 从 ccusage 价格快照生成，不要手改；更新时同步 README 中的复核提交。
+- 日志索引的表结构或 ID 格式变化时提升文件名中的版本号，并同步 `CURRENT_INDEXES`，让旧索引被自动清理。时间字符串统一用 `swiftbar_time.parse_iso` 解析（独立复制的状态栏桥接脚本除外）。
 - 参考 ccusage 的适配逻辑保留 `lib/CCUSAGE_LICENSE`；Claude 用量先按 App 会话归属过滤并去重，再按日期筛选。日志未变化时复用规范化索引，改写/删除不能保留旧统计，任何情况下不以本机费用推算订阅百分比。
 - 界面改动安装后必须实际点击星星、打开受影响侧栏并查看截图，不能仅以编译通过作为视觉验证。
 - 不通过 AppleScript 启动 SwiftBar 本体；这可能弹出“已运行”提示。刷新使用 SwiftBar URL scheme。

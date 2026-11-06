@@ -2,12 +2,12 @@ import json,os,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
 SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class PanelTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
   env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OCX_PLUGIN_PATH':str(SOURCE.resolve()),'OCX_CACHE_DIR':self.temp.name});env.start();self.addCleanup(env.stop)
-  self.m=types.ModuleType('panel_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m=types.ModuleType('panel_test');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   self.m.write_json_cache(self.m.cache_path('panel-view'),{'schema':1,'entries':[{'label':'刷新数据','action':['refresh'],'children':[]},{'label':'账户','children':[{'label':'main','action':['account-use','main'],'children':[]}]}]})
  def request(self,action,age=0):
   self.m.write_json_cache(self.m.cache_path('panel-action'),{'id':'test-request','action':action,'createdAt':time.time()-age})

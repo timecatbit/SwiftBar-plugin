@@ -129,4 +129,29 @@ expect(usageColor("normal")==NSColor.labelColor,"Normal usage adapts to light an
 expect(usageColor("warning")==NSColor.systemOrange,"High usage uses system orange")
 expect(usageColor("critical")==NSColor.systemRed,"Critical usage uses system red")
 expect(usageColor(nil)==nil,"Stale or missing usage keeps its neutral state")
+// Hover follows the pointer: the delay counts from entering a row, not from the last movement.
+let intent=HoverIntent();intent.delay=0.2;var fired:[String]=[]
+intent.schedule("0:a"){fired.append("a")}
+RunLoop.main.run(until:Date().addingTimeInterval(0.12))
+intent.schedule("0:a"){fired.append("a-restarted")}
+RunLoop.main.run(until:Date().addingTimeInterval(0.12))
+expect(fired==["a"],"Moving inside a row must not restart its hover delay")
+intent.schedule("0:b"){fired.append("b")};intent.schedule("0:c"){fired.append("c")}
+RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+expect(fired==["a","c"],"Only the row the pointer reached last may open")
+intent.schedule("0:a"){fired.append("a-again")}
+RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+expect(fired.last=="a-again","Returning to a row after its flyout opened schedules it again")
+intent.schedule("0:b"){fired.append("cancelled")};intent.cancel()
+RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+expect(fired.last=="a-again" && intent.target==nil,"Cancelled hover never fires")
+expect(MenuLayout.highlighted(pointerInside:false,expanded:true,yielded:true)==false,"An open row yields its highlight to the hovered sibling")
+expect(MenuLayout.highlighted(pointerInside:false,expanded:true,yielded:false),"An open row stays highlighted while its flyout is in use")
+expect(MenuLayout.highlighted(pointerInside:true,expanded:false,yielded:false),"The row under the pointer is highlighted at once")
+let openFlyout=NSRect(x:400,y:300,width:240,height:200)
+expect(MenuLayout.aiming(from:NSPoint(x:330,y:480),to:NSPoint(x:350,y:470),flyout:openFlyout),"Diagonal movement into the flyout keeps it open")
+expect(!MenuLayout.aiming(from:NSPoint(x:350,y:480),to:NSPoint(x:350,y:450),flyout:openFlyout),"Moving straight down the list switches rows")
+expect(!MenuLayout.aiming(from:NSPoint(x:350,y:480),to:NSPoint(x:330,y:470),flyout:openFlyout),"Moving away from the flyout switches rows")
+expect(!MenuLayout.aiming(from:NSPoint(x:330,y:480),to:NSPoint(x:340,y:250),flyout:openFlyout),"Steep movement below the flyout switches rows")
+expect(MenuLayout.aiming(from:NSPoint(x:700,y:480),to:NSPoint(x:680,y:470),flyout:NSRect(x:400,y:300,width:240,height:200)),"Left-opening flyouts use their right edge")
 print("Native interaction assertions: \(assertions) passed")

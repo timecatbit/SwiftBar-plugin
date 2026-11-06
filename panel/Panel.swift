@@ -367,6 +367,17 @@ enum MenuLayout {
     static func topmostIndex(at point:NSPoint,frames:[NSRect])->Int? {
         frames.indices.reversed().first{frames[$0].contains(point)}
     }
+    static func highlighted(pointerInside:Bool,expanded:Bool,yielded:Bool)->Bool {pointerInside || (expanded && !yielded)}
+    // Movement from `from` to `to` heads into the open flyout through the triangle spanned by
+    // its near edge, so rows crossed on the way must not replace it (native menu safe zone).
+    static func aiming(from:NSPoint,to:NSPoint,flyout:NSRect)->Bool {
+        let edge=flyout.minX>=from.x ? flyout.minX : flyout.maxX
+        guard abs(edge-to.x)<abs(edge-from.x)-0.5 else{return false}
+        let top=NSPoint(x:edge,y:flyout.maxY+4),bottom=NSPoint(x:edge,y:flyout.minY-4)
+        func side(_ a:NSPoint,_ b:NSPoint)->CGFloat {(b.x-a.x)*(to.y-a.y)-(b.y-a.y)*(to.x-a.x)}
+        let s1=side(from,top),s2=side(top,bottom),s3=side(bottom,from)
+        return (s1>=0 && s2>=0 && s3>=0) || (s1<=0 && s2<=0 && s3<=0)
+    }
     static func draw(_ value:String,in rect:NSRect,font:NSFont,color:NSColor,alignment:NSTextAlignment = .left){
         let style=NSMutableParagraphStyle();style.alignment=alignment;style.lineBreakMode = .byWordWrapping
         (value as NSString).draw(with:rect,options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:font,.foregroundColor:color,.paragraphStyle:style],context:nil)
@@ -377,6 +388,8 @@ final class Row:NSButton {
     override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
     let entry:Entry;var pointerAllowed:(()->Bool)?;var invoke:((Entry,Row)->Void)?;var hover:((Entry,Row)->Void)?
     var expanded=false {didSet{needsDisplay=true}}
+    // The pointer is on a sibling row, so this row's open flyout no longer owns the highlight.
+    var yielded=false {didSet{if yielded != oldValue{needsDisplay=true}}}
     var columnInset:CGFloat=12
     private(set) var configurationClick=false
     private var hovering=false;private var tracking:NSTrackingArea?;private var glyph:NSImage?
@@ -402,7 +415,7 @@ final class Row:NSButton {
     override func mouseExited(with event:NSEvent){hovering=false;needsDisplay=true}
     override func draw(_ dirtyRect:NSRect){
         let pointerInside=(pointerAllowed?() ?? true) && (window.map{$0.isVisible && $0.convertToScreen(convert(bounds,to:nil)).contains(NSEvent.mouseLocation)} ?? false)
-        if (pointerInside || expanded) && isEnabled {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.12 : 0.09).setFill();NSBezierPath(roundedRect:bounds,xRadius:7,yRadius:7).fill()}
+        if MenuLayout.highlighted(pointerInside:pointerInside,expanded:expanded,yielded:yielded) && isEnabled {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.12 : 0.09).setFill();NSBezierPath(roundedRect:bounds,xRadius:7,yRadius:7).fill()}
         let left=columnInset
         if let checked=entry.checked {
             let box=NSRect(x:13,y:(bounds.height-12)/2,width:12,height:12)
@@ -566,6 +579,21 @@ final class SnapshotObserver {
     deinit{stop()}
 }
 
+// Submenus switch a fixed delay after the pointer enters a row, as native menus do;
+// further movement inside the same row keeps the countdown instead of restarting it.
+final class HoverIntent {
+    var delay:TimeInterval=0.08
+    private(set) var target:String?
+    private var task:DispatchWorkItem?
+    func schedule(_ key:String,after wait:TimeInterval?=nil,_ action:@escaping ()->Void){
+        if target==key{return}
+        cancel();target=key
+        let item=DispatchWorkItem{[weak self] in self?.target=nil;self?.task=nil;action()}
+        task=item;DispatchQueue.main.asyncAfter(deadline:.now()+(wait ?? delay),execute:item)
+    }
+    func cancel(){task?.cancel();task=nil;target=nil}
+}
+
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
     private var rangePicker:NSPopUpButton?;private var rangeMenuOpen=false;private var managerOnly=false
@@ -574,7 +602,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
     private var interaction=PanelInteraction();private var running:Bool{interaction.active != nil}
     private var sourceChecks:[String:Date]=[:]
-    private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private var hoverTask:DispatchWorkItem?;private var closeTask:DispatchWorkItem?
+    private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private let hoverIntent=HoverIntent();private var closeTask:DispatchWorkItem?
+    private var trail:[(point:NSPoint,time:TimeInterval)]=[]
     private func setup(_ window:Panel){window.backgroundColor = .clear;window.isOpaque=false;window.hasShadow=true;window.level = .popUpMenu;window.hidesOnDeactivate=false;window.isReleasedWhenClosed=false;window.acceptsMouseMovedEvents=true;window.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.transient,.ignoresCycle];window.escape={[weak self] in self?.hide()}}
     func applicationDidFinishLaunching(_ notification:Notification){
         let args=CommandLine.arguments
@@ -626,7 +655,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     func applicationWillTerminate(_ notification:Notification){publishVisibility(false);observer.stop();removePointerMonitors();fallbackTimer?.invalidate()}
     @objc private func accessibilityChanged(){if panel.isVisible{reload(force:true)}}
     private func showModuleMenu(_ event:NSEvent,in view:NSView){
-        rangePicker?.menu?.cancelTracking();rangeMenuOpen=false;hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0)
+        rangePicker?.menu?.cancelTracking();rangeMenuOpen=false;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)
         managerOnly=true;scrollOffset=0;layout()
     }
     @objc private func finishModules(){hide()}
@@ -647,7 +676,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         }
     }
     private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil);observeSnapshot();installPointerMonitors();publishVisibility(true);if !managerOnly{performAction(["refresh-view"])}}
-    private func hide(){rangePicker?.menu?.cancelTracking();hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
+    private func hide(){rangePicker?.menu?.cancelTracking();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
     private func updatePresentation(){snapshot=interaction.displayed();layout()}
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
@@ -720,17 +749,37 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func hover(_ entry:Entry,row:Row,depth:Int){
         guard !rangeMenuOpen,pointerHits(row) else{return}
-        closeTask?.cancel();hoverTask?.cancel()
+        closeTask?.cancel()
         // A left-opening flyout is reached through the checkbox column.
         // Suppress new hover requests here, but retain the already open panel.
-        guard allowsConfigurationHover(row) else{return}
-        let task=DispatchWorkItem{[weak self,weak row] in guard let self,let row,self.pointerHits(row),self.allowsConfigurationHover(row) else{return};if entry.children.isEmpty{self.closeFlyouts(from:depth)}else{self.openFlyout(entry,row:row,depth:depth)}}
-        hoverTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task)
+        guard allowsConfigurationHover(row) else{hoverIntent.cancel();return}
+        hoverIntent.schedule(String(depth)+"\u{1f}"+entry.key){[weak self,weak row] in self?.settleHover(entry,row:row,depth:depth,postponed:0)}
+    }
+    private func settleHover(_ entry:Entry,row:Row?,depth:Int,postponed:Int){
+        guard let row,pointerHits(row),allowsConfigurationHover(row) else{return}
+        // Still travelling into the open flyout: look again shortly, but never hold the old row for long.
+        if postponed<4,aimingAtFlyout(depth) {
+            hoverIntent.schedule(String(depth)+"\u{1f}"+entry.key,after:0.06){[weak self,weak row] in self?.settleHover(entry,row:row,depth:depth,postponed:postponed+1)}
+            return
+        }
+        if entry.children.isEmpty{closeFlyouts(from:depth)}else{openFlyout(entry,row:row,depth:depth)}
+    }
+    private func recordPointer(_ point:NSPoint){
+        let now=ProcessInfo.processInfo.systemUptime
+        if trail.last?.point != point{trail.append((point,now))}
+        trail.removeAll{now-$0.time>0.25}
+    }
+    private func aimingAtFlyout(_ depth:Int)->Bool {
+        guard flyouts.indices.contains(depth),let current=trail.last else{return false}
+        let now=ProcessInfo.processInfo.systemUptime
+        // A resting pointer is choosing the row under it, not heading anywhere.
+        guard now-current.time<0.06,let start=trail.first(where:{now-$0.time<=0.12}) else{return false}
+        return MenuLayout.aiming(from:start.point,to:current.point,flyout:flyouts[depth].panel.frame)
     }
     private func openFlyout(_ entry:Entry,row:Row,depth:Int,checkSource:Bool=true){
         guard !entry.children.isEmpty,let parent=row.window else{return}
         if flyouts.indices.contains(depth),flyouts[depth].key==entry.key{return}
-        closeFlyouts(from:depth);row.expanded=true
+        closeFlyouts(from:depth);row.expanded=true;row.yielded=false
         let window=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false);setup(window);window.setAccessibilityLabel(entry.label)
         let screen=parent.screen ?? NSScreen.main!,width=MenuLayout.flyoutWidth(entry),body=entry.children.reduce(CGFloat(0)){$0+MenuLayout.rowHeight($1,width:MenuLayout.flyoutWidth(entry)-16,left:MenuLayout.column(entry.children))}
         let height=min(body+40,screen.visibleFrame.height-16),surface=Surface(frame:NSRect(x:0,y:0,width:width,height:height),glass:self.snapshot?.appearance != "solid")
@@ -751,24 +800,25 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func closeFlyouts(from depth:Int){
         guard depth<flyouts.count else{return}
-        for flyout in flyouts[depth...].reversed(){flyout.row?.expanded=false;flyout.panel.parent?.removeChildWindow(flyout.panel);flyout.panel.orderOut(nil)}
+        for flyout in flyouts[depth...].reversed(){flyout.row?.expanded=false;flyout.row?.yielded=false;flyout.panel.parent?.removeChildWindow(flyout.panel);flyout.panel.orderOut(nil)}
         flyouts.removeSubrange(depth...);if rows.count>depth+1{rows.removeSubrange((depth+1)...)}
     }
     private func checkPointer(){
         guard panel.isVisible,!rangeMenuOpen else{return}
-        let p=NSEvent.mouseLocation,top=topPanel(at:NSEvent.mouseLocation)
+        let p=NSEvent.mouseLocation,top=topPanel(at:NSEvent.mouseLocation);recordPointer(p)
+        let hit=rows.indices.reversed().lazy.compactMap{depth in self.rows[depth].values.first(where:{$0.window === top && self.rowRect($0).contains(p)}).map{(depth:depth,row:$0)}}.first
+        // The highlight follows the pointer at once, unless it is crossing rows on its way into the open flyout.
+        for (depth,flyout) in flyouts.enumerated(){flyout.row?.yielded=hit.map{$0.row !== flyout.row && $0.row.window === flyout.row?.window && !aimingAtFlyout(depth)} ?? false}
         for group in rows{for row in group.values{row.needsDisplay=true}}
-        for depth in rows.indices.reversed(){
-            if let row=rows[depth].values.first(where:{$0.window === top && rowRect($0).contains(p)}) {
-                closeTask?.cancel()
-                if !allowsConfigurationHover(row){hoverTask?.cancel();return}
-                if row.entry.children.isEmpty {
-                    if flyouts.count>depth{hover(row.entry,row:row,depth:depth)}
-                }else if !flyouts.indices.contains(depth) || flyouts[depth].key != row.entry.key {
-                    hover(row.entry,row:row,depth:depth)
-                }
-                return
+        if case let (depth,row)? = hit {
+            closeTask?.cancel()
+            if !allowsConfigurationHover(row){hoverIntent.cancel();return}
+            if row.entry.children.isEmpty {
+                if flyouts.count>depth{hover(row.entry,row:row,depth:depth)}
+            }else if !flyouts.indices.contains(depth) || flyouts[depth].key != row.entry.key {
+                hover(row.entry,row:row,depth:depth)
             }
+            return
         }
         guard !flyouts.isEmpty else{return}
         if top != nil{closeTask?.cancel();return}
@@ -800,7 +850,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     @objc private func rangeTrackingBegan(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuWillOpen(menu)}}
     @objc private func rangeTrackingEnded(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuDidClose(menu)}}
-    func menuWillOpen(_ menu:NSMenu){rangeMenuOpen=true;hoverTask?.cancel();closeTask?.cancel();closeFlyouts(from:0)}
+    func menuWillOpen(_ menu:NSMenu){rangeMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
     func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){

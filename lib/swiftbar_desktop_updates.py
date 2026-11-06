@@ -3,7 +3,7 @@
 The anonymous public appcast can lag an account's rollout. Read only the staged
 app Info.plist and the latest official appcast already cached by this client.
 """
-from datetime import datetime, timezone
+from datetime import timezone
 from itertools import islice
 from pathlib import Path
 import plistlib
@@ -11,6 +11,8 @@ import re
 import sqlite3
 import time
 from urllib.parse import quote, urlsplit
+
+from swiftbar_time import parse_iso
 
 LIMIT=1024*1024
 BUNDLE='com.openai.codex'
@@ -43,7 +45,7 @@ def cached_feed(root,parse_release,now):
             parts=urlsplit(url)
             if parts.hostname!='persistent.oaistatic.com' or parts.port not in (None,443) or parts.username or parts.password:continue
             if not re.fullmatch(r'/codex-app-prod/appcast(?:-\d+(?:\.\d+){0,4})?\.xml',parts.path):continue
-            checked=datetime.fromisoformat(stamp).replace(tzinfo=timezone.utc).timestamp()
+            checked=parse_iso(stamp).replace(tzinfo=timezone.utc).timestamp()
             if not -60<=now-checked<=7*86400:return None
             if on_disk:
                 name=body.decode('ascii') if isinstance(body,bytes) else body

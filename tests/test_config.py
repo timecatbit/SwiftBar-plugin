@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'opencodex.30s.sh'
-CODE = SOURCE.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+CODE = (SOURCE.parent / 'lib/swiftbar_plugin.py').read_text()
 
 class LocalConfigTests(unittest.TestCase):
     def test_unconfigured_monitor_makes_no_network_request(self):
@@ -17,7 +17,7 @@ class LocalConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {'KOMARI_BASE_URL': '', 'OCX_CACHE_DIR': directory,
                                          'OS_APPEARANCE': 'Dark', 'OCX_PLUGIN_PATH': str(SOURCE)}):
                 module = types.ModuleType('config_test')
-                exec(compile(CODE, str(SOURCE), 'exec'), module.__dict__)
+                exec(compile(CODE, str(SOURCE.parent / 'lib/swiftbar_plugin.py'), 'exec'), module.__dict__)
             with patch.object(module, 'komari_snapshot_live') as remote:
                 payload, error = module.komari_snapshot()
                 remote.assert_not_called()

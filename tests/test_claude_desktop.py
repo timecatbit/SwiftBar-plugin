@@ -9,7 +9,7 @@ import swiftbar_claude as desktop
 import swiftbar_claude_live as live
 import swiftbar_preferences as preferences
 SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 ACCOUNT='11111111-1111-4111-8111-111111111111'
 ORG='22222222-2222-4222-8222-222222222222'
 SESSION='33333333-3333-4333-8333-333333333333'
@@ -22,7 +22,7 @@ class DesktopTests(unittest.TestCase):
   (self.root/'config.json').write_text(json.dumps({'lastKnownAccountUuid':ACCOUNT}))
   self.env=patch.dict(os.environ,{'HOME':str(self.home),'OCX_PLUGIN_PATH':str(SOURCE),'OCX_CACHE_DIR':str(self.home/'cache'),'SWIFTBAR_PLUGIN_DATA_PATH':str(self.home/'state')})
   self.env.start();self.addCleanup(self.env.stop)
-  self.m=types.ModuleType('desktop_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m=types.ModuleType('desktop_test');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   self.now=datetime(2026,11,5,12,tzinfo=ZoneInfo('Asia/Taipei'))
  def register(self,session=SESSION):
   (self.registry/(session+'.json')).write_text(json.dumps({'sessionId':session,'cliSessionId':session}))
@@ -106,6 +106,31 @@ class DesktopTests(unittest.TestCase):
   preferences.update(self.m.STATE_DIR,'claude-live','true')
   with patch.object(live,'live_subscription') as network:
    self.m.claude_subscription_load();network.assert_not_called()
+ def test_extra_usage_shows_monthly_spend_from_oauth_cents(self):
+  limits={'limits':[{'kind':'weekly','percent':12,'resets_at':'2026-11-12T13:59:59Z'}]}
+  payload=live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':100000,'used_credits':1234.0,'utilization':1.2}))
+  self.assertEqual(payload['extraUsage'],{'enabled':True,'used':12.34,'limit':1000.0,'currency':'USD'})
+  rows=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload}))[0]['children']
+  extra=next(r for r in rows if r['label']=='额外用量 · 本月')
+  self.assertEqual(extra['value'],'$12.34 / $1000.00');self.assertIn('剩余 $987.66',extra['detail'])
+  self.assertEqual(live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':0,'used_credits':500}))['extraUsage']['limit'],None)
+  self.assertEqual(live.parse_usage(dict(limits,extra_usage={'is_enabled':False}))['extraUsage'],{'enabled':False})
+  self.assertNotIn('extraUsage',live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'used_credits':-5})))
+  self.assertNotIn('extraUsage',live.parse_usage(limits))
+  self.assertEqual(live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':5000,'used_credits':250,'decimal_places':0}))['extraUsage']['used'],250)
+ def test_spend_object_wins_and_reports_credit_balance(self):
+  limits={'limits':[{'kind':'weekly','percent':12,'resets_at':'2026-11-12T13:59:59Z'}]}
+  spend={'enabled':True,'used':{'amount_minor':4321,'currency':'USD','exponent':2},'limit':{'amount_minor':20000,'currency':'USD','exponent':2},
+         'balance':{'amount_minor':1550,'currency':'USD','exponent':2}}
+  payload=live.parse_usage(dict(limits,spend=spend,extra_usage={'is_enabled':True,'monthly_limit':1,'used_credits':1}))
+  self.assertEqual(payload['extraUsage'],{'enabled':True,'used':43.21,'limit':200.0,'currency':'USD','balance':15.5})
+  rows=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload}))[0]['children']
+  self.assertEqual(next(r for r in rows if r['label']=='额外用量余额')['value'],'$15.50')
+  payload=live.parse_usage(dict(limits,spend=dict(spend,balance=None)))
+  self.assertNotIn('balance',payload['extraUsage'])
+  rows=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload}))[0]['children']
+  self.assertFalse(any(r['label']=='额外用量余额' for r in rows))
+  self.assertEqual(live.parse_usage(dict(limits,spend={'enabled':False}))['extraUsage'],{'enabled':False})
  def test_reset_time_expires_a_recent_sample(self):
   payload=live.parse_usage({'five_hour':{'utilization':98,'resets_at':'2020-01-01T00:00:00Z'}})
   self.assertTrue(self.m.claude_usage_stale(payload))

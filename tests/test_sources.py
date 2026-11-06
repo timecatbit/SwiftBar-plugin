@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import timezone
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
@@ -23,6 +24,11 @@ class SourceTests(unittest.TestCase):
     def codex(self,total=150,last=150,when=1730800000):
         def usage(n):return {'total_tokens':n,'input_tokens':n-10,'cached_input_tokens':40,'output_tokens':10,'reasoning_output_tokens':5}
         return {'type':'event_msg','timestamp':when,'payload':{'type':'token_count','info':{'total_token_usage':usage(total),'last_token_usage':usage(last)}}}
+    def test_iso_timestamps_accept_short_long_and_compact_offsets(self):
+        expected=1730800000.5
+        for value in ('2024-11-05T09:46:40.5Z','2024-11-05T09:46:40.500000000Z','2024-11-05T17:46:40.50+0800'):
+            self.assertAlmostEqual(sources.stamp(value),expected,places=3)
+        with self.assertRaises(ValueError):sources.stamp('not a time')
     def test_cumulative_repeats_copied_files_and_reasoning_are_not_double_counted(self):
         rows=[{'type':'session_meta','payload':{'id':'session','model_provider':'openai'}},{'type':'turn_context','payload':{'model':'model'}} ,self.codex(1000,150),self.codex(1000,150),self.codex(1150,150)]
         self.write(self.root/'one.jsonl',rows);self.write(self.root/'copy.jsonl',rows)
@@ -58,6 +64,41 @@ class SourceTests(unittest.TestCase):
     def test_explicit_request_delta_wins_over_inherited_cumulative_jump(self):
         self.write(self.root/'one.jsonl',[self.codex(1000,150,100),self.codex(9000,150,200)])
         self.assertEqual(self.read()['summary']['totalTokens'],300)
+    def test_codex_cost_follows_ccusage_tiers_aliases_and_fallbacks(self):
+        def cost(model,inputs=100000,cached=50000,output=10000,tier=None,when=1793000000):
+            return sources.codex_cost({'model':model,'input':inputs,'cached':cached,'output':output,'writes':0,'tier':tier,'timestamp':when})
+        self.assertAlmostEqual(cost('gpt-6-astra'),1.55)
+        self.assertAlmostEqual(cost('gpt-6-astra',tier='fast'),3.10)
+        self.assertAlmostEqual(cost('gpt-6-astra',tier='flex'),0.775)
+        self.assertAlmostEqual(cost('gpt-6-astra',inputs=300000,cached=0),6.75)  # long-context request
+        self.assertAlmostEqual(cost('gpt-5-2025-08-07'),cost('gpt-5'))
+        self.assertAlmostEqual(cost('gpt-5.6'),cost('gpt-5.6-sol'))
+        self.assertAlmostEqual(cost('codex-auto-review',when=1785628800),cost('gpt-5.6-luna'))  # 2026-08-02
+        self.assertAlmostEqual(cost('codex-auto-review',when=1767225600),cost('gpt-5.2-codex'))  # 2026-01-01
+        self.assertIsNone(cost('private-gateway-model'))
+    def test_codex_usage_is_priced_with_recorded_service_tier(self):
+        rows=[{'type':'session_meta','payload':{'id':'s','model_provider':'openai'}},{'type':'turn_context','payload':{'model':'gpt-5.3-codex'}},
+              {'type':'event_msg','payload':{'type':'thread_settings_applied','thread_settings':{'service_tier':'priority'}}},self.codex(150,150,100)]
+        self.write(self.root/'one.jsonl',rows)
+        summary=self.read()['summary']
+        self.assertEqual(summary['unpricedRequests'],0)
+        # 100 fresh input, 40 cached, 10 output at gpt-5.3-codex rates, doubled for priority.
+        self.assertAlmostEqual(summary['estimatedCostUsd'],(100*1.75+40*0.175+10*14)*2/1e6)
+    def test_archived_session_does_not_reparse_unrelated_files(self):
+        rows=lambda sid,when:[{'type':'session_meta','payload':{'id':sid,'model_provider':'openai'}},{'type':'turn_context','payload':{'model':'model'}},self.codex(150,150,when)]
+        self.write(self.root/'sessions/day/a.jsonl',rows('a',100));self.write(self.root/'sessions/day/b.jsonl',rows('b',200))
+        before=self.read()['summary']
+        (self.root/'archived_sessions/day').mkdir(parents=True);(self.root/'sessions/day/a.jsonl').rename(self.root/'archived_sessions/day/a.jsonl')
+        opened=[];original=sources._stream
+        with patch.object(sources,'_stream',side_effect=lambda path:opened.append(path.name) or original(path)):
+            after=self.read()['summary']
+        self.assertEqual(opened,['a.jsonl']);self.assertEqual(after['totalTokens'],before['totalTokens'])
+    def test_surviving_copy_keeps_usage_after_first_copy_is_removed(self):
+        rows=[{'type':'session_meta','payload':{'id':'s','model_provider':'openai'}},{'type':'turn_context','payload':{'model':'model'}},self.codex(150,150,100)]
+        self.write(self.root/'a.jsonl',rows);self.write(self.root/'b.jsonl',rows)
+        self.assertEqual(self.read()['summary']['totalTokens'],150)
+        (self.root/'a.jsonl').unlink();self.assertEqual(self.read()['summary']['totalTokens'],150)
+        (self.root/'b.jsonl').unlink();self.assertIn('error',self.read())
     def test_old_file_mtime_does_not_hide_usage_in_requested_window(self):
         import os
         path=self.root/'one.jsonl';self.write(path,[self.codex(150,150,200)]);os.utime(path,(1,1))

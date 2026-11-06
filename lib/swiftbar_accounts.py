@@ -23,6 +23,15 @@ def credential(name):
     except OSError: return ''
 
 
+MOONSHOT_HOSTS = {'china': ('https://api.moonshot.cn', 'CNY'), 'international': ('https://api.moonshot.ai', 'USD')}
+# Providers without a balance API: one explicit, read-only request proves only that the key works.
+KEY_CHECKS = {
+    'chatgpt-api': ('https://api.openai.com/v1/models', lambda key: {'Authorization': 'Bearer '+key}),
+    'claude-api': ('https://api.anthropic.com/v1/models?limit=1', lambda key: {'x-api-key': key, 'anthropic-version': '2023-06-01'}),
+    'gemini-api': ('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', lambda key: {'x-goog-api-key': key}),
+}
+
+
 def get_json(url, key):
     request = urllib.request.Request(url, headers={'Authorization':'Bearer '+key, 'Accept':'application/json'}, method='GET')
     opener = urllib.request.build_opener(NoRedirect)
@@ -47,6 +56,33 @@ def xai_balance(data):
         if not amount.is_finite():raise ValueError()
         return {'balance':float(amount),'currency':'USD','state':'已同步'}
     except (KeyError,TypeError,InvalidOperation,ValueError):return {'state':'余额格式待检查'}
+
+
+def moonshot_balance(data, currency):
+    """available_balance already includes vouchers; a negative cash balance means arrears."""
+    payload = data.get('data') if isinstance(data.get('data'), dict) else {}
+    if data.get('code') not in (0, None) or data.get('status') is False:return {'state':'凭据或地区待检查'}
+    try:
+        amounts = {k: Decimal(str(payload[k])) for k in ('available_balance', 'voucher_balance', 'cash_balance') if k in payload}
+        if 'available_balance' not in amounts or not all(v.is_finite() for v in amounts.values()):raise ValueError()
+    except (InvalidOperation, ValueError, TypeError):return {'state':'余额格式待检查'}
+    result = {'balance': float(amounts['available_balance']), 'currency': currency, 'state': '已同步'}
+    result.update({{'voucher_balance': 'voucher', 'cash_balance': 'cash'}[k]: float(v) for k, v in amounts.items() if k != 'available_balance'})
+    return result
+
+
+def check_key(source, key):
+    """Validity only; the response body is discarded and no balance is inferred."""
+    url, headers = KEY_CHECKS[source]
+    request = urllib.request.Request(url, headers=dict(headers(key), Accept='application/json'), method='GET')
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=8) as response:
+            response.read(4096)
+        return {'valid': True, 'state': 'Key 有效'}
+    except urllib.error.HTTPError as error:
+        if error.code in (400, 401, 403):return {'valid': False, 'state': 'Key 无效或无权限'}
+        return {'valid': None, 'state': '暂时限流，稍后再试' if error.code == 429 else '服务暂不可用'}
+    except (OSError, ValueError):return {'valid': None, 'state': '无法连接服务'}
 
 
 def minimax_quota(data):
@@ -90,6 +126,13 @@ def account(source):
             if region not in ('international','china'):return {'state':'MiniMax 地区配置待检查','windows':[]}
             host='https://www.minimax.io' if region=='international' else 'https://api.minimaxi.com'
             return minimax_quota(get_json(host+'/v1/token_plan/remains',key))
+        if source=='kimi-api':
+            key=credential('MOONSHOT_API_KEY')
+            if not key:return {'state':'未配置 Kimi API Key'}
+            region=os.environ.get('MOONSHOT_REGION','china')
+            if region not in MOONSHOT_HOSTS:return {'state':'Kimi 地区配置待检查'}
+            host,currency=MOONSHOT_HOSTS[region]
+            return moonshot_balance(get_json(host+'/v1/users/me/balance',key),currency)
         return {'state':'不支持的账户来源'}
     except urllib.error.HTTPError as error:
         return {'state':'凭据或查询权限待检查' if error.code in (401,403) else '服务暂不可用'}

@@ -25,20 +25,15 @@ USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbu
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'chatgptSource': 'auto', 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
             return defaults
         visible = value.get('visible')
         if isinstance(visible, list) and all(isinstance(v, str) for v in visible):
+            # The ChatGPT subscription source now follows the OpenCodex selection; no separate choice.
             defaults['visible'] = list(dict.fromkeys('chatgpt' if v == 'codex-quota' else v for v in visible if v in KNOWN or v == 'codex-quota'))
-            if 'codex-quota' in visible and 'chatgpt' not in visible:
-                defaults['chatgptSource'] = 'proxy'
-            elif 'chatgpt' in visible and 'codex-quota' not in visible:
-                defaults['chatgptSource'] = 'client'
-        if value.get('chatgptSource') in ('auto', 'client', 'proxy'):
-            defaults['chatgptSource'] = value['chatgptSource']
         subscriptions = value.get('configuredSubscriptions')
         if isinstance(subscriptions, list):
             defaults['configuredSubscriptions'] = [k for k in catalog.MANUAL_SUBSCRIPTIONS if k in subscriptions]
@@ -91,9 +86,6 @@ def update(directory, kind, key=None, value=None):
     elif kind == 'claude-oauth':
         if key not in ('true','false'):raise ValueError('invalid Claude OAuth setting')
         current['claudeOAuthUsage']=key=='true'
-    elif kind == 'chatgpt-source':
-        if key not in ('auto', 'client', 'proxy'): raise ValueError('invalid subscription source')
-        current['chatgptSource'] = key
     elif kind == 'subscription':
         if key not in catalog.MANUAL_SUBSCRIPTIONS or value not in ('true', 'false'): raise ValueError('invalid subscription')
         chosen = set(current['configuredSubscriptions'])

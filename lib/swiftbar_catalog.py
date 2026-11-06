@@ -1,7 +1,8 @@
 """Display catalog. Membership, API configuration and usage are separate facts.
 
-A portal capability is intentionally not a quota collector. Never send its API
-key anywhere, infer a paid membership, or report a synthetic balance.
+A portal capability is intentionally not a quota collector: its API key is only
+sent for an explicit, read-only key check. Never infer a paid membership or
+report a synthetic balance.
 """
 from typing import NamedTuple
 
@@ -33,7 +34,7 @@ SERVICES = (
     Service('minimax-api', 'MiniMax', 'API', 'https://platform.minimax.io/user-center/payment/balance', 'MINIMAX_PLATFORM_API_KEY'),
     Service('gemini-api', 'Gemini', 'API', 'https://aistudio.google.com/usage', 'GEMINI_API_KEY'),
     Service('grok', 'Grok', 'API', 'https://console.x.ai', 'XAI_MANAGEMENT_API_KEY', 'balance'),
-    Service('kimi-api', 'Kimi', 'API', 'https://platform.moonshot.cn/console/account', 'MOONSHOT_API_KEY'),
+    Service('kimi-api', 'Kimi', 'API', 'https://platform.moonshot.cn/console/account', 'MOONSHOT_API_KEY', 'balance'),
 )
 BY_KEY = {s.key: s for s in SERVICES}
 MANUAL_SUBSCRIPTIONS = tuple(s.key for s in SERVICES if s.category == '订阅' and s.capability == 'portal')

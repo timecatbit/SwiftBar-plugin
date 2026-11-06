@@ -24,7 +24,7 @@ def prepare(root,python):
         staging=Path(scratch)/'packages'
         # Public wheels only. No credentials are read or passed to the dependency installer.
         command=[python,'-m','pip','--isolated','install','--disable-pip-version-check',
-                 '--only-binary=:all:','--no-compile','--index-url','https://pypi.org/simple',
+                 '--only-binary=:all:','--require-hashes','--no-compile','--index-url','https://pypi.org/simple',
                  '--target',str(staging),'-r',str(requirements)]
         environment={k:v for k,v in os.environ.items() if k in ('HOME','PATH','TMPDIR','LANG','LC_ALL')}
         result=subprocess.run(command,capture_output=True,text=True,timeout=180,env=environment)

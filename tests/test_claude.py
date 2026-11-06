@@ -4,12 +4,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
 SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class ClaudeTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)/'projects';self.root.mkdir()
   env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OCX_PLUGIN_PATH':str(SOURCE.resolve()),'OCX_CACHE_DIR':self.temp.name});env.start();self.addCleanup(env.stop)
-  self.m=types.ModuleType('test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m=types.ModuleType('test');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   self.now=datetime(2026,11,4,12,tzinfo=ZoneInfo('Asia/Taipei'));self.db=str(Path(self.temp.name)/'usage.db')
  def row(self,id='m1',timestamp='2026-11-04T01:00:00Z',output=20,model='claude-opus-5-5'):
   return {'type':'assistant','timestamp':timestamp,'sessionId':'session','requestId':'req-'+id,'message':{'id':id,'model':model,'usage':{'input_tokens':100,'output_tokens':output,'cache_read_input_tokens':1000,'cache_creation_input_tokens':200,'cache_creation':{'ephemeral_1h_input_tokens':200,'ephemeral_5m_input_tokens':0}}}}
@@ -20,6 +20,18 @@ class ClaudeTests(unittest.TestCase):
   self.write('a.jsonl',[self.row(output=0),self.row(output=20),self.row(output=20)])
   self.write('b.jsonl',[self.row(output=20)])
   s=self.stats()['summary'];self.assertEqual(s['requests'],1);self.assertEqual(s['totalTokens'],1320);self.assertEqual(s['outputTokens'],20)
+ def test_appended_responses_extend_the_index_and_shared_ids_rebuild_it(self):
+  self.write('a.jsonl',[self.row()]);self.stats()
+  sizes=[];original=self.m.claude_records.deduplicate
+  def counting(rows):
+   rows=list(rows);sizes.append(len(rows));return original(rows)
+  def append(row):
+   with (self.root/'a.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
+  with patch.object(self.m.claude_records,'deduplicate',side_effect=counting):
+   append(self.row('m2'));self.assertEqual(self.stats()['summary']['requests'],2)
+   # A later stream chunk of an indexed response must be merged with it, not appended.
+   append(self.row('m2',output=50));s=self.stats()['summary']
+  self.assertEqual(sizes,[1,3]);self.assertEqual(s['requests'],2);self.assertEqual(s['outputTokens'],70)
  def test_append_only_and_incomplete_lines(self):
   self.write('a.jsonl',[self.row()]);self.stats()
   p=self.root/'a.jsonl'

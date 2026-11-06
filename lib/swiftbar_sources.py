@@ -14,7 +14,9 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+
+from swiftbar_time import parse_iso
 
 
 def number(value):
@@ -28,7 +30,39 @@ def number(value):
 def stamp(value):
     if isinstance(value, (int, float)):
         return value / 1000 if value > 1e11 else value
-    return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+    return parse_iso(value).timestamp()
+
+
+SERVICE_TIERS = {'default': 'standard', 'standard': 'standard', 'fast': 'fast', 'priority': 'fast', 'flex': 'flex', 'ultrafast': 'ultrafast'}
+CODEX_PRICING = None
+
+
+def codex_pricing():
+    global CODEX_PRICING
+    if CODEX_PRICING is None:
+        try: CODEX_PRICING = json.loads(Path(__file__).with_name('codex-pricing.json').read_text())
+        except (OSError, ValueError): CODEX_PRICING = {}
+    return CODEX_PRICING
+
+
+def codex_cost(event):
+    """API-equivalent estimate with ccusage's Codex rules; unknown models stay unpriced."""
+    table = codex_pricing(); model = str(event.get('model') or '')
+    if model == 'codex-auto-review':
+        # The reviewer bills as the newest model released by the request's (UTC) day.
+        day = datetime.fromtimestamp(event['timestamp'], timezone.utc).date().isoformat()
+        model = next((row['model'] for row in table.get('autoReviewFallbacks', []) if day >= row['releasedOn']), 'gpt-5')
+    base = re.sub(r'-(?:\d{4}-\d{2}-\d{2}|\d{8})$', '', model)
+    resolved = table.get('aliases', {}).get(base, base); models = table.get('models', {})
+    price = models.get(resolved) or models.get(base)
+    if not price: return None
+    inputs, cached, output, writes = (number(event.get(k)) for k in ('input', 'cached', 'output', 'writes'))
+    # Each event is one request, so its own context size selects the long-context tier.
+    tier = price.get('longContext')
+    if tier and inputs + cached > tier['threshold']: price = tier
+    rate = table.get('multipliers', {}).get(event.get('tier') or 'standard', {})
+    multiplier = rate.get(resolved, rate.get(base, 1.0))
+    return (inputs*price['input'] + cached*price['cacheRead'] + output*price['output'] + writes*price['cacheWrite']) * multiplier / 1e6
 
 
 def identity(*values):
@@ -43,6 +77,12 @@ def metrics(model, inputs, output, cached=0, writes=0, cost=None):
 
 def codex_event(row, state):
     kind = row.get('type'); data = row.get('payload') or {}
+    if kind == 'event_msg' and data.get('type') == 'thread_settings_applied':
+        # A settings event without a tier says nothing; an unknown tier must not inherit the old one.
+        tier = (data.get('thread_settings') or {}).get('service_tier') if isinstance(data.get('thread_settings'), dict) else None
+        if tier is not None:
+            state['tier'] = SERVICE_TIERS.get(str(tier))
+        return None
     if kind == 'session_meta':
         state.update(session=str(data.get('id') or data.get('session_id') or state['session']),
                      provider=str(data.get('model_provider') or ''))
@@ -67,7 +107,7 @@ def codex_event(row, state):
         if inputs + result['output'] <= 0:
             return None
         result.update(id=identity('codex', state['session'], total or [row['timestamp'],last]), session=identity(state['session']),
-                      timestamp=stamp(row['timestamp']), provider=state.get('provider', ''))
+                      timestamp=stamp(row['timestamp']), provider=state.get('provider', ''), tier=state.get('tier'))
         return result
     return None
 
@@ -155,19 +195,17 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
     root = Path(root).expanduser()
     if not root.is_dir():
         return {'error': '未找到记录目录'}
-    db = Path(cache) / ('harness-v2-' + source + '-' + identity(str(root.resolve()))[:12] + '.sqlite3')
+    db = Path(cache) / ('harness-v4-' + source + '-' + identity(str(root.resolve()))[:12] + '.sqlite3')
     db.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     conn = sqlite3.connect(db, timeout=10); os.chmod(db, 0o600)
     try:
-        conn.executescript('CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, inode INTEGER, size INTEGER, mtime INTEGER, offset INTEGER, state TEXT); CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, file TEXT, ts REAL, data TEXT); CREATE INDEX IF NOT EXISTS events_ts ON events(ts);')
+        # Every copy of an event is kept per file and deduplicated when read, so a
+        # vanished file (archive or compression move) only drops its own rows.
+        conn.executescript('CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, inode INTEGER, size INTEGER, mtime INTEGER, offset INTEGER, state TEXT); CREATE TABLE IF NOT EXISTS events(id TEXT, file TEXT, ts REAL, data TEXT, PRIMARY KEY(id, file)); CREATE INDEX IF NOT EXISTS events_ts ON events(ts); CREATE INDEX IF NOT EXISTS events_file ON events(file);')
         parser = {'codex':codex_event,'deepseek-harness':deepseek_event,'workbuddy':workbuddy_event}[source]
         errors = 0
         paths = _jsonl_files(root, source)
-        active={identity(str(path)) for path in paths}
-        if any(key not in active for (key,) in conn.execute('SELECT path FROM files')):
-            # Events are deduplicated across files. Rebuild after a source disappears
-            # so a surviving copy can take ownership, including archive/compression moves.
-            conn.execute('DELETE FROM events');conn.execute('DELETE FROM files')
+        forget_missing(conn, {identity(str(path)) for path in paths})
         for path in paths:
             try:
                 st = path.stat(); file_key = identity(str(path))
@@ -190,7 +228,7 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
                             break  # Never checkpoint an incomplete tail.
                         offset += len(line)
                         # Avoid parsing full tool/message content unless it carries usage or metadata.
-                        if source == 'codex' and not any(key in line for key in (b'"token_count"', b'"session_meta"', b'"turn_context"')):
+                        if source == 'codex' and not any(key in line for key in (b'"token_count"', b'"session_meta"', b'"turn_context"', b'"thread_settings_applied"')):
                             continue
                         try:
                             row = json.loads(line)
@@ -216,8 +254,7 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
                 errors += 1
         conn.commit()
-        events = (json.loads(row[0]) for row in conn.execute('SELECT data FROM events WHERE ts>=? AND ts<=?', (start, end)))
-        result = aggregate(events, start, end, zone, exclude_proxy)
+        result = aggregate(unique_events(conn, start, end), start, end, zone, exclude_proxy, codex_cost if source == 'codex' else None)
         if errors:
             result['warning'] = '部分记录无法读取'
             result['partial'] = True
@@ -229,7 +266,19 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
         conn.close()
 
 
-def aggregate(events, start, end, zone, exclude_proxy=False):
+def forget_missing(conn, active):
+    for (key,) in conn.execute('SELECT path FROM files').fetchall():
+        if key not in active:
+            conn.execute('DELETE FROM events WHERE file=?', (key,)); conn.execute('DELETE FROM files WHERE path=?', (key,))
+
+
+def unique_events(conn, start, end):
+    """One copy per event ID, whichever file was indexed first."""
+    rows = conn.execute('SELECT data FROM events WHERE rowid IN (SELECT MIN(rowid) FROM events GROUP BY id) AND ts>=? AND ts<=?', (start, end))
+    return (json.loads(row[0]) for row in rows)
+
+
+def aggregate(events, start, end, zone, exclude_proxy=False, price=None):
     def empty():
         return dict(totalTokens=0, inputTokens=0, outputTokens=0, cachedInputTokens=0,
                     requests=0, estimatedCostUsd=0, unpricedRequests=0)
@@ -241,14 +290,16 @@ def aggregate(events, start, end, zone, exclude_proxy=False):
             excluded += 1; continue
         i, o, r, w = [number(event.get(k)) for k in ('input', 'output', 'cached', 'writes')]
         if i + o + r + w <= 0: continue
+        cost = event.get('cost')
+        if cost is None and price: cost = price(event)
         first = ts if first is None else min(first, ts)
         day = datetime.fromtimestamp(ts, zone).date().isoformat()
         sessions.add(event.get('session'))
         for target in [summary, models.setdefault(event['model'], empty()), days.setdefault(day, empty()), hours.setdefault(int(ts//3600)*3600, empty())]:
             target['totalTokens'] += i + o + r + w; target['inputTokens'] += i + r + w
             target['outputTokens'] += o; target['cachedInputTokens'] += r; target['requests'] += 1
-            if event.get('cost') is None: target['unpricedRequests'] += 1
-            else: target['estimatedCostUsd'] += event['cost']
+            if cost is None: target['unpricedRequests'] += 1
+            else: target['estimatedCostUsd'] += cost
     summary['sessions'] = len(sessions)
     summary['coverageRatio'] = (summary['requests'] - summary['unpricedRequests']) / max(1, summary['requests'])
     return {'summary': summary, 'models': [dict(v, model=k) for k,v in models.items()],
@@ -383,12 +434,14 @@ def gemini_usage(root, cache, start, end, zone, exclude_proxy=False):
     # New subagents may use UUID filenames instead of session-*.
     paths = sorted(set(paths) | {p for folder in folders for p in folder.rglob('chats/**/*.jsonl')})
     if not paths: return {'error':'暂无 Gemini CLI 记录'}
-    target = Path(cache)/('harness-gemini-'+identity(str(root.resolve()))[:12]+'.sqlite3')
+    target = Path(cache)/('harness-gemini-v2-'+identity(str(root.resolve()))[:12]+'.sqlite3')
     target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     db = sqlite3.connect(target,timeout=10);os.chmod(target,0o600)
     try:
-        db.executescript('CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,size INTEGER,mtime INTEGER); CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,file TEXT,ts REAL,data TEXT); CREATE INDEX IF NOT EXISTS events_ts ON events(ts);')
+        db.executescript('CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,size INTEGER,mtime INTEGER); CREATE TABLE IF NOT EXISTS events(id TEXT,file TEXT,ts REAL,data TEXT,PRIMARY KEY(id,file)); CREATE INDEX IF NOT EXISTS events_ts ON events(ts); CREATE INDEX IF NOT EXISTS events_file ON events(file);')
         errors=0
+        # Deleted sessions must not keep contributing old usage.
+        with db:forget_missing(db,{identity(str(path)) for path in paths})
         for path in paths:
             file_id=identity(str(path));st=path.stat()
             if db.execute('SELECT size,mtime FROM files WHERE path=?',(file_id,)).fetchone()==(st.st_size,st.st_mtime_ns):continue
@@ -419,7 +472,7 @@ def gemini_usage(root, cache, start, end, zone, exclude_proxy=False):
                     for e in events:db.execute('INSERT OR REPLACE INTO events VALUES (?,?,?,?)',(e['id'],file_id,e['timestamp'],json.dumps(e)))
                     db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)',(file_id,st.st_size,st.st_mtime_ns))
             except (OSError,ValueError,TypeError,KeyError):errors+=1
-        result=aggregate((json.loads(r[0]) for r in db.execute('SELECT data FROM events WHERE ts>=? AND ts<=?',(start,end))),start,end,zone,exclude_proxy)
+        result=aggregate(unique_events(db,start,end),start,end,zone,exclude_proxy)
         if errors:
             result['partial']=True
             if not result['summary']['requests']:result['error']='Gemini 记录格式待检查'

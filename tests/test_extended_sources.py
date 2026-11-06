@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 from datetime import timezone
@@ -39,6 +40,36 @@ class ExtendedSourcesTests(unittest.TestCase):
         self.assertEqual(result['summary']['outputTokens'],60);self.assertEqual(result['summary']['cachedInputTokens'],120)
         self.assertEqual(self.read_gemini()['summary'],result['summary'])
         for f in self.cache.glob('*.sqlite3'):self.assertNotIn(b'PRIVATE',f.read_bytes())
+    def test_moonshot_balance_uses_region_currency_and_keeps_arrears(self):
+        data={'code':0,'status':True,'data':{'available_balance':49.5,'voucher_balance':50,'cash_balance':-0.5}}
+        self.assertEqual(accounts.moonshot_balance(data,'CNY'),{'balance':49.5,'currency':'CNY','state':'已同步','voucher':50.0,'cash':-0.5})
+        self.assertEqual(accounts.moonshot_balance({'code':1,'status':False},'USD')['state'],'凭据或地区待检查')
+        self.assertNotIn('balance',accounts.moonshot_balance({'code':0,'data':{'available_balance':'NaN'}},'USD'))
+        seen=[]
+        with patch.dict(os.environ,{'MOONSHOT_API_KEY':'sk-test','MOONSHOT_REGION':'international'}),patch.object(accounts,'get_json',side_effect=lambda url,key:seen.append(url) or data):
+            self.assertEqual(accounts.account('kimi-api')['currency'],'USD')
+        self.assertEqual(seen,['https://api.moonshot.ai/v1/users/me/balance'])
+    def test_key_check_maps_status_without_reading_a_balance(self):
+        import urllib.error
+        def failing(code):
+            def opener(*args):
+                raise urllib.error.HTTPError('https://example.invalid',code,'x',{},None)
+            return types.SimpleNamespace(open=lambda *a,**k:opener())
+        for code,state,valid in [(401,'Key 无效或无权限',False),(400,'Key 无效或无权限',False),(429,'暂时限流，稍后再试',None),(500,'服务暂不可用',None)]:
+            with patch.object(accounts.urllib.request,'build_opener',return_value=failing(code)):
+                self.assertEqual(accounts.check_key('gemini-api','key'),{'valid':valid,'state':state})
+        requests=[]
+        class Response:
+            def __enter__(self):return self
+            def __exit__(self,*a):return False
+            def read(self,n):return b'{}'
+        with patch.object(accounts.urllib.request,'build_opener',return_value=types.SimpleNamespace(open=lambda request,timeout:requests.append(request) or Response())):
+            self.assertEqual(accounts.check_key('claude-api','sk-ant-key'),{'valid':True,'state':'Key 有效'})
+        self.assertEqual(requests[0].get_method(),'GET');self.assertEqual(requests[0].headers.get('X-api-key'),'sk-ant-key')
+    def test_gemini_deleted_session_stops_counting(self):
+        root=self.root/'tmp/project/chats';self.write(root/'session-one.jsonl',[{'sessionId':'s'},self.gemini()]);self.write(root/'session-two.jsonl',[{'sessionId':'t'},self.gemini('two')])
+        self.assertEqual(self.read_gemini()['summary']['requests'],2)
+        (root/'session-two.jsonl').unlink();self.assertEqual(self.read_gemini()['summary']['requests'],1)
     def test_gemini_updated_message_and_partial_tail(self):
         f=self.root/'session-one.jsonl';row=self.gemini()
         self.write(f,[{'sessionId':'s'},dict(row,tokens=None)])

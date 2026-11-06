@@ -2,12 +2,12 @@ import json,os,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
 SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class UpdateTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   env=patch.dict(os.environ,{'KOMARI_BASE_URL':'https://komari.example.test','OS_APPEARANCE':'Dark','OCX_CACHE_DIR':self.tmp.name,'SWIFTBAR_PLUGIN_DATA_PATH':self.tmp.name,'OCX_PLUGIN_PATH':str(SOURCE.resolve())});env.start();self.addCleanup(env.stop)
-  self.m=types.ModuleType('updates_test');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m=types.ModuleType('updates_test');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   configured=patch.object(self.m,'ocx_configured',return_value=False);configured.start();self.addCleanup(configured.stop)
   installed=patch.object(self.m,'app_info',return_value={});installed.start();self.addCleanup(installed.stop)
  def row(self,version='4.16336.0'):

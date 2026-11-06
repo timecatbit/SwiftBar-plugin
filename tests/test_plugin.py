@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch, Mock
 
 SOURCE = Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE = SOURCE.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+CODE = (SOURCE.parent / 'lib/swiftbar_plugin.py').read_text()
 
 
 class PluginTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class PluginTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.m = types.ModuleType('plugin_test')
-        exec(compile(CODE, str(SOURCE), 'exec'), self.m.__dict__)
+        exec(compile(CODE, str(SOURCE.parent / 'lib/swiftbar_plugin.py'), 'exec'), self.m.__dict__)
 
     def record(self, name, payload, age=0):
         self.m.write_json_cache(self.m.cache_path(name), {
@@ -166,16 +166,25 @@ class PluginTests(unittest.TestCase):
 
     def test_usage_failure_never_rendered_as_zero(self):
         text=self.m.render({'healthz':{'version':'1.0'},'ready':{'status':'ready'},
-                           'usage_today':{'error':'read_failed','summary':{'requests':0}}})
-        self.assertIn('今日用量 · 暂不可用',text)
-        self.assertNotIn('今日估算',text)
+                           'range_usage':{'range':'today','opencodex':{'error':'read_failed','summary':{'requests':0}}}})
+        self.assertIn('OpenCodex · read_failed',text)
+        self.assertNotIn('OpenCodex · 0 Token',text)
+
+    def test_freshness_reports_the_range_bundle_shown_on_the_homepage(self):
+        self.record(self.m.range_cache_name(),{'range':'today','opencodex':{'summary':{'requests':1}}},age=600)
+        data=self.m.gather();data['healthz']={'version':'1.0'}
+        lines='\n'.join(self.m.unfiltered_management_lines(data))
+        self.assertIn('用量统计 · 当天 | badge="10 分钟前更新',lines)
+        self.assertNotIn('7 日统计',lines);self.assertNotIn('今日用量',lines)
 
     def test_gather_does_not_call_remote_services(self):
         def request(path,**kwargs):
             if path=='/healthz': return {'version':'1.0'},None
             if path=='/readyz': return {'status':'ready'},None
             return {},None
-        with patch.object(self.m,'request',side_effect=request), \
+        with patch.object(self.m,'request',side_effect=request):
+            self.m.opencodex_refresh()
+        with patch.object(self.m,'request',side_effect=AssertionError('foreground request')), \
              patch.object(self.m,'schedule_background_refresh'), \
              patch.object(self.m,'komari_snapshot_live',side_effect=AssertionError('foreground remote')), \
              patch.object(self.m,'deepseek_balance_direct',side_effect=AssertionError('foreground remote')):

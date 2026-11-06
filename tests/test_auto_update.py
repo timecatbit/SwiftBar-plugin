@@ -2,13 +2,13 @@ import json,os,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
 SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
-CODE=SOURCE.read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 
 class AutomaticUpdateTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.tmp.name,'SWIFTBAR_PLUGIN_DATA_PATH':self.tmp.name,'OCX_PLUGIN_PATH':str(SOURCE.resolve())});env.start();self.addCleanup(env.stop)
-  self.m=types.ModuleType('automatic_update');exec(compile(CODE,str(SOURCE),'exec'),self.m.__dict__)
+  self.m=types.ModuleType('automatic_update');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   self.badge={'currentVersion':'2.97.0','latestVersion':'2.98.0','updateAvailable':True,'canUpdate':True}
   self.cache();self.calls=[];self.current='2.97.0';self.job={};self.post_error=None
   probe=patch.object(self.m,'request',side_effect=self.request);probe.start();self.addCleanup(probe.stop)

@@ -10,11 +10,13 @@ import math
 import os
 from pathlib import Path
 import sqlite3
-from datetime import datetime
+
+from swiftbar_time import parse_iso
 
 
 def digest(*values):
-    return hashlib.sha256(json.dumps(values,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+    """128-bit hashed identifiers keep the index compact; raw IDs and paths are never stored."""
+    return hashlib.sha256(json.dumps(values,ensure_ascii=False,separators=(',',':')).encode()).digest()[:16]
 
 
 def counter(value):
@@ -42,7 +44,7 @@ def records(row,session_fallback,location):
     if not isinstance(model,str) or not model or model in ('<synthetic>','synthetic'):return []
     session=row.get('sessionId') or session_fallback
     if not isinstance(session,str):return []
-    timestamp=datetime.fromisoformat(str(row.get('timestamp','')).replace('Z','+00:00'))
+    timestamp=parse_iso(row.get('timestamp',''))
     if timestamp.tzinfo is None:raise ValueError('timestamp needs timezone')
     stamp=timestamp.timestamp();request=row.get('requestId');message_id=message.get('id')
     if request is not None and (not isinstance(request,str) or not request):return []
@@ -98,23 +100,51 @@ def deduplicate(events):
     return output
 
 
+COLUMNS='key,message,request,session,ts,model,i,o,w5,w1,r,cost,sidechain,speed,geo,tier'
+
+
+def stored_event(row):
+    key,message,request,session,ts,model,i,o,w5,w1,r,cost,sidechain,speed,geo,tier=row
+    return {'key':key,'message':message,'request':request,'session':session,'ts':ts,'model':model,
+            'metrics':[i,o,w5,w1,r],'cost':cost,'sidechain':bool(sidechain),'speed':speed,'geo':geo,'tier':tier}
+
+
+def isolated(conn,added,allowed):
+    """Appended responses sharing no ID or route with indexed ones form their own dedupe groups."""
+    fresh={(row['file'],row['offset'],row['slot']) for row in added}
+    def clash(sql,args):
+        return any((file,offset,slot) not in fresh and (allowed is None or session in allowed)
+                   for file,offset,slot,session in conn.execute(sql,args))
+    for row in added:
+        if clash('SELECT file,offset,slot,session FROM records WHERE key=?',(row['key'],)):return False
+        if row['message'] and clash('SELECT file,offset,slot,session FROM records WHERE message=? AND session=?',(row['message'],row['session'])):return False
+    return True
+
+
+def store_canonical(conn,rows,first=0):
+    conn.executemany('INSERT INTO canonical VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ((first+index,row['ts'],row['model'],*row['metrics'],row['cost'],row['speed'],row['geo'],row['tier'],row['session']) for index,row in enumerate(rows)))
+
+
 def read_events(files,db_path,allowed_sessions=None,start=0,end=float('inf')):
     """Reindex only changed files; retain only normalized counters and hashed IDs."""
     db_path=Path(db_path);db_path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     conn=sqlite3.connect(db_path,timeout=10);os.chmod(db_path,0o600)
-    failures=0;changed=False
+    failures=0;rebuild=False;appended=[]
     try:
-        conn.executescript('''CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,inode INTEGER,size INTEGER,mtime INTEGER,offset INTEGER);
-          CREATE TABLE IF NOT EXISTS records(file TEXT,offset INTEGER,slot INTEGER,session TEXT,data TEXT,PRIMARY KEY(file,offset,slot));
-          CREATE INDEX IF NOT EXISTS records_session ON records(session);
+        conn.executescript('''CREATE TABLE IF NOT EXISTS files(path BLOB PRIMARY KEY,inode INTEGER,size INTEGER,mtime INTEGER,offset INTEGER);
+          CREATE TABLE IF NOT EXISTS records(file BLOB,offset INTEGER,slot INTEGER,key BLOB,message BLOB,request BLOB,session BLOB,ts REAL,model TEXT,
+            i INTEGER,o INTEGER,w5 INTEGER,w1 INTEGER,r INTEGER,cost REAL,sidechain INTEGER,speed TEXT,geo TEXT,tier TEXT,PRIMARY KEY(file,offset,slot));
+          CREATE INDEX IF NOT EXISTS records_key ON records(key);
+          CREATE INDEX IF NOT EXISTS records_route ON records(message,session);
           CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);
-          CREATE TABLE IF NOT EXISTS canonical(id INTEGER PRIMARY KEY,ts REAL,model TEXT,i INTEGER,o INTEGER,w5 INTEGER,w1 INTEGER,r INTEGER,cost REAL,speed TEXT,geo TEXT,tier TEXT,session TEXT);
+          CREATE TABLE IF NOT EXISTS canonical(id INTEGER PRIMARY KEY,ts REAL,model TEXT,i INTEGER,o INTEGER,w5 INTEGER,w1 INTEGER,r INTEGER,cost REAL,speed TEXT,geo TEXT,tier TEXT,session BLOB);
           CREATE INDEX IF NOT EXISTS canonical_ts ON canonical(ts);''')
         conn.execute('BEGIN')
         paths=sorted({Path(p).resolve() for p in files});active={digest(str(p)) for p in paths}
         for (key,) in conn.execute('SELECT path FROM files').fetchall():
             if key not in active:
-                changed=True
+                rebuild=True
                 conn.execute('DELETE FROM records WHERE file=?',(key,));conn.execute('DELETE FROM files WHERE path=?',(key,))
         for path in paths:
             key=digest(str(path))
@@ -124,41 +154,49 @@ def read_events(files,db_path,allowed_sessions=None,start=0,end=float('inf')):
                 incremental=bool(old and old[0]==stat.st_ino and stat.st_size>old[1])
                 offset=old[3] if incremental else 0
                 fallback=next((part for part in reversed(path.parts) if allowed_sessions and part in allowed_sessions),path.stem)
+                added=[]
                 conn.execute('SAVEPOINT source')
                 try:
                     if not incremental:conn.execute('DELETE FROM records WHERE file=?',(key,))
                     with path.open('rb') as handle:
                         handle.seek(offset)
                         while True:
-                            start=handle.tell();line=handle.readline(32*1024*1024)
+                            # Not "start": that name is the range bound used by the final query.
+                            position=handle.tell();line=handle.readline(32*1024*1024)
                             if not line:break
                             if not line.endswith(b'\n'):
-                                handle.seek(start);break
+                                handle.seek(position);break
                             if b'"usage"' not in line or b'"assistant"' not in line:continue
                             try:
-                                for event in records(json.loads(line),fallback,(key,start)):
-                                    conn.execute('INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)',
-                                                 (key,start,event['slot'],event['session'],json.dumps(event,separators=(',',':'))))
+                                for event in records(json.loads(line),fallback,(key.hex(),position)):
+                                    conn.execute('INSERT OR REPLACE INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                                 (key,position,event['slot'],event['key'],event['message'],event['request'],event['session'],event['ts'],event['model'],
+                                                  *event['metrics'],event['cost'],int(event['sidechain']),event['speed'],event['geo'],event['tier']))
+                                    added.append(dict(event,file=key,offset=position))
                             except (ValueError,TypeError,OverflowError):continue
                         offset=handle.tell()
                     conn.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)',(key,stat.st_ino,stat.st_size,stat.st_mtime_ns,offset))
                     conn.execute('RELEASE source')
-                    changed=True
+                    # A rewritten file replaces earlier rows; a new or grown file only adds rows.
+                    if old and not incremental:rebuild=True
+                    appended.extend(added)
                 except Exception:
                     conn.execute('ROLLBACK TO source');conn.execute('RELEASE source');raise
             except (OSError,ValueError):failures+=1
         allowed={digest(s) for s in allowed_sessions} if allowed_sessions is not None else None
-        scope=digest(sorted(allowed) if allowed is not None else None)
+        scope=digest(sorted(allowed_sessions) if allowed_sessions is not None else None).hex()
         old_scope=conn.execute("SELECT value FROM metadata WHERE key='dedupe-scope'").fetchone()
-        if changed or not old_scope or old_scope[0]!=scope:
+        added=sorted((row for row in appended if allowed is None or row['session'] in allowed),key=lambda row:(row['file'],row['offset'],row['slot']))
+        if rebuild or not old_scope or old_scope[0]!=scope or (added and not isolated(conn,added,allowed)):
             # Deduplicate before date filtering, once per file/ownership change.
-            events=(json.loads(data) for session,data in conn.execute('SELECT session,data FROM records ORDER BY file,offset,slot')
-                    if allowed is None or session in allowed)
+            rows=conn.execute('SELECT '+COLUMNS+' FROM records ORDER BY file,offset,slot')
+            events=(stored_event(row) for row in rows if allowed is None or row[3] in allowed)
             unique=deduplicate(events)
             conn.execute('DELETE FROM canonical')
-            conn.executemany('INSERT INTO canonical VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                ((index,row['ts'],row['model'],*row['metrics'],row['cost'],row['speed'],row['geo'],row['tier'],row['session']) for index,row in enumerate(unique)))
+            store_canonical(conn,unique)
             conn.execute("INSERT OR REPLACE INTO metadata VALUES ('dedupe-scope',?)",(scope,))
+        elif added:
+            store_canonical(conn,deduplicate(added),conn.execute('SELECT COALESCE(MAX(id)+1,0) FROM canonical').fetchone()[0])
         conn.commit()
         events=[{'ts':ts,'model':model,'metrics':[i,o,w5,w1,r],'cost':cost,'speed':speed,'geo':geo,'tier':tier,'session':session}
                 for ts,model,i,o,w5,w1,r,cost,speed,geo,tier,session in conn.execute(

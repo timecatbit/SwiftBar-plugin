@@ -135,7 +135,42 @@ def parse_usage(data,now=None):
             row=data.get(key)
             if isinstance(row,dict):add(label,row.get('utilization'),row.get('resets_at'))
     if not windows:raise UsageError('尚未返回可识别的订阅用量')
-    return {'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,'state':'在线快照','source':'live'}
+    result={'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,'state':'在线快照','source':'live'}
+    extra=extra_usage(data)
+    if extra:result['extraUsage']=extra
+    return result
+
+
+def money(value):
+    """{amount_minor, exponent, currency} -> (amount, currency); anything else is unknown."""
+    if not isinstance(value,dict):return None
+    amount,exponent=value.get('amount_minor'),value.get('exponent')
+    if type(amount) is not int or type(exponent) is not int or not 0<=exponent<=6:return None
+    currency=value.get('currency')
+    return amount/10**exponent,(currency if isinstance(currency,str) and re.fullmatch(r'[A-Z]{3}',currency) else None)
+
+
+def extra_usage(data):
+    """Extra usage from the same usage response: monthly spend, cap and, when reported, credit balance."""
+    spend=data.get('spend')
+    if isinstance(spend,dict) and isinstance(spend.get('enabled'),bool):
+        if not spend['enabled']:return {'enabled':False}
+        used,limit,balance=money(spend.get('used')),money(spend.get('limit')),money(spend.get('balance'))
+        if used and used[0]>=0:
+            result={'enabled':True,'used':used[0],'limit':limit[0] if limit and limit[0]>0 else None,'currency':used[1] or 'USD'}
+            if balance:result['balance']=balance[0]
+            return result
+    # Older responses only carry extra_usage, in minor units (cents unless decimal_places says otherwise).
+    value=data.get('extra_usage')
+    if not isinstance(value,dict) or not isinstance(value.get('is_enabled'),bool):return None
+    if not value['is_enabled']:return {'enabled':False}
+    places=value.get('decimal_places');scale=10**places if type(places) is int and 0<=places<=6 else 100
+    def major(raw):return raw/scale if type(raw) in (int,float) and math.isfinite(raw) and raw>=0 else None
+    used,limit=major(value.get('used_credits')),major(value.get('monthly_limit'))
+    if used is None:return None
+    currency=value.get('currency') if isinstance(value.get('currency'),str) and re.fullmatch(r'[A-Z]{3}',value['currency']) else 'USD'
+    # A zero monthly limit means no cap rather than nothing left.
+    return {'enabled':True,'used':used,'limit':limit or None,'currency':currency}
 
 
 def live_subscription(root,consent=False):

@@ -9,12 +9,12 @@ import swiftbar_catalog as catalog
 
 KEYS = {'OCX_HOME', 'OCX_BASE_URL', 'OCX_TOKEN_FILE', 'OCX_CHATGPT_HOME', 'KOMARI_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY_FILE',
         'XAI_MANAGEMENT_API_KEY', 'XAI_MANAGEMENT_API_KEY_FILE', 'XAI_TEAM_ID',
-        'MINIMAX_API_KEY', 'MINIMAX_API_KEY_FILE', 'MINIMAX_REGION'}
+        'MINIMAX_API_KEY', 'MINIMAX_API_KEY_FILE', 'MINIMAX_REGION', 'MOONSHOT_REGION'}
 KEYS.update(name + suffix for key in catalog.API_KEYS for name in catalog.credential_names(key) for suffix in ('', '_FILE'))
 HEADER = '''# 本机高级设置：仅本用户可读，不随插件上传或覆盖。
 # 常用设置请在「主页模块」悬停对应来源；本机客户端默认自动读取。
 # 注释是说明，不代表已配置。无需填写即可使用已发现的本机客户端。
-# API 连接只保存密钥文件路径；原始密钥留在您选择的文件中。
+# API 连接只保存密钥文件路径；在插件中输入的 Key 存于同目录 keys/，仅本用户可读。
 '''
 
 
@@ -50,6 +50,32 @@ def write_overrides(directory, values):
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
+
+
+KEY_FORMAT = re.compile(r'[\x21-\x7e]{8,1024}')
+
+
+def store_key(directory, name, value):
+    """A typed key goes to a private file; config.local.sh only references its path."""
+    if not isinstance(value, str) or not KEY_FORMAT.fullmatch(value):
+        raise ValueError('invalid API key')
+    root = Path(directory) / 'keys'; root.mkdir(parents=True, exist_ok=True, mode=0o700); os.chmod(root, 0o700)
+    path = root / (name.lower() + '.key')
+    fd, temporary = tempfile.mkstemp(prefix='.key-', dir=root)
+    try:
+        with os.fdopen(fd, 'w') as out: out.write(value + '\n')
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+    return str(path)
+
+
+def managed_key(directory, filename):
+    """Only keys typed into the plugin are ours to delete; chosen files are never removed."""
+    try:
+        return Path(filename).expanduser().resolve().parent == (Path(directory) / 'keys').resolve()
+    except (OSError, RuntimeError):
+        return False
 
 
 def ensure_file(directory):
