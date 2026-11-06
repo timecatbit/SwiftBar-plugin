@@ -1,5 +1,5 @@
 """
-opencodex 的 SwiftBar 插件主体，由入口 opencodex.30s.sh 加载。
+token-monitor 的 SwiftBar 插件主体，由入口 token-monitor.30s.sh 加载。
 
 入口承担两种角色：
   1. 无参数运行      输出菜单（首行是菜单栏标题，之后是下拉菜单）
@@ -49,10 +49,17 @@ def detect_base():
 
 BASE = detect_base()
 NATIVE_USAGE_URL = BASE + "/#usage"
-PLUGIN = os.environ.get("OCX_PLUGIN_PATH") or (sys.argv[0] if sys.argv else "opencodex.30s.sh")
+PLUGIN = os.environ.get("OCX_PLUGIN_PATH") or (sys.argv[0] if sys.argv else "token-monitor.30s.sh")
 PLUGIN_DIR = os.path.dirname(os.path.abspath(PLUGIN))
 PANEL_APP = os.path.join(PLUGIN_DIR, ".opencodex-panel", "OpenCodexPanel.app")
-DEEPSEEK_LOGO_FILE = os.path.join(PLUGIN_DIR, "assets", "deepseek-logo.svg")
+# SwiftBar runs every visible file under its plugin folder, so installed assets live in the hidden one.
+ASSET_DIR = next((path for path in (os.path.join(PLUGIN_DIR, ".opencodex-panel", "assets"), os.path.join(PLUGIN_DIR, "assets"))
+                  if os.path.isdir(path)), os.path.join(PLUGIN_DIR, "assets"))
+DEEPSEEK_LOGO_FILE = os.path.join(ASSET_DIR, "deepseek-logo.svg")
+LOGO_DIR = os.path.join(ASSET_DIR, "logos")
+# Monochrome logos are template images so they follow light and dark menus.
+BRAND_LOGOS = {'ChatGPT': ('openai.svg', True), 'Claude': ('claude.svg', False), 'MiniMax': ('minimax.svg', False),
+               'Gemini': ('gemini.svg', False), 'Grok': ('grok.svg', True), 'Kimi': ('kimi.svg', True)}
 
 HOME = os.path.expanduser("~")
 OCX_HOME = os.path.expanduser(os.environ.get("OCX_HOME") or os.path.join(HOME, ".opencodex"))
@@ -61,6 +68,9 @@ CONFIG_FILE = os.path.join(OCX_HOME, "config.json")
 SERVICE_LOG = os.path.join(OCX_HOME, "service.log")
 RELEASES_URL = "https://github.com/lidge-jun/opencodex/releases/latest"
 KOMARI_BASE_URL = os.environ.get("KOMARI_BASE_URL", "").rstrip("/")
+VERSION = "5.12.0"
+AUTHOR = "minicoke"
+REPOSITORY = "https://github.com/timecatbit/swiftbar-token-monitor"
 
 
 # Runtime files are installed alongside this script; the source checkout is never needed.
@@ -82,6 +92,7 @@ import swiftbar_claude_oauth as claude_oauth
 import swiftbar_terminal as terminal_jobs
 import swiftbar_update_channels as update_channels
 import swiftbar_desktop_updates as desktop_updates
+import swiftbar_keys as keystore
 from swiftbar_time import parse_iso
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
@@ -143,9 +154,11 @@ UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
 # OpenCodex management endpoints are polled in the background; the health check gates the rest.
 OPENCODEX_ENDPOINTS = {"healthz": ("/healthz", False), "ready": ("/readyz", False), "quota": ("/api/codex-auth/quota", True),
                        "accounts": ("/api/codex-auth/accounts", True), "active": ("/api/codex-auth/active", True)}
-EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "claude_subscription":60}
-# Provider accounts read with the user's own key: Grok/Kimi balances and the MiniMax plan.
-ACCOUNT_SOURCES = ('grok', 'minimax', 'kimi-api')
+EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "claude-api": 1800, "claude_subscription":60}
+# Provider accounts read with the user's own key: Grok/Kimi balances, the MiniMax plan and Claude API spend.
+ACCOUNT_SOURCES = ('grok', 'minimax', 'kimi-api', 'claude-api')
+# APIs whose named extra keys are queried one by one, each in its own cache.
+KEY_TTLS = {'deepseek': 300, 'kimi-api': 300, 'grok': 300, 'claude-api': 1800}
 EXTERNAL_TTLS.update({name: 30 for name in OPENCODEX_ENDPOINTS})
 PENDING_READ = "正在后台读取"
 
@@ -170,6 +183,13 @@ def chatgpt_source():
 
 
 def connection_ready(key):
+    """Configured at all: the classic connection or, for an API, any key added in the panel."""
+    service=catalog.BY_KEY.get(key)
+    if service and service.category=='API' and named_keys(key):return True
+    return default_ready(key)
+
+
+def default_ready(key):
     if key=='claude-subscription':return view_settings()['claudeOAuthUsage'] or claude_local.enabled(STATE_DIR) or bool(claude_desktop.subscription(source_path('claude')).get('windows'))
     if key in catalog.MANUAL_SUBSCRIPTIONS:return key in view_settings()['configuredSubscriptions']
     if key in catalog.PORTAL_APIS:return any(accounts.credential(name) for name in catalog.credential_names(key))
@@ -184,6 +204,7 @@ def connection_ready(key):
     if key=='grok':return bool(accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip())
     if key=='minimax':return bool(accounts.credential('MINIMAX_API_KEY'))
     if key=='kimi-api':return bool(accounts.credential('MOONSHOT_API_KEY'))
+    if key=='claude-api':return bool(accounts.credential('ANTHROPIC_API_KEY'))
     return False
 
 
@@ -213,7 +234,8 @@ def refresh_cadence():
 CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
-                 'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION']}
+                 'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
+                 'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
 
 def connection_fingerprint(name):
     return memoized(('connection',name),lambda:connection_digest(name))
@@ -323,6 +345,14 @@ else:
 # PNG 自带 14pt 尺寸，不再通过 width/height 二次栅格化或拉伸。
 MENU_ICON_SIZE = 14
 MENU_ICONS = {
+    # "blank" keeps text-only rows aligned with rows that carry an icon.
+    "tag": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAlFJREFUSA3NlktrFEEURuMbdwoRNSLOoBBRFBQXbgJJ1H/gyp/gL3Djwq0IcaFRdOHCxy4mCvFBzE4QFUVxoyBCFoIvUAwq+D5nmGqr255Od08QPzh0VXX1/frWra6Znp5/rAU1/XyuH9bAwkyM7/RfwgzYTmlxqle+s4WpB2EnZA2/MXYbzsNT+AGJFiWtcg0zWw0jsB9+gmNLInpp7233n3D9CLVk4CZMwGc4C8shKw0vgkajsAGqJtbKQrNJCGZLaXfSCm7Eplvply5fyEyzD2BmeWYGjOu5kv4l+AJHYSOUkjW7AiEz65WVYzvAVYiXbxX953AHBqFQZlbGzCAHwBdyBcwkzvQR/fvgRkrdsB+kWQPOwD6wHn4Gbvk8rWfwK7jUZhVnSfeP8goZzE4ybRDmMjPaafC51/AAOr0Yt9LyoSZch7BBrE83eszDLumevCAeVVfBeric3ZotI8YzuAvDkNJmepdhvsws1yh8Al/ebzGRRT8MfjMXoNvMYrNrxNsOlivRLlpjYNGHktF6jdjMvbAWUmaG3QTHYLZ95VJLmp2C9zAFxv3LjLHWObeb6z14B4egquLMbvFwR7MQ2Lptg4fwFqqYxmYu45xmzGnJEyI2PdIeL7pkzfqYnLuMnYLEpv6mFZnGZjeYq1ktubzWtGh5NTsBbpBpKL2MzM1VUU2DmR/1vJiFN4iX143kD+kAnAPNbkLXmREjpWDqeeh3+go8/iZhHVTeIDxTqF/c9ZfDH1KPPjMbh+PwArxfWlXezro1wP8qb2AG/n/9BrSCfQAVkN0aAAAAAElFTkSuQmCC",
+    "info.circle": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAzxJREFUSA3FlVtoj2Ecx8ecTxs2Emtt1mJckJAbQ9HcyM1yQdQmdw5XbiwNhXbhzhVXDrlwQeRiqxU51ITUJEJZLbSTMWdjPp/1f/799+99//81i299ep/3fZ/n93ue3+F9c3L+sXJH4M81MmYEa4e9aDzGZQLMhqnwDXrhM/yAfhiAv9I4Vs+HXXAF3sJv+JW49nFtgr1QCm4oo+LC4vMCqII6KIFP8AU6E9fJXPMhDzxxN5xJEDbGbXaNZUoRNICh6oBm2APl4HsVNrWD8VVoh59wERZBmMcws3R2HgzbK6iFaRCkIUOdatBQboU74CZvwbCcavg4WACtsAlSpZMyWAsLQcepquDmNuj0Epj/WLm4Gqy+J7AO0jWPB9fA01+GpZCu4NTwHoGJ6RO8Nx+F0AI9cACiVMzDRrAVdLwaomR428HiMSLaH6JJ3G0GS16n9lqUnFcD52AnzIAomVPb6Du4ee+HSAenwQn1ECXzNwXMs23ghyCTtvPSVmkG5w/KvCl7qhJM9g1IlztcDp7KNUbiLjj3PUSpiYe9YNingz08EBx6LQIN2QrpMgeerATmQinMhAcQ57Ar8c41zvW+3zApDZofv4VfIV2G+iHUg/lrg/BtZRgpbVnxXrWtj2Qf+dDKywVPEuXU8NxPvP/INZs8jLnTkbaNXvJrYe6egqFdCaOhMowUQmcCezfp0BPdAx1ugNHQeoxY1UbFlAwq5NAj28jebwQLKFWGxb/CMigHw24hVMBisMpTZSirwXn2o1+dIdKgBixl83MMfBZkn+6Hx/AS/FWZ02dgMbnJ1Oau4b4DXsACSNoyhMqi+QB1oNPd0AZnQfWBH2VPEqLCcFBG5zmEU+j8EOTDQXgH2o+U5bsPXPwaaiHszjYwRDZxKoYvbKKScSv0wymwaLLKSSdAp2/gKBiWTJrFS0PuX8ZqvADFEDbLMF5OmgMaME/m1Nw1QBUUgL8cc74CDkMLdIPVfhIsunBqhsOT4V0FjeBp7VXzZa7diFdza8nb1DrdBoY9VtmO7C7zYAlsgTWJsXnzs9UON+E6PIIeMH+xyubQhc6xYHRilVr+PrPyNG4YPbknja1G3v0f/QEaprarhe2L0wAAAABJRU5ErkJggg==",
+    "arrow.up.right": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAUtJREFUSA3tlbtOQkEQhlGsbAwJhYm+gRd8ACppqYyGgsrWt9GSV/AZtLKxs6dQC2wQGwttFL5fziabZWAXDqcwOZN8e5nZnT872bOnUimtrMCSFdiIrK8Rv4X9yLow/IOjB9dhIDZvsmC8In0r+Zbl9HwPjM9hz/Np+Avf8JX1Gu/CDWyDrDrtimkPSDsAVeMz65/pC7EGWd9BYm/QzcaFCPpiI4QO4bQowWMSu5NJ7ARkbdBpX2BtNk9MAh1Yq6DEhllS/2S4/uySVoKv02m+Niam7FcwV3BzCX2J3UEdPqAFTxCay2m+Yi4YbgrnqWLhvpl5iuARu1JONpPccsQEJXYPsTJauc2SWgudT2KLbqNbF/ZnOHRpHsPAovmqYi6nLpQe8yTLK5Yk4i9SKVSSEbjnyo/nGlv/rB0y6k9/AdZ3lkuw3Pz/KzABoQpaTRinkpYAAAAASUVORK5CYII=",
+    "blank": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAACVJREFUSA3t0DEBAAAAwqD1T20IX4hAYcCAAQMGDBgwYMCAgX9gDFwAAfLJ3PEAAAAASUVORK5CYII=",
+    "plus": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAL1JREFUSA1jYBgFIzEEIoGefgrEvuR4nokMTQFAPVJA7EOGXgZyLGSEWgSjSbKXHAtJsgBd8aiF6CFCMX/4Byl60g4Dhpk7EKOLIwelI5CjAMS3gPgoEOMC/4ESG4F4Ey4FIPFPQAxSSC38CGQoMmBB5gDZ+UDsAcT4fGgJlJcB4vtAfAaIcQGQo9fjkiRFfBVQMciwWaRogqkd/ql01IewuKYaPSSCFJQlyAbk+HA70DZQibSLbFtHNVIzBADOoCY1UxPtMwAAAABJRU5ErkJggg==",
+    "sparkle.magnifyingglass": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAuxJREFUSA3t1MlvTVEcwPGaqZoapVTQoiE1Tyk1REJsCDaGWDViUyv/hYWVhV0tWFjRJqaEiCCGkogKYkq9VkMoSc1Fle9X3k2O6z63Em/FL/nk3vvueeec3zm/cwsK/sdfXoE+Kf315X0/RFfvv6InuHr/Db2KXAP6+wCUYgLGYDgK0YUPeIUn6MAbOJHUSBrQbIoxHytRjSr0h5167UY7mtCMq7gPJ/PbiA/o83hsQB1GIwMzeYF3GIKRmIhyuBLnUI9rsE3OiA84nZY7sQ3O+DzO4BY+YihcTrOcghVYlOWyOugRdCI13J/9eI1GLIfZRJMq4n4L3NMoBnLj827cxQNsRvQfbnPHMl65bC1YA7MIYyYPDbBd+M49d3n3wskewwgkho2j2MhNCU7jCroRhZkuxWzMgVlF/+3h/hlOohXzYJElRvQnX7ofxnFYbYNh0ZShBuswFhaU95XZZwvI6nUwq9V9dl8TI1yaimyLe1ztwIEWwkJahQWwM/fWSp6Bm3gEB3qPh7BqXeLECAe0Co0iuOnux2P4FXGgcfCdB97iuA0He4ovsC/fu8SfkBjhgHbg3rgcd2CZe3XWni8/a7Vwj4/CfXaSDuaKWChzs89OKDV20cI/noDZmGUYq3m4ge1wb8NwBbaiDW6Jy50axbQ4BTM7gBKEReW3tA5TEU7GwazwZrjcTtzVSA07qYF/7EA9LBoPt+F7M7d6DSczDTtwGVZ2Czw2OSM+Ew9+K2ahGp4pK64QnkULwsyrsAm1WA/bW51OYhCs3rf4JZx1PFyixXBP1sJOnsOl/gwLzTaeSbNvgwXn12kSXqIBe5DBTxHP0JdWnaVuJ5fQDmdvlu6jx8S9uoiDOIyzyKAcFVmeXzO1ba/D7IahFC6tHU5GGUbBDF0lmbXbcAFOyrPYBD8YfxxRp+E1qRNXwkIz42jQ69wvQd7CQS22RjhoF/xY5DUsrEocQif24Ue4RPkK+/bMmrHVbab/QHwHXkqfTLTgFiUAAAAASUVORK5CYII=",
+    "square.grid.2x2": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAnhJREFUSA3tlsuLj1EYx8dt3BslSWEiZKERNYkFKwsSspHVz6SmkJWNrX9glrayRVlYTJSyIQtJbIQaU+OW+3WM2/h83jnndd7TMSumxFOf95zneb6/c3uf8860tf23v/0EJhU2YKwDphZyo8TeweeQUzsX2oOfNmrfw0gaLA26BsEOmJ8KQ3+Y9ipchG/QCXtgEeSLd1E34Tz4u8pykUEH64ZBnczm4c+BLngEJ6AF9yC3mQRc0Ca4kSdT39Wcg1WwMuMIvke1FbTbcB1WQ67dSUztQaitdKQzyLq7u7XqZ2dJ6KrRovbOmNt4xncXtVVyckMyAc6ET1g6Us99OswqbHh2iH0PrdppUNJaXFrUVk5pwgEy66FVKZoP4xbV0xBWuwJ6oDEwvu/7CwxBbaUJT5PdCFsgvzZe8gvgRJp3bC9s1snMYrkMt9J4PqA5y3steI/yvCsehGvgjhaDd9bjy7VfiT2GK+BHoLLSDp+TeQOjY5LG01J/AvH4XtEXLS9AF/cM6skUlSY8SnwbuMLc2gk8gAPwElrQA+7OT11qFpOLPwT3Y6I04T6SQ3AqipLWotkPy8EJd4MV2gf5iXjcx2AdjDthJ4JLcBZy8/gOw4KQsBIfwpngp80ynOOwMA2WdjgFwUd4mwpD33erxd/ZfoKS9rVCzKOtLX/RdeI3dPIjrob8kxMW11ya0JWV4g7gcWtx9bYxViWSh5WrRW3lxHdROeFhEewCJ22I8btAU6N5sTeAf4jza7GUmOYf6nGtl6wD+v9IzgtiJyEWwnb6AwWdv7No+qEDaovbrgN0HKz0WYsavxzDwfGE1P7qFfjx+BC0/0jzA4yVfou3O33QAAAAAElFTkSuQmCC",
     "arrow.clockwise": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAilJREFUSA3t1stLVFEcwPGpjCLtRaRIkbgKoyfoJsOQxk20qW2UBhFBbd25iFZtImrZJvRPMNqUIG0UIpIICjVIY9RND3tiCdn3Kw50T8Ode26toh98GOfc33nce3/njIXCvx5rIm9wPfl7sBlvI/vmSj9CryE8wvE8I8TeoXe1bWWyg3zOYBKZI3bCRUYew3d4h046i8yTxk64hcF3Yg5OWsR+PMQ7/JXYxCinMIgvWKpggLZmVI2alAyvteIajuIbLJYXK3838tmGJjRgHXKH5X8SJczjDvaiHL6K03Dyl3Di1cgVq+jViWlM4RxsK4eTncE4LJYe5J6Mvstlf5fP17howy/hY3YBTqRupL0WLqeHnTvxEf0Iq7idtvuYwNkK12mKC8v+Bp6jq0JXK9b2wwgXUyG9epOV9xTDqK2eHp8Rvuy1DLELbmz3XJ5wDPftPoTj/9ZgNbqfPiNvHKLjFVxGHRIRruAHV72zrYmsuC/1pLvor1gKu4YTej5agTuwPUzO+L2FPIvLA8HxEhFO6KoewKPqWCIz2xdPqA44rsXncZgaJvoOPuAeNiImekh+hQE0I1P478Nt+HNzHVn3mwf9E7yBezVrP1ILhQMYxXvchItIiyIXx7CAS6iWT0oyXF0bRrAI38d5eBKVw5zduAqfhtXdC/8FyR1N9LyFT7DEPWP9lXiGObgY2x/jBDbgj8MD3Tvpg4/NSX10JQziAtwG/2P5CfwEzTxmkA8hIYAAAAAASUVORK5CYII=",
     "arrow.down.circle": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAm1JREFUSA3llk2IjVEYxy+yImKMrxgfU6ZmIRYU5WsoKSWiJKVmJQsLpVkoCVtZ2CnKx0IhythhQxQpi7uRoogyKBrju+H3u72nuZ3Oe9/33rHiX785532e5zzn67mnqVT+dY0pucHJxG2BHuiGNvgNA1CFW9APX2BUmsrokzAETtCIj/iPwgRoSasY9RacZBjuwH5YDh0wD1ZCHzyAsJjn9BdDU9pN9HcwyW1YCkVaTcAjcMwgbIJSWkvUT3DgcSh7z4RWxsNpcOxnKNzpDILeZwOO0LaqMOkLEkxslOQMTld3Exrt7Dz+E5AndxqO11NKajZWj1K6khEjRmNejXwme96pi/8Eyco9kAVcpS1SmQnNEap3V0g4NnRoN2T963W20XavZQnWpxK9xOgRzE85I1vZHa5gnDkfhvH1O5yeGV8H519oQ66Qu1I/Yei7olibMWysM8YVvAOfRRIr5Irja3Fv+GvAnHgU3/fhF2zNfB6pV6D2geOu+BFpGd/6Hkf22qcvvs7tCecCbL6R38AC8Ol6BlbfMDyBdojl22vOC7HD70OQ68Tnzp+CT5bvrJO6UwtiCqTkO2zO3pSzE6Or/QpzUwHYZkIVTCJ3YRKktARjyJe3oNo9mOhiKkNmm0Z7D25A8gXBbpGEKzpFP1cL8QyBk+7NjSp2HMtyvKNtKwq3aDwK76fZSd3ZYXDBP2ANlNJBopzUgVaYBVOkRQT0g2Nc7B5oSu40HK//HJ2DbTALfCTGQQf407gMTuJkH6AHWpJ36g867NaEeTjhWbCSc+WZl1EnQTthHXSDleoiBqAK/t4uQXg76f6v+gNhAaIPP8QhtwAAAABJRU5ErkJggg==",
     "arrow.right.circle": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAABygAwAEAAAAAQAAABwAAAAADpcdpAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAl9JREFUSA3llkuoTVEYx7dnhDzzikNuUQZiQFFed2akZCCRYqKUUBgoCXMDI4oSRSGTy8QjM0VmRgZIUV5FuF51+f20l7a919pnn3NnfPXrnPV9//Wt17fWOVn2r9uQhgscj2499MJCmAw/4TU8glvQB/0wKJtE7xPwGRygjvfEj8IY6MpW0usVOMgA3IHdsAxaMAdWwEG4B2EyT/i+CDqyLai/gUluwxJoZ6sQPAD7fIR10MjWoPoBdjwOTc8ZaTYCToN9P0HblU5D9DbvcITPbi0M+pQEY+uSnCHo7K5DJysr53SlYXvdpajNxOtWyoKo4m/nRprnIVWVnqmT/5DS7MsFV/lsYnsQmdCiGpXoEKp3cyx+A6cJtsaCCZ/3zj72HRnRHMjjHlXFnuOx89xKpN6xl/AAXIPhJely2ua8X/L/bn7Ngx540S7ScDIpHhP7AiY+BUVr0dD/LDiLMxqaOxUUbSoNr0vM1PpAhDzjSqKQK1rxLxErmFXq1K7pq2Rl34XRULSlNMz5sOgM333xDVruTW0XQs/PaoxdcN9ec3p9KnYITzJYUWfZ9lzv7CdE4rq8MuZUW7EePM7WAphdiVYdO3DdBH8bY7YYZ8g3MSbQdwWc0QUbgzCLJBzRybo88wiGH9uddcI2sWPEnfgbSO3AnxQWjVth5XU6qCs7DA72HVZDI9uPykHtaIU1uSrz0fXlfZzsNujIXGnY3n6+n4MNMAN8JIZBC3yYL4ODOMF30AtdmWdqIYXVmjCFA56F6ZC06JMTUffg2wRrwb+JU8BJhL+J3rdL8AL+c/sFyHai7KTuw5wAAAAASUVORK5CYII=",
@@ -371,7 +401,9 @@ def sanitize(value):
             out.append(" ")
         else:
             out.append(ch)
-    return "".join(out).strip()
+    # Leading hyphens would nest or split the menu, so remote names cannot fake structure.
+    text = "".join(out).strip()
+    return "‑" * (len(text) - len(text.lstrip("-"))) + text.lstrip("-")
 
 
 def as_option(key, value):
@@ -415,13 +447,6 @@ def act(name, *args):
     return options
 
 
-def fmt_int(value):
-    try:
-        return format(int(value), ",")
-    except (TypeError, ValueError):
-        return "—"
-
-
 def fmt_tokens(value):
     try:
         number = float(value)
@@ -445,6 +470,24 @@ def summary_cost_value(summary):
         if value is not None and value != "":
             return value
     return None
+
+
+def brand_icon(key):
+    """Menu options for a service's logo; a symbol stands in if the file is missing."""
+    service=catalog.BY_KEY[key]
+    if service.brand=='DeepSeek':raw,template=deepseek_logo_image(),False
+    else:
+        name,template=BRAND_LOGOS[service.brand]
+        raw=memoized(('logo',name),lambda:read_logo(os.path.join(LOGO_DIR,name)))
+    if raw:return {('templateimage' if template else 'image'):raw,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE}
+    return {'sfimage':'person.crop.circle' if service.category=='订阅' else 'creditcard'}
+
+
+def read_logo(path):
+    try:
+        with open(path,'rb') as handle:raw=handle.read()
+        return base64.b64encode(raw).decode('ascii') if raw else None
+    except OSError:return None
 
 
 def deepseek_logo_image():
@@ -643,6 +686,10 @@ def request(path, method="GET", body=None, timeout=4.0, auth=True):
         payload = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if auth:
+        # The admin token only travels to this Mac or over HTTPS, never in clear text.
+        parsed = urllib.parse.urlparse(BASE)
+        if parsed.hostname not in ("127.0.0.1", "localhost", "::1") and parsed.scheme != "https":
+            return None, (0, "管理令牌只发送到本机或 HTTPS 地址", None)
         token = admin_token()
         if token:
             headers["x-opencodex-api-key"] = token
@@ -1055,8 +1102,7 @@ def app_updates_cached():
 
 
 def auto_update_path():
-    directory=os.environ.get('SWIFTBAR_PLUGIN_DATA_PATH') or os.path.join(PLUGIN_DIR,'.opencodex-panel','state')
-    return os.path.join(directory,'auto-update.json')
+    return os.path.join(STATE_DIR,'auto-update.json')
 
 def auto_update_state():
     try:
@@ -1187,11 +1233,10 @@ def notify_app_updates(rows):
     selected=set(selected_update_ids())
     rows=[row for row in rows if row.get('id') in selected]
     if not rows:return
-    state_dir=os.environ.get('SWIFTBAR_PLUGIN_DATA_PATH') or os.path.join(PLUGIN_DIR,'.opencodex-panel','state')
-    path=os.path.join(state_dir,'updates-notified.json')
+    path=os.path.join(STATE_DIR,'updates-notified.json')
     try:
-        os.makedirs(state_dir,mode=0o700,exist_ok=True)
-        with open(os.path.join(state_dir,'updates.lock'),'a') as lock:
+        os.makedirs(STATE_DIR,mode=0o700,exist_ok=True)
+        with open(os.path.join(STATE_DIR,'updates.lock'),'a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX)
             try:
                 with open(path) as handle:seen=json.load(handle)
@@ -1209,10 +1254,13 @@ def notify_app_updates(rows):
 def update_attention_count(rows):
     return sum(bool(r.get('needsAttention') if r.get('automatic') else r.get('available')) for r in rows)
 
+# Status lights shared by every panel row: new (accent), ok (green), issue (orange), unknown (hollow).
+STATUS_LIGHTS = ('new', 'ok', 'issue', 'unknown')
+
 def update_indicator(row):
     if row.get('needsAttention') or '失败' in row.get('status',''):return 'issue'
-    if row.get('available'):return 'available'
-    if row.get('status','').endswith('已是最新'):return 'current'
+    if row.get('available'):return 'new'
+    if row.get('status','').endswith('已是最新'):return 'ok'
     return 'unknown'
 
 def app_update_lines(data):
@@ -1228,17 +1276,13 @@ def app_update_lines(data):
         if row.get('channel'):detail+=' · '+row['channel']
         if row.get('available') and row['id'] in ('claude-code','codex-cli'):
             detail+='\n点击运行 '+('claude update' if row['id']=='claude-code' else 'codex update')
-            lines.append(item(label,level=1,paneldetail=detail,panelupdatestate=update_indicator(row),**act('update-cli',row['id'])))
-        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail,panelupdatestate=update_indicator(row)))
+            lines.append(item(label,level=1,paneldetail=detail,panelstatus=update_indicator(row),**act('update-cli',row['id'])))
+        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail,panelstatus=update_indicator(row)))
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
     if terminal_jobs.latest_log(STATE_DIR,[r['id'] for r in rows]):
         lines.append(item('查看最近 CLI 更新日志',level=1,sfimage='doc.text',**act('open-cli-update-log')))
     lines.append(item('选择 Harness…',level=1,sfimage='square.grid.2x2',**act('panel-modules')))
-    hint='按 Harness 勾选及客户端联动规则检查'
-    lines.append(item(hint,level=1,color=MUTED,size=10))
-    if any(r['id']=='opencodex' for r in rows):lines.append(item('OpenCodex 每小时自动检查并更新',level=1,color=MUTED,size=10))
-    if any(not r.get('manual') and r['id']!='opencodex' for r in rows):lines.append(item('其他已接入应用每 6 小时检查 · 仅提醒',level=1,color=MUTED,size=10))
     return lines
 
 
@@ -1249,20 +1293,7 @@ def resource_lines(data):
         if not module_enabled(key):continue
         if key=='chatgpt':lines.extend(chatgpt_lines(data))
         elif key=='claude-subscription':lines.extend(claude_subscription_lines(data))
-        elif key=='deepseek':
-            balance,value=deepseek_balance(data);logo=deepseek_logo_image()
-            options={'image':logo,'width':MENU_ICON_SIZE,'height':MENU_ICON_SIZE} if logo else {'sfimage':'circle.hexagongrid.fill'}
-            configured=connection_ready(key);payload=data.get('provider_quotas') or {}
-            error=data.get('provider_quotas_error')
-            failed=bool(error and error[1]!='正在后台读取')
-            badge=balance or (('暂不可用' if failed else '正在读取') if configured else '未配置')
-            lines.append(item(service.label,badge=badge,**options))
-            lines.append(item('配置状态',badge='已配置' if configured else '未配置',level=1,color=MUTED,size=10))
-            if configured:
-                state='刷新失败' if failed else '正在刷新' if payload.get('_stale') or not payload else freshness(payload)
-                detail='保留最近余额 · '+freshness(payload) if failed and balance else None
-                lines.append(item('余额更新',badge=state,paneldetail=detail,level=1,color=WARN if failed else MUTED,size=10))
-            lines.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
+        elif service.category=='API':lines.extend(api_lines(key,data))
         elif key in ACCOUNT_SOURCES:lines.extend(provider_account_lines(key,data))
         else:lines.extend(portal_service_lines(key))
     return lines+(['---'] if lines else [])
@@ -1307,18 +1338,23 @@ def usage_level(percent,stale=False):
     return 'critical' if percent>=90 else 'warning' if percent>=70 else 'normal'
 
 
+def used_text(percent):
+    """Every subscription reports the share already used, worded like the API rows' 本月已用."""
+    return '已用 %g%%'%round(min(100,max(0,float(percent))),1)
+
+
 def claude_subscription_lines(data):
     payload=data.get('claude_subscription') or claude_subscription_load()[0]
     windows=payload.get('windows') or []
     live=payload.get('source') in ('live','claude-oauth');error=data.get('claude_subscription_error')
     if payload.get('fetchError'):error=(0,payload['fetchError'],None)
     stale=claude_usage_stale(payload)
-    value=' · '.join(w['label']+' %g%%'%w['used'] for w in windows[:2]) if windows and not stale else payload.get('state','暂无本机用量快照')
+    value='已用 '+' · '.join(w['label']+' %g%%'%w['used'] for w in windows[:2]) if windows and not stale else payload.get('state','暂无本机用量快照')
     if windows and stale:value='用量待更新' if live else '本机用量待更新'
-    failed=bool(error and error[1]!='正在后台读取')
-    if failed:value='刷新失败' if windows else '暂不可用'
-    source={'claude-oauth':'Claude Code 登录 · 主动查询','live':'App 登录 · 手动查询','claude-code':'Claude Code 本机回传','app-snapshot':'Claude App 本机快照'}.get(payload.get('source'),'Claude App 本机快照')
-    rows=[item('Claude 订阅',badge=value,sfimage='person.crop.circle',panelusagelevel=usage_level(max((w['used'] for w in windows),default=0),stale or failed or not windows)),
+    failed=refresh_failed(error)
+    if failed:value='刷新失败'
+    source={'claude-oauth':'Code 登录','live':'App 登录 · 手动查询','claude-code':'Code 本机回传','app-snapshot':'App 本机快照'}.get(payload.get('source'),'Claude App 本机快照')
+    rows=[item('Claude 订阅',badge=value,**brand_icon('claude-subscription'),panelusagelevel=usage_level(max((w['used'] for w in windows),default=0),stale or failed or not windows)),
           item('来源 · '+source,level=1,color=MUTED,size=10)]
     for w in windows:
         reset=None
@@ -1328,67 +1364,26 @@ def claude_subscription_lines(data):
                 # The service often returns xx:59:59.999 for an xx:00 reset.
                 reset='重置于 '+(at+timedelta(seconds=30)).strftime('%m/%d %H:%M')
             except ValueError:pass
-        if stale or failed:reset=(reset+'\n' if reset else '')+'上次成功数据，等待更新'
-        rows.append(item(w['label'],badge='%g%% 已用'%w['used'],paneldetail=reset,level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
+        if stale or failed:reset=(reset+'\n' if reset else '')+('刷新失败，保留最近一次成功的数据' if failed else '数据待更新')
+        rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=reset,level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
     extra=payload.get('extraUsage')
     if isinstance(extra,dict) and extra.get('enabled'):
         symbol='$' if extra.get('currency','USD')=='USD' else extra['currency']+' '
         money=lambda value:symbol+'%.2f'%value
         rows.append(item('额外用量 · 本月',badge=money(extra['used'])+(' / '+money(extra['limit']) if extra.get('limit') else ''),level=1,
-                         paneldetail=('剩余 '+money(max(0,extra['limit']-extra['used'])) if extra.get('limit') else '未设置每月上限')+('\n上次成功数据，等待更新' if stale or failed else '')))
+                         paneldetail=('剩余 '+money(max(0,extra['limit']-extra['used'])) if extra.get('limit') else '未设置每月上限')+('\n刷新失败，保留最近一次成功的数据' if failed else '\n数据待更新' if stale else '')))
         if isinstance(extra.get('balance'),(int,float)):rows.append(item('额外用量余额',badge=money(extra['balance']),level=1))
     elif isinstance(extra,dict):rows.append(item('额外用量',badge='未开启',level=1,color=MUTED,size=10))
     if windows:rows.append(item('更新时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
     if failed:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
     if view_settings()['claudeOAuthUsage']:
-        if stale and windows:rows.append(item('保留上次用量，当前数据待刷新',level=1,color=MUTED,size=10))
-        rows.append(item('约 5 分钟自动更新，无需调用模型',level=1,color=MUTED,size=10))
         rows.append(item('立即刷新用量',level=1,sfimage='arrow.clockwise',**act('refresh-source','claude-subscription')))
         if failed:rows.append(item('重新授权读取登录…',level=1,**act('set-claude-oauth','true')))
     else:
-        if stale:rows.append(item('旧快照仅供参考，等待客户端更新',level=1,color=MUTED,size=10))
         rows.append(item('启用 Claude Code 登录查询…',level=1,sfimage='arrow.triangle.2.circlepath',paneldetail='主动获取订阅用量，不读取 Cookie',**act('set-claude-oauth','true')))
     rows.extend([item('打开 Claude',level=1,sfimage='macwindow',**act('open-claude')),
                  item('打开订阅用量',level=1,sfimage='arrow.up.right',href=catalog.BY_KEY['claude-subscription'].url)])
     return rows
-
-
-def portal_service_lines(key):
-    service=catalog.BY_KEY[key];configured=connection_ready(key)
-    rows=[item(service.label,badge='官网查看' if configured else '未配置',sfimage='person.crop.circle' if service.category=='订阅' else 'creditcard')]
-    rows.append(item('配置状态',badge='已配置' if configured else '未配置',level=1,color=MUTED,size=10))
-    rows.append(item('尚未接入自动额度查询，请在官网查看' if service.category=='订阅' else '已识别 API 配置；余额与账单请在官网查看' if configured else '未发现 API 配置；也可直接打开官网',level=1,color=MUTED,size=10))
-    if service.category=='订阅':
-        rows.append(item('手动配置标记，不代表套餐验证结果',level=1,color=MUTED,size=10))
-        rows.append(item('清除配置标记' if configured else '标记为已配置',level=1,**act('set-subscription',key,'false' if configured else 'true')))
-    else:
-        if configured and key in accounts.KEY_CHECKS:
-            check=key_check(key)
-            rows.append(item('测试 Key',level=1,badge=(check['state']+' · '+freshness({'_fetchedAt':check['checkedAt']}).replace('更新','')) if check else '尚未测试',**act('test-api-key',key)))
-            rows.append(item('官方 API 不提供余额查询，测试只确认 Key 可用',level=1,color=MUTED,size=10))
-        rows.append(item('输入 API Key…',level=1,**act('enter-api-key',key)))
-        rows.append(item('选择密钥文件…',level=1,**act('configure-connection',key)))
-    rows.append(item('打开订阅管理' if service.category=='订阅' else '打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
-    return rows
-
-
-def key_fingerprint(key):
-    """Irreversible marker of the configured key, so a check never outlives a key change."""
-    secret=next((value for value in (accounts.credential(name) for name in catalog.credential_names(key)) if value),'')
-    return hashlib.sha256(secret.encode()).hexdigest()[:16] if secret else ''
-
-
-def key_check(key):
-    row=read_cache('key-checks').get(key)
-    return row if isinstance(row,dict) and row.get('key') and row['key']==key_fingerprint(key) else None
-
-
-def test_api_key(key):
-    if key not in accounts.KEY_CHECKS or not connection_ready(key):raise ValueError('invalid key check')
-    secret=next(value for value in (accounts.credential(name) for name in catalog.credential_names(key)) if value)
-    checks=read_cache('key-checks');checks['schema']=1
-    checks[key]=dict(accounts.check_key(key,secret),checkedAt=time.time(),key=key_fingerprint(key))
-    write_json_cache(cache_path('key-checks'),checks)
 
 
 RANGES={'today':'当天','24h':'近 24 小时','7d':'近 7 天','30d':'近 30 天','week':'本周','month':'本月','all':'全部'}
@@ -1488,8 +1483,12 @@ def opencodex_refresh():
             future.result()
 
 
+def ttl_for(name):
+    return EXTERNAL_TTLS.get(name) or KEY_TTLS[name.split('@')[0]]
+
+
 def loader_due(name):
-    if name!='opencodex':return cache_due(read_cache(name),refresh_ttl(EXTERNAL_TTLS[name]))
+    if name!='opencodex':return cache_due(read_cache(name),refresh_ttl(ttl_for(name)))
     health=read_cache('healthz')
     if cache_due(health,refresh_ttl(EXTERNAL_TTLS['healthz'])):return True
     # While the service is down, its other endpoints wait for the next health retry.
@@ -1501,13 +1500,25 @@ def external_loaders():
     loaders={}
     if module_enabled('opencodex') and ocx_configured():loaders['opencodex']=opencodex_refresh
     if module_enabled('opencodex') and ocx_configured():loaders['badge']=update_status_cached
-    if module_enabled('deepseek'):loaders['provider_quotas']=provider_quotas_cached
+    if module_enabled('deepseek') and default_ready('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates') and live_app_update_ids():loaders['app_updates']=app_updates_cached
     if module_enabled('claude-subscription'):loaders['claude_subscription']=lambda:cached_fetch('claude_subscription',claude_subscription_load,60)
     if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ACCOUNT_SOURCES:
-        if module_enabled(key) and connection_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
+        if module_enabled(key) and default_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
+    loaders.update(named_key_loaders())
+    return loaders
+
+
+def named_key_loaders():
+    loaders={}
+    for provider,ttl in KEY_TTLS.items():
+        if not module_enabled(provider):continue
+        for entry in named_keys(provider):
+            name=provider+'@'+entry['id']
+            load=lambda provider=provider,entry=entry:(accounts.account(provider,key=keystore.secret(STATE_DIR,provider,entry['id']),options=entry['options']),None)
+            loaders[name]=lambda name=name,load=load,ttl=ttl:cached_fetch(name,load,ttl)
     return loaders
 
 
@@ -1602,7 +1613,9 @@ def gather():
     elif data["healthz_error"] or not isinstance(data["healthz"], dict):
         data.update({name:None for name in OPENCODEX_ENDPOINTS})
     for key in ACCOUNT_SOURCES:
-        if not connection_ready(key):data[key]=accounts.account(key);data[key+'_error']=None
+        if not default_ready(key):data[key]=accounts.account(key);data[key+'_error']=None
+    for name in named_key_loaders():
+        data[name],data[name+'_error']=cache_result(read_cache(name),ttl_for(name))
     if not chatgpt_configured():data['chatgpt']={'state':'未找到 ChatGPT 客户端登录'};data['chatgpt_error']=None
     data["range_usage"],data["range_usage_error"]=cache_result(read_cache(range_cache_name()),refresh_ttl(60))
     return data
@@ -1697,7 +1710,7 @@ def account_quick_lines(data):
         weekly = quota.get("weeklyPercent")
         quota_text = ""
         try:
-            quota_text = " · %d%% 可用" % min(100, max(0, 100 - int(round(float(weekly)))))
+            quota_text = " · " + used_text(weekly)
         except (TypeError, ValueError):
             pass
 
@@ -1706,9 +1719,10 @@ def account_quick_lines(data):
                               **act("account-pause", account_id, "false")))
         elif account_id == pinned_id:
             current = row
-            lines.append(item("✓ " + name + quota_text, color=RANK))
+            lines.append(item(name + quota_text, color=RANK, checked=True, panelradio="on"))
         else:
-            lines.append(item("切换 · " + name + quota_text, color=RANK,
+            # One active account at a time: the panel shows these rows as a radio group.
+            lines.append(item(name + quota_text, color=RANK, panelradio="off",
                               **act("account-use", account_id)))
 
     if current is not None:
@@ -1717,23 +1731,22 @@ def account_quick_lines(data):
     return lines
 
 
-def account_quota_summary(data):
-    """在主菜单直接列出每个 ChatGPT 账号的可用额度，避免只显示主账号。"""
+def account_usage(data):
+    """Weekly share already used by each ChatGPT account, as (name, percent or None, state)."""
     accounts = (data.get("accounts") or {}).get("accounts") or []
     quotas = (data.get("quota") or {}).get("quotas") or {}
-    parts = []
+    rows = []
     for index, row in enumerate(accounts, start=1):
         account_id = row.get("id") or ""
         quota = quotas.get(account_id) or row.get("quota") or {}
-        weekly = quota.get("weeklyPercent")
         try:
-            available = "%d%%" % min(100, max(0, 100 - int(round(float(weekly)))))
+            used = min(100.0, max(0.0, float(quota.get("weeklyPercent"))))
         except (TypeError, ValueError):
-            available = "—"
+            used = None
         label = row.get("logLabel") or row.get("email") or account_id or ("账号 %d" % index)
         state = " 暂停" if row.get("paused") else (" 需登录" if row.get("needsReauth") else "")
-        parts.append("%s %s%s" % (shorten(label, 14), available, state))
-    return "  ·  ".join(parts) if parts else ""
+        rows.append((shorten(label, 14), used, state))
+    return rows
 
 
 def nest(lines, level=1):
@@ -1769,7 +1782,7 @@ def komari_expiry(row):
 
 def komari_lines(data):
     if not KOMARI_BASE_URL:
-        return [item("Komari 监控 · 未配置",sfimage="server.rack"),
+        return [item("Komari 监控",badge="未配置",sfimage="server.rack"),
                 item("设置面板地址…",level=1,**act("configure-connection","komari"))]
     payload = data.get("komari") or {}
     servers = payload.get("servers") or []
@@ -1788,7 +1801,8 @@ def komari_lines(data):
     else:
         summary = "%d/%d 在线" % (online, len(servers))
     # A parent opens only its submenu. The dashboard link is a separate child action.
-    lines = [item("Komari 监控 · " + summary, sfimage="server.rack", color=None,
+    # Like every other homepage row, the status sits on the right rather than in the name.
+    lines = [item("Komari 监控", badge=summary, sfimage="server.rack", color=None,
                   tooltip="Komari · " + summary + " · " + freshness(payload))]
     for row in sorted(servers, key=lambda value: (-float(value.get("weight") or 0), str(value.get("name") or ""))):
         state = row.get("online") if live else None
@@ -1810,14 +1824,15 @@ def komari_lines(data):
         color = KOMARI_ONLINE if state is True else BAD if state is False else MUTED
         url = KOMARI_BASE_URL + "/instance/" + urllib.parse.quote(str(row.get("uuid") or ""), safe="")
         lines.append(item("%s %s  %s · %s" % (mark, pad_display(name, 18), label, expiry_text),
-                          level=1, color=color, font="Menlo", size=12, tooltip=detail, href=url))
+                          level=1, color=color, font="Menlo", size=12, tooltip=detail, href=url,
+                          panelstatus="ok" if state is True else "issue" if state is False else "unknown"))
     lines.extend(["-----", item("打开 Komari 面板", level=1, href=KOMARI_BASE_URL),
                   item("刷新监控数据", level=1, **act("refresh-monitor")),
                   item(freshness(payload), level=1, color=MUTED, size=11)])
     return lines
 
 
-def unfiltered_management_lines(data, include_swiftbar=True):
+def unfiltered_management_lines(data):
     """Group operations by the application they actually control."""
     accounts=(data.get('accounts') or {}).get('accounts') or []
     healthy=bool(data.get('healthz'));pending=opencodex_pending(data)
@@ -1849,18 +1864,11 @@ def unfiltered_management_lines(data, include_swiftbar=True):
             children.append(item(label,badge=status,color=MUTED,size=11))
     lines.extend(nest(children));lines.extend(komari_lines(data));lines.extend(app_update_lines(data));lines.append('---')
     lines.append(item('刷新数据',sfimage='arrow.clockwise',**act('refresh')))
-    if not include_swiftbar:return lines
-    lines.append(item('SwiftBar 管理',sfimage='menubar.rectangle'))
-    swiftbar=[item('打开插件目录',sfimage='folder',**act('swiftbar-folder')),
-              item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
-              '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
-              item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.11.0',color=MUTED,size=11)]
-    lines.extend(nest(swiftbar));return lines
+    return lines
 
 
-def management_lines(data, include_swiftbar=True):
-    rows=unfiltered_management_lines(data,include_swiftbar);result=[];keep=True
+def management_lines(data):
+    rows=unfiltered_management_lines(data);result=[];keep=True
     for row in rows:
         if row=='---':
             if result and result[-1]!='---':result.append(row)
@@ -1876,29 +1884,31 @@ def management_lines(data, include_swiftbar=True):
 def chatgpt_lines(data):
     label=catalog.BY_KEY['chatgpt'].label
     if chatgpt_source()=='proxy':
-        proxy_accounts=(data.get('accounts') or {}).get('accounts') or []
-        badge=account_quota_summary(data) or ('正在读取' if ocx_configured() else '未配置')
-        if len(proxy_accounts)>2 or len(badge)>32:badge='%d 个账户'%len(proxy_accounts)
-        lines=[item(label,badge=badge,sfimage='gauge.with.dots.needle.67percent')]
-        lines.append(item('来源 · OpenCodex 管理的 ChatGPT 账户',level=1,color=MUTED,size=10))
-        lines.append(item('编程工具额度，不代表网页聊天的全部限额',level=1,color=MUTED,size=10))
-        for account in (data.get('accounts') or {}).get('accounts') or []:
-            single=dict(data,accounts={'accounts':[account]})
-            lines.append(item(account_quota_summary(single) or '额度待同步',level=1))
+        usage=account_usage(data);known=[used for _,used,_ in usage if used is not None]
+        if not usage:badge='正在读取' if ocx_configured() else '未配置'
+        elif len(usage)==1:badge=(used_text(usage[0][1]) if usage[0][1] is not None else '额度待同步')+usage[0][2]
+        else:badge='已用 '+' · '.join('%s %s%s'%(name,'%g%%'%round(used,1) if used is not None else '—',state) for name,used,state in usage)
+        if len(usage)>2 or len(badge)>32:badge='%d 个账户'%len(usage)
+        lines=[item(label,badge=badge,**brand_icon('chatgpt'),panelusagelevel=usage_level(max(known)) if known else None)]
+        lines.append(item('来源 · OpenCodex 账户 · 编程工具额度',level=1,color=MUTED,size=10))
+        for name,used,state in usage:
+            lines.append(item(name,level=1,badge=(used_text(used) if used is not None else '额度待同步')+state,
+                              panelusagelevel=usage_level(used) if used is not None else None))
         lines.append(item('打开账户管理',level=1,href=BASE+'/',sfimage='arrow.up.right'))
         return lines
-    payload=data.get('chatgpt') or {};windows=payload.get('windows') or []
+    payload=data.get('chatgpt') or {};windows=payload.get('windows') or [];error=data.get('chatgpt_error');failed=refresh_failed(error)
     visible=[w for w in windows if not w.get('resetsAt') or w['resetsAt']>time.time()]
-    badge=('%s%% 可用'%fmt_int(min(w['remaining'] for w in visible))) if visible else ('未配置' if not chatgpt_configured() else payload.get('state','正在读取'))
+    most=max((100-w['remaining'] for w in visible),default=None)
+    badge=used_text(most) if visible else ('未配置' if not chatgpt_configured() else payload.get('state','正在读取'))
     if windows and not visible:badge='待刷新'
-    if payload.get('_stale'):badge+=' · 上次'
-    lines=[item(label,badge=badge,sfimage='bubble.left.and.bubble.right')]
-    lines.append(item('ChatGPT 登录 · 编程工具额度',level=1,color=MUTED,size=10))
+    lines=[item(label,badge=with_failure(badge,bool(visible),failed),**brand_icon('chatgpt'),panelusagelevel=usage_level(most,failed) if visible else None)]
+    lines.append(item('来源 · 本机登录 · 编程工具额度',level=1,color=MUTED,size=10))
     for w in visible:
         minutes=w.get('minutes') or 0;span=('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
         window_name='ChatGPT' if str(w['name']).lower()=='codex' else str(w['name'])
-        lines.append(item(window_name+' · '+span,level=1,badge='%g%% 可用'%w['remaining']))
-    if not visible:lines.append(item(payload.get('state','未配置' if not chatgpt_configured() else '正在读取'),level=1,color=MUTED,size=10))
+        lines.append(item(window_name+' · '+span,level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed)))
+    if not visible and not failed:lines.append(item(payload.get('state','未配置' if not chatgpt_configured() else '正在读取'),level=1,color=MUTED,size=10))
+    if chatgpt_configured():lines.append(refresh_row(payload,error))
     lines.append(item('打开 ChatGPT',level=1,href='https://chatgpt.com',sfimage='arrow.up.right'))
     return lines
 
@@ -1909,21 +1919,23 @@ def detected_modules():
 
 def detection_help_entries():
     return [
-        {'label':'查找客户端、用量记录与 API 配置','children':[]},
-        {'label':'确认后覆盖当前模块选择','children':[]},
-        {'label':'不读取对话正文，不上传或展示 Key','children':[]},
+        {'label':'确认后覆盖当前模块选择；不读取对话正文，不显示 Key','children':[]},
         {'label':'','separator':True,'children':[]},
         {'label':'开始检测…','symbol':'sparkle.magnifyingglass','action':['detect-modules'],'children':[]},
     ]
 
 
+# SwiftBar greys out right-click rows that have neither an action nor a submenu, so every row here does something.
+def about_menu_lines():
+    """SwiftBar's own About popover has a fixed size; this submenu shows the same facts compactly."""
+    return [item('关于 token-monitor',sfimage='info.circle'),
+            item('版本 '+VERSION+' · 更新记录',level=1,sfimage='tag',href=REPOSITORY+'/blob/main/CHANGELOG.md'),
+            item('作者 '+AUTHOR+' · GitHub 仓库',level=1,sfimage='person.crop.circle',href=REPOSITORY)]
+
+
 def detection_menu_lines():
-    lines=[item('自动检测',sfimage='sparkle.magnifyingglass')]
-    for entry in detection_help_entries():
-        if entry.get('separator'):lines.append('-----')
-        elif entry.get('action'):lines.append(item(entry['label'],level=1,sfimage=entry.get('symbol'),**act(*entry['action'])))
-        else:lines.append(item(entry['label'],level=1,size=11))
-    return lines
+    # One clickable row: its confirmation dialog explains what detection reads and what it replaces.
+    return [item('自动检测…',sfimage='sparkle.magnifyingglass',**act('detect-modules'))]
 
 
 def source_locations(key):
@@ -1952,13 +1964,12 @@ def client_connection_entry(key):
     children=[]
     if not proxy:
         children.append({'label':'当前来源 · '+('OpenCodex 账户' if chatgpt_source()=='proxy' else '本机 ChatGPT 登录'),'children':[]})
-        children.append({'label':'勾选 OpenCodex 时使用其账户，否则读取本机 ChatGPT 登录','children':[]})
+        children.append({'label':'跟随 OpenCodex 勾选','children':[]})
         if chatgpt_source()=='proxy':children.append(location_entry('账户管理地址',[BASE]))
         children.append({'label':'','separator':True,'children':[]})
     children.append(location_entry('配置目录' if proxy else '本机登录目录',[root]))
     if proxy:
         children.extend([location_entry('管理地址',[BASE]),location_entry('管理令牌文件',[TOKEN_FILE])])
-    else:children.append({'label':'读取此目录的 ChatGPT 登录，不修改登录文件','children':[]})
     children.append({'label':'选择配置目录…','symbol':'folder','action':['choose-client-home',key],'children':[]})
     if proxy:children.extend([
         {'label':'修改管理地址…','action':['set-proxy-address'],'children':[]},
@@ -1968,7 +1979,7 @@ def client_connection_entry(key):
     return {'label':'OpenCodex' if proxy else 'ChatGPT 订阅','value':'已配置' if configured else '未配置','symbol':'network' if proxy else 'person.crop.circle','children':children}
 
 
-def module_connections():
+def module_connections(data=None):
     scope=hashlib.sha256(json.dumps([(k,source_path(k)) for k in preferences.USAGE]).encode()).hexdigest()[:12]
     detected,_=cached_fetch('configured-sources-'+scope,lambda:({'modules':detected_modules()},None),300)
     found=set((detected or {}).get('modules',[]));connections={}
@@ -1985,61 +1996,54 @@ def module_connections():
             connections[key]={'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children}
             if key=='codex':
                 children[0]['label']='来源 · 编程客户端的本机记录'
-                children.insert(1,{'label':'兼容桌面/CLI 编程会话，不含普通聊天','children':[]})
+                children.insert(1,{'label':'仅编程会话，不含普通聊天','children':[]})
             if key=='claude':
                 children[0]['label']='来源 · Claude 桌面 App'
-                children.insert(1,{'label':'仅统计 App 登记的可读取会话','children':[]})
+                children.insert(1,{'label':'仅 App 登记的会话','children':[]})
                 for child in children:
                     if child.get('action')==['choose-source','claude']:child['label']='选择 Claude 数据目录…'
                 children.append({'label':'打开 Claude','symbol':'macwindow','action':['open-claude'],'children':[]})
     for service in catalog.SERVICES:
         if service.key=='chatgpt':row=client_connection_entry('chatgpt')
-        else:row=service_connection_entry(service.key)
+        else:row=service_connection_entry(service.key,data)
         connections[service.key]=row
     connections['opencodex']=client_connection_entry('opencodex')
     connections['komari']=service_connection_entry('komari')
     return connections
 
 
-def service_connection_entry(key):
+def service_connection_entry(key,data=None):
     service=catalog.BY_KEY.get(key);configured=connection_ready(key)
+    if service and service.category=='API':
+        # Same key list as the homepage, plus pointing the classic connection at a key file.
+        children=panel_entries(api_lines(key,data or {}))[0]['children']
+        children.insert(len(children)-1,{'label':'选择密钥文件…','action':['configure-connection',key],'children':[]})
+        return {'label':service.label,'value':'已配置' if configured else '未配置','symbol':'key','children':children}
     if key=='claude-subscription':
         return {'label':service.label,'value':'已配置' if configured else '未配置','symbol':'person.crop.circle','children':[
             {'label':'Claude Code 登录查询','checked':view_settings()['claudeOAuthUsage'],'action':['set-claude-oauth','false' if view_settings()['claudeOAuthUsage'] else 'true'],'children':[]},
-            {'label':'主动查用量，不读取 Cookie、不调用模型','children':[]},
             location_entry('Code 登录来源',[str(claude_oauth.config_root())]),
             {'label':'关闭本机回传' if claude_local.enabled(STATE_DIR) else '启用本机用量回传…','action':['set-claude-local','false' if claude_local.enabled(STATE_DIR) else 'true'],'children':[]},
             location_entry('本机快照',[os.path.join(STATE_DIR,claude_local.SNAPSHOT)]) if claude_local.enabled(STATE_DIR) else location_entry('App 快照文件',[os.path.join(source_path('claude'),'plan-usage-history.json')]),
             {'label':'使用 App 登录查询一次…','action':['refresh-claude-online'],'children':[]},
             *([{'label':'清除在线查询授权','action':['set-claude-live','false'],'children':[]}] if view_settings()['claudeLiveUsage'] else []),
-            {'label':'正常 <70% · 橙色 70–89% · 红色 ≥90%','children':[]},
             {'label':'选择 Claude 数据目录…','action':['choose-source','claude'],'children':[]},
             {'label':'打开 Claude','action':['open-claude'],'children':[]},
             {'label':'打开订阅用量','href':service.url,'children':[]}]}
     if key in catalog.MANUAL_SUBSCRIPTIONS:
-        children=[{'label':'尚未接入自动额度查询；通过官网查看','children':[]},
-                  {'label':'配置标记由你手动维护，不验证套餐状态','children':[]}]
+        children=[{'label':'手动标记，未验证套餐','children':[]}]
         if configured:children.append(location_entry('本机标记文件',[os.path.join(STATE_DIR,'preferences.json')]))
         children.extend([{'label':'清除配置标记' if configured else '标记为已配置','action':['set-subscription',key,'false' if configured else 'true'],'children':[]},
                          {'label':'打开订阅管理','symbol':'arrow.up.right','href':service.url,'children':[]}])
+    elif key=='minimax':
+        children=[location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ['MINIMAX_API_KEY_FILE']))])] if configured and os.environ.get('MINIMAX_API_KEY_FILE') else []
+        children.extend([{'label':'选择密钥文件…','action':['configure-connection',key],'children':[]},
+                         {'label':'清除连接设置…','action':['clear-connection',key],'children':[]},
+                         {'label':'打开用量与账单','symbol':'arrow.up.right','href':service.url,'children':[]}])
     else:
-        children=[]
-        if key in accounts.KEY_CHECKS:children.append({'label':'官方 API 不提供余额查询；可测试 Key 是否可用','children':[]})
-        elif key in catalog.PORTAL_APIS:children.append({'label':'仅识别 API 配置；余额与账单在官网查看','children':[]})
-        if key=='minimax-api':children.append({'label':'使用 API 平台密钥，与订阅套餐密钥分开','children':[]})
-        if configured:
-            envkey=next((name for name in catalog.credential_names(key) if accounts.credential(name)),None)
-            if key=='komari':children.append(location_entry('面板地址',[KOMARI_BASE_URL]))
-            elif envkey and os.environ.get(envkey):children.append({'label':'密钥来源 · 进程环境变量 '+envkey,'children':[]})
-            elif envkey and os.environ.get(envkey+'_FILE'):children.append(location_entry('密钥文件',[os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE']))]))
-            elif key=='deepseek':children.extend([{'label':'来源 · OpenCodex 官方连接','children':[]},location_entry('配置文件',[CONFIG_FILE])])
-        if key!='komari':children.append({'label':'输入管理密钥…' if key=='grok' else '输入 API Key…','action':['enter-api-key',key],'children':[]})
-        children.append({'label':'设置面板地址…' if key=='komari' else '选择密钥文件…','action':['configure-connection',key],'children':[]})
-        if configured and key in accounts.KEY_CHECKS:
-            check=key_check(key)
-            children.append({'label':'测试 Key','value':check['state'] if check else '尚未测试','action':['test-api-key',key],'children':[]})
-        children.append({'label':'恢复自动读取' if key=='deepseek' else '清除连接设置…','action':['clear-connection',key],'children':[]})
-        if service:children.append({'label':'打开订阅管理' if service.category=='订阅' else '打开用量与账单','symbol':'arrow.up.right','href':service.url,'children':[]})
+        children=[location_entry('面板地址',[KOMARI_BASE_URL])] if configured else []
+        children.extend([{'label':'设置面板地址…','action':['configure-connection',key],'children':[]},
+                         {'label':'清除连接设置…','action':['clear-connection',key],'children':[]}])
     return {'label':service.label if service else 'Komari 监控','value':'已配置' if configured else '未配置',
             'symbol':'server.rack' if key=='komari' else 'person.crop.circle' if service.category=='订阅' else 'key','children':children}
 
@@ -2099,60 +2103,59 @@ def configure_client_action(name,extra):
     apply_client_connection(values,None if name=='reset-client-connection' else 'chatgpt' if key=='chatgpt' else 'opencodex')
 
 
-def configure_connection(key,clear=False,typed=False):
+def text_dialog(message,default='',hidden=False,title='连接设置'):
+    result=applescript('text returned of (display dialog '+as_expr(message)+' default answer '+as_literal(default)+(' with hidden answer' if hidden else '')
+                       +' buttons {"取消", "保存"} default button "保存" cancel button "取消" with title '+as_literal(title)+')')
+    return result.stdout.strip() if result.returncode==0 else None
+
+
+def choose_region(title,prompt,first,second):
+    """(first, second) are (label, value) pairs; the first one is preselected."""
+    region=applescript('choose from list {'+as_literal(first[0])+', '+as_literal(second[0])+'} with title '+as_literal(title)+' with prompt '+as_literal(prompt)+' default items {'+as_literal(first[0])+'}')
+    return {first[0]:first[1],second[0]:second[1]}.get(region.stdout.strip()) if region.returncode==0 else None
+
+
+def ask_option(key,current=''):
+    """Grok needs its Team ID, Kimi and MiniMax a region; None means the user cancelled."""
+    if key=='grok':
+        team=text_dialog('xAI Team ID（需要管理密钥，普通推理 API Key 不适用）',current)
+        if team is not None and not re.fullmatch(r'[A-Za-z0-9_-]+',team):
+            applescript('display alert "Team ID 无效" message "请填写 xAI 控制台中的 Team ID。"');return None
+        return team
+    if key=='minimax':return choose_region('MiniMax 套餐','选择密钥所属地区',('国际站','international'),('中国站','china'))
+    if key=='kimi-api':return choose_region('Kimi API','选择 Key 所属平台：中国站 platform.moonshot.cn，国际站 platform.moonshot.ai',('中国站','china'),('国际站','international'))
+    return ''
+
+
+def configure_connection(key,clear=False):
     global KOMARI_BASE_URL
     names={'komari':['KOMARI_BASE_URL'], 'deepseek':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
            'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
            'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
-           'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION']}
+           'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
+           'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
     for api in catalog.PORTAL_APIS:
         names[api]=[name+suffix for name in catalog.credential_names(api) for suffix in ('','_FILE')]
     if key not in names:raise ValueError('invalid connection')
     values={name:'' for name in names[key]}
-    def text_input(message,default=''):
-        result=applescript('text returned of (display dialog '+as_literal(message)+' default answer '+as_literal(default)+' buttons {"取消", "保存"} default button "保存" cancel button "取消" with title "连接设置")')
-        return result.stdout.strip() if result.returncode==0 else None
     if clear:
-        if not confirm('清除连接设置？','清除插件保存的地址或密钥引用；在插件中输入的 Key 一并删除，你自己选择的密钥文件不会删除。',accept='清除设置'):return
+        if not confirm('清除连接设置？','清除插件保存的地址或密钥引用；插件保存的 Key 一并删除，你自己选择的密钥文件不会删除。',accept='清除设置'):return
     elif key=='komari':
-        value=text_input('Komari 面板地址（http:// 或 https://）',KOMARI_BASE_URL)
+        value=text_dialog('Komari 面板地址（http:// 或 https://）',KOMARI_BASE_URL)
         if value is None:return
         url=connections.monitor_url(value)
         if not url:
             applescript('display alert "地址无效" message "请填写实际面板地址，不使用示例地址、账号密码或查询参数。"');return
         values['KOMARI_BASE_URL']=url
     else:
-        secret=None
-        if typed:
-            label='xAI 管理密钥（Management API Key）' if key=='grok' else catalog.BY_KEY[key].label+(' 套餐密钥' if key=='minimax' else ' Key')
-            response=applescript('text returned of (display dialog '+as_expr('输入 '+label+'\n只保存在本机仅你可读的文件中，不会显示或上传。')
-                                 +' default answer "" with hidden answer buttons {"取消", "保存"} default button "保存" cancel button "取消" with title "连接设置")')
-            if response.returncode:return
-            secret=response.stdout.strip()
-            if not connections.KEY_FORMAT.fullmatch(secret):
-                applescript('display alert "Key 格式无效" message "请粘贴完整的 API Key，不含空格或换行。"');return
-        else:
-            response=applescript('POSIX path of (choose file with prompt '+as_literal('选择 '+key+' 的密钥文本文件；只保存路径，不复制或展示密钥。')+')')
-            if response.returncode:return
-            filename=response.stdout.strip()
-            if not os.path.isfile(filename):return
-            values[names[key][1]]=filename
-        if key=='grok':
-            team=text_input('xAI Team ID（需要管理密钥，普通推理 API Key 不适用）',os.environ.get('XAI_TEAM_ID',''))
-            if team is None:return
-            if not re.fullmatch(r'[A-Za-z0-9_-]+',team):
-                applescript('display alert "Team ID 无效" message "请填写 xAI 控制台中的 Team ID。"');return
-            values['XAI_TEAM_ID']=team
-        elif key=='minimax':
-            region=applescript('choose from list {"国际站", "中国站"} with title "MiniMax 套餐" with prompt "选择密钥所属地区" default items {"国际站"}')
-            if region.returncode or region.stdout.strip() not in ('国际站','中国站'):return
-            values['MINIMAX_REGION']='china' if region.stdout.strip()=='中国站' else 'international'
-        elif key=='kimi-api':
-            region=applescript('choose from list {"中国站", "国际站"} with title "Kimi API" with prompt "选择 Key 所属平台：中国站 platform.moonshot.cn，国际站 platform.moonshot.ai" default items {"中国站"}')
-            if region.returncode or region.stdout.strip() not in ('国际站','中国站'):return
-            values['MOONSHOT_REGION']='international' if region.stdout.strip()=='国际站' else 'china'
-        # Every prompt is answered; only now does a typed key touch the disk.
-        if secret:values[names[key][1]]=connections.store_key(STATE_DIR,names[key][0],secret)
+        response=applescript('POSIX path of (choose file with prompt '+as_literal('选择 '+key+' 的密钥文本文件；只保存路径，不复制或展示密钥。')+')')
+        if response.returncode:return
+        filename=response.stdout.strip()
+        if not os.path.isfile(filename):return
+        values[names[key][1]]=filename
+        option=ask_option(key,os.environ.get('XAI_TEAM_ID',''))
+        if option is None:return
+        if option:values[names[key][2]]=option
     previous=[os.environ.get(name,'') for name in names[key] if name.endswith('_FILE')]
     connections.write_overrides(STATE_DIR,values)
     os.environ.update(values)
@@ -2163,13 +2166,60 @@ def configure_connection(key,clear=False,typed=False):
     KOMARI_BASE_URL=connections.monitor_url(os.environ.get('KOMARI_BASE_URL'))
     sync_connection_cache()
     if not clear:preferences.update(STATE_DIR,'module',key,'true')
-    elif key!='deepseek':preferences.update(STATE_DIR,'module',key,'false')
+    elif key!='deepseek' and not keystore.entries(STATE_DIR,key):preferences.update(STATE_DIR,'module',key,'false')
+    # A newly saved key gets one check right away, so the row shows a result instead of nothing.
+    if not clear and key in accounts.KEY_CHECKS:test_api_key(key)
     schedule_background_refresh()
 
 
-def module_options():
-    settings=view_settings();connections=module_connections()
-    settings_rows=[{'label':label,'checked':settings['appearance']==key,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
+def add_api_key(provider):
+    """A named key, typed once and kept in a private file; every prompt is answered before anything is written."""
+    service=catalog.BY_KEY.get(provider)
+    if not service or service.category!='API':raise ValueError('invalid API')
+    name=text_dialog('给这把 Key 起个名字',('Key %d'%(len(api_keys(provider))+1)),title='添加 Key')
+    if name is None:return
+    if not keystore.LABEL.fullmatch(name):
+        applescript('display alert "名字无效" message "请填写 1–24 个字符的名字。"');return
+    note='\n管理员 Key 权限很大，建议在控制台设置过期时间；插件只用它读取花费。' if provider=='claude-api' else ''
+    secret=text_dialog(('xAI 管理密钥（Management API Key）' if provider=='grok' else service.label+' Key')+'\n只保存在本机仅你可读的文件中，不会显示或上传。'+note,hidden=True,title='添加 Key')
+    if secret is None:return
+    if not connections.KEY_FORMAT.fullmatch(secret):
+        applescript('display alert "Key 格式无效" message "请粘贴完整的 API Key，不含空格或换行。"');return
+    option=ask_option(provider)
+    if option is None:return
+    options={'grok':{'team':option},'kimi-api':{'region':option}}.get(provider,{})
+    key_id=keystore.add(STATE_DIR,provider,name,secret,options)
+    preferences.update(STATE_DIR,'module',provider,'true')
+    if provider in accounts.KEY_CHECKS:test_api_key(provider,key_id)
+    schedule_background_refresh()
+
+
+def rename_api_key(provider,key_id):
+    entry=next((e for e in api_keys(provider) if e['id']==key_id),None)
+    if entry is None:raise ValueError('unknown key')
+    name=text_dialog('重命名这把 Key',entry['label'],title='重命名 Key')
+    if name is None:return
+    try:keystore.rename(STATE_DIR,provider,key_id,name)
+    except ValueError:applescript('display alert "名字无效" message "请填写 1–24 个字符的名字。"')
+
+
+def remove_api_key(provider,key_id):
+    entry=next((e for e in api_keys(provider) if e['id']==key_id),None)
+    if entry is None:raise ValueError('unknown key')
+    if key_id=='default':return configure_connection(provider,clear=True)
+    if not confirm('删除「'+entry['label']+'」？','只删除插件保存的这把 Key，不影响服务商账户。',accept='删除'):return
+    keystore.remove(STATE_DIR,provider,key_id)
+    try:os.unlink(cache_path(entry['cache']))
+    except OSError:pass
+    checks=read_cache('key-checks')
+    if checks.pop(check_id(provider,key_id),None) is not None:write_json_cache(cache_path('key-checks'),checks)
+    if not connection_ready(provider):preferences.update(STATE_DIR,'module',provider,'false')
+    schedule_background_refresh()
+
+
+def module_options(data=None):
+    settings=view_settings();connections=module_connections(data)
+    settings_rows=[{'label':label,'checked':settings['appearance']==key,'radio':True,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
     settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
     options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},
              {'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows},
@@ -2201,26 +2251,168 @@ def module_menu_lines():
     return rows
 
 
-def provider_account_lines(key,data):
-    payload=data.get(key) or {};is_grok=key=='grok'
-    service=catalog.BY_KEY[key];label=service.label;symbol={'CNY':'¥'}.get(payload.get('currency'),'$')
-    windows=[w for w in payload.get('windows',[]) if not w.get('resetsAt') or w['resetsAt']>time.time()]
-    if 'balance' in payload:badge=symbol+'%.2f'%payload['balance']
-    elif windows:badge='%g%% 可用'%min(w['remaining'] for w in windows)
-    else:badge='未配置' if '未配置' in payload.get('state','') else payload.get('state','正在读取')
-    if payload.get('windows') and not windows:badge='待刷新'
-    if payload.get('_stale'):badge+=' · 上次'
-    rows=[item(label,badge=badge,sfimage='chart.pie' if key=='minimax' else 'creditcard')]
-    rows.append(item({'grok':'xAI API 预付余额 · USD','kimi-api':'可用余额 · 含代金券'}.get(key,'MiniMax 套餐 · 按服务端额度'),level=1,color=MUTED,size=10))
-    if not connection_ready(key):
-        rows.append(item('输入 API Key…',level=1,**act('enter-api-key',key)))
-        rows.append(item('选择密钥文件…',level=1,**act('configure-connection',key)))
-    if not windows and not ('balance' in payload):rows.append(item(payload.get('state','正在读取'),level=1,color=MUTED,size=10))
-    for field,name in (('cash','现金余额'),('voucher','代金券余额')):
-        if field in payload:rows.append(item(name,level=1,badge=symbol+'%.2f'%payload[field],color=MUTED,size=11))
-    for w in windows:rows.append(item(w['name'],level=1,badge='%g%% 可用'%w['remaining']))
-    rows.append(item('打开用量与账单',level=1,href=service.url if key!='grok' else 'https://console.x.ai',sfimage='arrow.up.right'))
+# ---------------------------------------------------------------------------
+# API keys: the classic connection plus any number of named keys
+# ---------------------------------------------------------------------------
+CURRENCY_SYMBOLS = {'CNY': '¥', 'USD': '$'}
+
+
+def named_keys(provider):
+    return memoized(('keys',provider),lambda:keystore.entries(STATE_DIR,provider))
+
+
+def api_keys(provider):
+    """The classic connection (if configured) first, then the keys added in the panel."""
+    rows=[]
+    if default_ready(provider):
+        envkey=next((name for name in catalog.credential_names(provider) if accounts.credential(name)),None)
+        path=os.path.abspath(os.path.expanduser(os.environ[envkey+'_FILE'])) if envkey and os.environ.get(envkey+'_FILE') and not os.environ.get(envkey) else None
+        source='环境变量 '+envkey if envkey and os.environ.get(envkey) else CONFIG_FILE if provider=='deepseek' and not envkey else path
+        rows.append({'id':'default','label':keystore.default_label(STATE_DIR,provider),'options':{},
+                     'cache':'provider_quotas' if provider=='deepseek' else provider,'source':source})
+    for entry in named_keys(provider):
+        rows.append(dict(entry,cache=provider+'@'+entry['id'],source=str(keystore.secret_path(STATE_DIR,provider,entry['id']))))
     return rows
+
+
+def entry_secret(provider,key_id):
+    if key_id!='default':return keystore.secret(STATE_DIR,provider,key_id)
+    return next((value for value in (accounts.credential(name) for name in catalog.credential_names(provider)) if value),'')
+
+
+def check_id(provider,key_id):
+    return provider if key_id=='default' else provider+'@'+key_id
+
+
+def key_fingerprint(provider,key_id='default'):
+    """Irreversible marker of the configured key, so a check never outlives a key change."""
+    secret=entry_secret(provider,key_id)
+    return hashlib.sha256(secret.encode()).hexdigest()[:16] if secret else ''
+
+
+def key_check(provider,key_id='default'):
+    row=read_cache('key-checks').get(check_id(provider,key_id))
+    return row if isinstance(row,dict) and row.get('key') and row['key']==key_fingerprint(provider,key_id) else None
+
+
+def test_api_key(provider,key_id='default'):
+    secret=entry_secret(provider,key_id) if provider in accounts.KEY_CHECKS else ''
+    if not secret:raise ValueError('invalid key check')
+    checks=read_cache('key-checks');checks['schema']=1
+    checks[check_id(provider,key_id)]=dict(accounts.check_key(provider,secret),checkedAt=time.time(),key=key_fingerprint(provider,key_id))
+    write_json_cache(cache_path('key-checks'),checks)
+
+
+def money_text(amount,currency):
+    return CURRENCY_SYMBOLS.get(currency,currency+' ')+'%.2f'%amount
+
+
+def key_value(provider,entry,data):
+    """What one key shows: its balance, else its spend, else what a key check proved."""
+    payload=data.get(entry['cache']) or {};failed=refresh_failed(data.get(entry['cache']+'_error'))
+    if provider=='deepseek' and entry['id']=='default':
+        text,amount=deepseek_balance(data)
+        if amount is not None:
+            currency={'$':'USD'}.get(text[:1],'CNY')
+            return {'text':'余额 '+money_text(amount,currency),'amount':amount,'currency':currency,'kind':'balance','failed':failed}
+    if isinstance(payload.get('balance'),(int,float)):
+        return {'text':'余额 '+money_text(payload['balance'],payload.get('currency','USD')),'amount':payload['balance'],'currency':payload.get('currency','USD'),'kind':'balance','failed':failed}
+    if isinstance(payload.get('monthCost'),(int,float)):
+        return {'text':'本月已用 '+money_text(payload['monthCost'],'USD'),'amount':payload['monthCost'],'currency':'USD','kind':'spend','failed':failed}
+    check=key_check(provider,entry['id']) if provider in accounts.KEY_CHECKS else None
+    if check and check.get('valid') is False:return {'text':'Key 无效'}
+    if payload.get('permission') is False:return {'text':'无花费权限'}
+    if provider in KEY_TTLS:
+        return {'text':'刷新失败' if failed else payload['state'] if payload.get('state') not in (None,'已同步') else '正在读取'}
+    if provider in accounts.KEY_CHECKS:
+        return {'text':{True:'Key 有效',False:'Key 无效'}.get(check.get('valid'),'测试未完成') if check else '待测试'}
+    return {'text':'已配置'}
+
+
+def api_badge(values):
+    """Homepage total: balances or spend are summed per currency; otherwise the shared key state."""
+    if not values:return '未配置'
+    for kind,prefix in (('balance','余额 '),('spend','本月已用 ')):
+        rows=[v for v in values if v.get('kind')==kind]
+        if rows:
+            totals={}
+            for v in rows:totals[v['currency']]=totals.get(v['currency'],0)+v['amount']
+            return with_failure(prefix+' · '.join(money_text(a,c) for c,a in totals.items()),True,any(v.get('failed') for v in rows))
+    texts={v['text'] for v in values}
+    return texts.pop() if len(texts)==1 else '%d 把 Key'%len(values)
+
+
+def key_lines(provider,entry,data,level):
+    """One key's own rows: details, refresh state, check, where it is stored, rename and delete."""
+    payload=data.get(entry['cache']) or {};error=data.get(entry['cache']+'_error');rows=[]
+    symbol=lambda amount:money_text(amount,payload.get('currency','USD'))
+    for field,name in (('cash','现金'),('voucher','代金券')):
+        if isinstance(payload.get(field),(int,float)):rows.append(item(name,level=level,badge=symbol(payload[field])))
+    if isinstance(payload.get('todayCost'),(int,float)):rows.append(item('今日已用（UTC）',level=level,badge=money_text(payload['todayCost'],'USD')))
+    if payload.get('permission') is False:
+        rows.append(item(payload.get('state','没有查看花费的权限'),level=level,color=WARN,size=10,
+                         paneldetail='需要管理员 Key（sk-ant-admin…），个人组织需先转为团队组织' if payload.get('reason')!='workspace' else '这把 Key 绑定了 Workspace，换用管理员 Key（sk-ant-admin…）'))
+    if provider in KEY_TTLS:rows.append(refresh_row(payload,error,level))
+    if provider in accounts.KEY_CHECKS:
+        check=key_check(provider,entry['id'])
+        rows.append(item('测试 Key',level=level,badge=(check['state']+' · '+freshness({'_fetchedAt':check['checkedAt']}).replace('更新','')) if check else '未测试',
+                         **act('test-api-key',provider,entry['id'])))
+    if entry.get('source'):rows.append(item('来源',level=level,paneldetail=entry['source'],color=MUTED,size=10))
+    rows.append(item('重命名…',level=level,**act('rename-api-key',provider,entry['id'])))
+    # A key read from OpenCodex's own config is not ours to delete.
+    if entry.get('source')!=CONFIG_FILE:rows.append(item('删除…',level=level,color=BAD,**act('remove-api-key',provider,entry['id'])))
+    return rows
+
+
+def portal_service_lines(key):
+    """Subscriptions without a quota API: a manual, unverified mark and the official page."""
+    service=catalog.BY_KEY[key];configured=connection_ready(key)
+    return [item(service.label,badge='已标记' if configured else '未配置',**brand_icon(key)),
+            item('手动标记，未验证',level=1,color=MUTED,size=10),
+            item('清除标记' if configured else '标记为已订阅',level=1,**act('set-subscription',key,'false' if configured else 'true')),
+            item('打开订阅管理',level=1,href=service.url,sfimage='arrow.up.right')]
+
+
+def provider_account_lines(key,data):
+    """MiniMax plan quota: share already used per window, like every other subscription."""
+    service=catalog.BY_KEY[key];payload=data.get(key) or {};error=data.get(key+'_error');failed=refresh_failed(error)
+    windows=[w for w in payload.get('windows',[]) if not w.get('resetsAt') or w['resetsAt']>time.time()]
+    most=max((100-w['remaining'] for w in windows),default=None)
+    badge=used_text(most) if windows else '待刷新' if payload.get('windows') else payload.get('state','正在读取') if connection_ready(key) else '未配置'
+    rows=[item(service.label,badge=with_failure(badge,bool(windows),failed),**brand_icon(key),panelusagelevel=usage_level(most,failed) if windows else None)]
+    rows.extend(item(w['name'],level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed)) for w in windows)
+    rows.append(refresh_row(payload,error) if connection_ready(key) else item('选择密钥文件…',level=1,**act('configure-connection',key)))
+    rows.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
+    return rows
+
+
+def api_lines(provider,data):
+    service=catalog.BY_KEY[provider];keys=api_keys(provider);values=[key_value(provider,e,data) for e in keys]
+    rows=[item(service.label,badge=api_badge(values),**brand_icon(provider))]
+    for entry,value in zip(keys,values):
+        rows.append(item(entry['label'],level=1,badge=value['text']))
+        rows.extend(key_lines(provider,entry,data,2))
+    rows.append(item('添加 Key…',level=1,sfimage='plus',**act('add-api-key',provider)))
+    rows.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
+    return rows
+
+
+def refresh_failed(error):
+    """A real failed attempt, not a cache that is merely due or still loading."""
+    return bool(error and error[1]!=PENDING_READ)
+
+
+def with_failure(badge,has_data,failed):
+    # Values stay put while refreshing; only a real failure is marked, and plainly.
+    if not failed:return badge
+    return badge+' · 刷新失败' if has_data else '刷新失败'
+
+
+def refresh_row(payload,error,level=1):
+    failed=refresh_failed(error)
+    state='刷新失败' if failed else '正在刷新' if payload.get('_stale') or not payload else freshness(payload)
+    detail=(str(error[1])+('\n保留最近一次成功的数据 · '+freshness(payload) if payload.get('_fetchedAt') else '')) if failed else None
+    return item('更新时间',badge=state,paneldetail=detail,level=level,color=WARN if failed else MUTED,size=10)
 
 
 def panel_entries(lines):
@@ -2248,7 +2440,8 @@ def panel_entries(lines):
             if attrs.get("panelsection")=="true":entry["section"]=True
             if attrs.get("panelattention")=="true":entry["attention"]=True
             if attrs.get('panelusagelevel') in ('normal','warning','critical'):entry['usageLevel']=attrs['panelusagelevel']
-            if attrs.get('panelupdatestate') in ('available','current','issue','unknown'):entry['updateState']=attrs['panelupdatestate']
+            if attrs.get('panelstatus') in STATUS_LIGHTS:entry['statusLight']=attrs['panelstatus']
+            if attrs.get('panelradio') in ('on','off'):entry.update(radio=True,checked=attrs['panelradio']=='on')
             if attrs.get("badge"):
                 entry["value"] = attrs["badge"]
             if attrs.get("paneldetail"):
@@ -2258,7 +2451,8 @@ def panel_entries(lines):
             if attrs.get("param2") == "--action" and attrs.get("param3"):
                 entry["action"] = [attrs["param" + str(i)] for i in range(3, 20) if "param" + str(i) in attrs]
             if level and label.startswith(("●", "○", "?")) and attrs.get("tooltip"):
-                entry["label"] = re.sub(r"\s{2,}", " · ", label).split(" · ")[0]
+                # The panel draws the status light; the text mark is only for SwiftBar's own menu.
+                entry["label"] = re.sub(r"\s{2,}", " · ", label[1:].strip()).split(" · ")[0]
                 entry["detail"] = attrs["tooltip"]
         target = parents.get(level - 1, {}).get("children", roots) if level else roots
         target.append(entry)
@@ -2328,10 +2522,8 @@ def dashboard_payload(data):
                 'sessions':int(number(summary.get('sessions'))),'unpriced':unpriced,'models':model_rows,'history':history}
     providers=[]
     for source,label,usage in selected:
-        subtitle='本机记录 · API 等值估算'
-        if source=='opencodex':subtitle='v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')
-        elif source=='claude':subtitle='Claude App · 可读取会话'
-        elif source=='codex':subtitle='编程会话 · 已排除代理重复项' if usage.get('excludedProxyRequests') else '编程会话 · 本机记录'
+        # Only a note that changes how to read the numbers; fixed descriptions add nothing.
+        subtitle='已排除代理重复' if source=='codex' and usage.get('excludedProxyRequests') else ''
         status='运行正常' if source=='opencodex' and data.get('healthz') else '已同步'
         providers.append(provider(source,label,usage,subtitle,status))
     # Codex local records and an active OpenCodex proxy can describe the same calls.
@@ -2339,7 +2531,7 @@ def dashboard_payload(data):
     proxy_available=any(p['id']=='opencodex' and p['available'] for p in providers)
     for p in providers:
         p['summaryIncluded']=not (p['id']=='codex' and proxy_available)
-        if not p['summaryIncluded']:p['subtitle']='独立明细 · Summary 已采用 OpenCodex'
+        if not p['summaryIncluded']:p['subtitle']='未计入 Summary'
     # Crop only today's chart, never the statistics window. Preserve a short zero
     # lead-in before the earliest source activity, and use actual time spacing.
     chart_positions=None
@@ -2380,7 +2572,7 @@ def dashboard_payload(data):
     if key=='all' and any(number(p.get('summary',{}).get('requests'))>sum(number(day.get('requests')) for day in p.get('days',[])) for p in usage_sources):chart_status='图表展示最近 366 天'
     return {'date':now.date().isoformat(),'dates':labels,'providers':providers,'rangeKey':key,'rangeLabel':RANGES[key],
             'chartUnit':unit,'chartSpan':span,'chartStatus':chart_status,'chartPositions':chart_positions,
-            'showSummary':module_enabled('summary'),'allowCollapse':view_settings()['allowCollapse'],'expandedProviders':view_settings()['expandedProviders'],'note':'费用为已知 API 等值估算；未定价项不计入费用。'}
+            'showSummary':module_enabled('summary'),'allowCollapse':view_settings()['allowCollapse'],'expandedProviders':view_settings()['expandedProviders']}
 
 
 
@@ -2389,26 +2581,27 @@ def native_menu_line(line):
     label,separator,raw=line.partition(' | ')
     if not separator:return line
     options=dict(part.split('=',1) for part in shlex.split(raw) if '=' in part)
-    for key in ('color','sfcolor','sfcolors','panelattention','paneldetail','panelsection'):options.pop(key,None)
+    for key in ('color','sfcolor','sfcolors','panelattention','paneldetail','panelsection','panelstatus','panelradio','panelusagelevel'):options.pop(key,None)
     return label+separator+' '.join(as_option(k,v) for k,v in options.items())
 
 
 def resource_panel_entries(data):
     entries=panel_entries(management_lines(data))
     services={service.label:service for service in catalog.SERVICES}
-    groups={label:[] for label in ('订阅','API','其他')};footer=[]
+    groups={label:[] for label in ('订阅','API','其他')}
     for entry in entries:
         if entry.get('separator'):continue
         label=entry['label'];service=services.get(label)
         source=service.key if service else 'komari' if label.startswith('Komari 监控') else 'updates' if label=='应用更新' else None
         if source in RESOURCE_CACHES and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
-        if label in ('刷新数据','SwiftBar 管理'):footer.append(entry);continue
+        # Refresh sits beside Summary; SwiftBar's own submenu covers its housekeeping.
+        if label=='刷新数据':continue
         groups[service.category if service else '其他'].append(entry)
+    # Groups are separated by a line; their names are obvious from the rows themselves.
     result=[]
-    for label,items in groups.items():
-        if items:result.append({'label':catalog.GROUP_LABELS.get(label,label),'section':True,'children':[]});result.extend(items)
-    if result and footer:result.append({'label':'','separator':True,'children':[]})
-    return result+footer
+    for items in groups.values():
+        if items:result.extend(([{'label':'','separator':True,'children':[]}] if result else [])+items)
+    return result
 
 
 def presentation_settings():
@@ -2418,8 +2611,8 @@ def presentation_settings():
 
 def render(data):
     dashboard=dashboard_payload(data)
-    options=module_options()
-    native_rows=[item('主页模块…',sfimage='square.grid.2x2',**act('panel-modules'))]+detection_menu_lines()
+    options=module_options(data)
+    native_rows=[item('主页模块…',sfimage='square.grid.2x2',**act('panel-modules'))]+detection_menu_lines()+about_menu_lines()
     if os.environ.get("OCX_NATIVE_LAYOUT") == "1" or not os.path.isdir(PANEL_APP):
         overview=[]
         if module_enabled('summary'):
@@ -2428,7 +2621,7 @@ def render(data):
             overview.append(item('Summary · '+dashboard['rangeLabel']+' · '+fmt_tokens(total)+' Token' if valid else 'Summary · 数据待同步'))
         for provider in dashboard['providers']:
             overview.append(item(provider['name']+' · '+(fmt_tokens(provider['tokens'])+' Token' if provider['available'] else provider['status'])))
-        return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data,include_swiftbar=False)+['---']+module_menu_lines()])
+        return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data)+['---']+module_menu_lines()])
     write_json_cache(cache_path("panel-view"), {"schema":1,"dashboard":dashboard,
         "entries":resource_panel_entries(data),"rangeOptions":range_options(),
         "moduleOptions":options,"appearance":view_settings()['appearance'],"preferences":presentation_settings(),
@@ -2547,7 +2740,7 @@ def run_action(name, extra):
         detected=detected_modules();current=set(view_settings()['visible']);labels={k:label for k,label,_ in preferences.MODULES}
         added=[labels[k] for k in detected if k not in current]
         removed=[label for k,label,_ in preferences.MODULES if k in current and k not in detected]
-        detail='检测到 %d 个模块。确认后将替换当前勾选。\n\n将启用：%s\n将取消：%s'%(len(detected),'、'.join(added) or '无','、'.join(removed) or '无')
+        detail='检测到 %d 个模块。确认后将替换当前勾选。\n\n将启用：%s\n将取消：%s\n\n只检查本机目录与已有配置，不读取对话正文，不显示 Key。'%(len(detected),'、'.join(added) or '无','、'.join(removed) or '无')
         if confirm('自动检测将覆盖当前模块选择',detail,accept='覆盖当前选项'):
             discovery.replace_selection(STATE_DIR,detected);schedule_background_refresh()
     elif name == 'refresh-view':
@@ -2556,10 +2749,16 @@ def run_action(name, extra):
         refresh_resource(extra[0] if len(extra)==1 else '')
     elif name in ('choose-client-home','reset-client-connection','reveal-client-home','set-proxy-address','choose-admin-token'):
         configure_client_action(name,extra)
-    elif name in ('configure-connection','clear-connection','enter-api-key'):
-        configure_connection(extra[0] if len(extra)==1 else '',name=='clear-connection',typed=name=='enter-api-key')
+    elif name in ('configure-connection','clear-connection'):
+        configure_connection(extra[0] if len(extra)==1 else '',name=='clear-connection')
+    elif name == 'add-api-key':
+        add_api_key(extra[0] if len(extra)==1 else '')
+    elif name in ('rename-api-key','remove-api-key'):
+        if len(extra)!=2:raise ValueError('invalid key action')
+        (rename_api_key if name=='rename-api-key' else remove_api_key)(*extra)
     elif name == 'test-api-key':
-        test_api_key(extra[0] if len(extra)==1 else '')
+        if not 1<=len(extra)<=2:raise ValueError('invalid key check')
+        test_api_key(*extra)
     elif name == 'auto-source':
         preferences.update(STATE_DIR,'auto-path',extra[0] if len(extra)==1 else '')
         schedule_background_refresh()
@@ -2638,8 +2837,6 @@ def run_action(name, extra):
         if key not in RANGES:raise ValueError("invalid range")
         write_json_cache(cache_path("view-range"),{"schema":1,"range":key})
         schedule_background_refresh()
-    elif name == "swiftbar-folder":
-        subprocess.run(["/usr/bin/open", PLUGIN_DIR], check=True, timeout=5)
     elif name == "refresh":
         invalidate_caches([range_cache_name()] + list(EXTERNAL_TTLS))
         schedule_background_refresh()
@@ -2760,7 +2957,7 @@ def consume_panel_action():
         # Only an action already present in the rendered menu can be requested.
         snapshot=read_cache("panel-view")
         nodes = list(snapshot.get("entries") or [])+list(snapshot.get("rangeOptions") or [])+list(snapshot.get("moduleOptions") or [])
-        allowed = [["refresh-view"]]
+        allowed = [["refresh-view"], ["refresh"]]
         dashboard=snapshot.get('dashboard') or {}
         if dashboard.get('allowCollapse'):
             allowed.extend([['set-expanded',p['id'],value] for p in dashboard.get('providers',[]) if p.get('id') in preferences.USAGE for value in ('true','false')])

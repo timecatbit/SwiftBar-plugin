@@ -98,6 +98,8 @@ def update(directory, kind, key=None, value=None):
     elif kind == 'collapse':
         if key not in ('true','false'):raise ValueError('invalid collapse setting')
         current['allowCollapse']=key=='true'
+        # Turning folding on starts with every card folded.
+        if key=='true':current['expandedProviders']=[]
     elif kind == 'expanded':
         if key not in USAGE or value not in ('true','false'):raise ValueError('invalid expansion preference')
         expanded=set(current['expandedProviders'])

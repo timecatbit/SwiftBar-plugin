@@ -1,6 +1,8 @@
 #!/bin/bash
-# <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.11.0</xbar.version>
+# <xbar.title>token-monitor</xbar.title>
+# <xbar.version>5.12.0</xbar.version>
+# <xbar.author>minicoke</xbar.author>
+# <xbar.author.github>timecatbit/swiftbar-token-monitor</xbar.author.github>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -30,7 +32,7 @@ if [ -f "$OCX_USER_CONFIG" ]; then source "$OCX_USER_CONFIG"; fi
 PYTHON_BIN="$OCX_PYTHON"
 if [ -z "$PYTHON_BIN" ]; then PYTHON_BIN=$(command -v python3); fi
 if [ ! -x "$PYTHON_BIN" ]; then
-    printf '%s\n' 'opencodex' '---' '需要 Python 3 才能读取 opencodex 状态。' '重新检查 | refresh=true'
+    printf '%s\n' 'token-monitor' '---' '需要 Python 3 才能读取用量。' '重新检查 | refresh=true'
     exit 0
 fi
 if [ "${1:-}" = "--python-path" ]; then printf '%s\n' "$PYTHON_BIN"; exit 0; fi
@@ -44,7 +46,7 @@ sys.path.insert(0, sys.argv.pop(1))
 try:
     import swiftbar_plugin
 except ImportError:
-    print("opencodex\n---\n插件运行文件缺失，请重新运行安装脚本。")
+    print("token-monitor\n---\n插件运行文件缺失，请重新运行安装脚本。")
     sys.exit(0)
 sys.exit(swiftbar_plugin.main())
 ' "$OCX_LIB_DIR" "$@"

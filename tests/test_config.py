@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-SOURCE = Path(__file__).resolve().parents[1] / 'opencodex.30s.sh'
+SOURCE = Path(__file__).resolve().parents[1] / 'token-monitor.30s.sh'
 CODE = (SOURCE.parent / 'lib/swiftbar_plugin.py').read_text()
 
 class LocalConfigTests(unittest.TestCase):

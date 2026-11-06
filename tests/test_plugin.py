@@ -7,7 +7,7 @@ import types
 import unittest
 from unittest.mock import patch, Mock
 
-SOURCE = Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+SOURCE = Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE = (SOURCE.parent / 'lib/swiftbar_plugin.py').read_text()
 
 
@@ -93,7 +93,7 @@ class PluginTests(unittest.TestCase):
 
     def deepseek_entry(self, payload, error=None):
         with patch.object(self.m,'module_enabled',side_effect=lambda key:key=='deepseek'), \
-             patch.object(self.m,'connection_ready',return_value=True), \
+             patch.object(self.m,'default_ready',return_value=True), \
              patch.object(self.m,'deepseek_logo_image',return_value=None):
             return self.m.panel_entries(self.m.resource_lines({'provider_quotas':payload,'provider_quotas_error':error}))[0]
 
@@ -104,12 +104,12 @@ class PluginTests(unittest.TestCase):
         before=self.deepseek_entry(*self.m.cache_result(self.m.read_cache('provider_quotas'),ttl))
         self.m.invalidate_caches(['provider_quotas'])
         during=self.deepseek_entry(*self.m.cache_result(self.m.read_cache('provider_quotas'),ttl))
-        self.assertEqual(before['value'],during['value']);self.assertEqual(during['value'],'¥2.00')
-        state=next(row for row in during['children'] if row['label']=='余额更新')
+        self.assertEqual(before['value'],during['value']);self.assertEqual(during['value'],'余额 ¥2.00')
+        state=next(row for row in during['children'][0]['children'] if row['label']=='更新时间')
         self.assertEqual(state['value'],'正在刷新')
         after=self.deepseek_entry(*self.m.cached_fetch('provider_quotas',lambda:(payload,None),ttl))
-        self.assertEqual(after['value'],'¥2.00')
-        self.assertEqual(next(row for row in after['children'] if row['label']=='余额更新')['value'],'刚刚更新')
+        self.assertEqual(after['value'],'余额 ¥2.00')
+        self.assertEqual(next(row for row in after['children'][0]['children'] if row['label']=='更新时间')['value'],'刚刚更新')
 
     def test_deepseek_initial_loading_and_refresh_failure_remain_distinct(self):
         ttl=self.m.EXTERNAL_TTLS['provider_quotas']
@@ -118,10 +118,9 @@ class PluginTests(unittest.TestCase):
         self.assertNotIn('失败',str(pending))
         self.record('provider_quotas',{'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥2.00'}]}}]},age=3600)
         failed=self.deepseek_entry(*self.m.cached_fetch('provider_quotas',lambda:(None,(0,'timeout',None)),ttl))
-        self.assertEqual(failed['value'],'¥2.00')
-        state=next(row for row in failed['children'] if row['label']=='余额更新')
-        self.assertEqual(state['value'],'刷新失败');self.assertIn('保留最近余额',state['detail'])
-        self.assertNotIn('timeout',str(failed))
+        self.assertEqual(failed['value'],'余额 ¥2.00 · 刷新失败')
+        state=next(row for row in failed['children'][0]['children'] if row['label']=='更新时间')
+        self.assertEqual(state['value'],'刷新失败');self.assertIn('保留最近一次成功的数据',state['detail'])
 
     def test_atomic_cache_is_private_and_complete(self):
         self.record('badge',{'latestVersion':'3.0'})
@@ -177,6 +176,25 @@ class PluginTests(unittest.TestCase):
         self.assertIn('用量统计 · 当天 | badge="10 分钟前更新',lines)
         self.assertNotIn('7 日统计',lines);self.assertNotIn('今日用量',lines)
 
+    def test_refresh_in_progress_keeps_values_and_only_real_failures_are_marked(self):
+        window={'name':'codex','minutes':10080,'remaining':40}
+        self.record('chatgpt',{'windows':[window],'state':'已同步'},age=400)  # due for refresh, not failed
+        self.record('kimi-api',{'balance':12.5,'currency':'CNY','state':'已同步'},age=400)
+        with patch.object(self.m,'chatgpt_configured',return_value=True),patch.object(self.m,'chatgpt_source',return_value='client'), \
+             patch.object(self.m,'default_ready',return_value=True),patch.object(self.m,'schedule_background_refresh'):
+            data=self.m.gather()
+            rows=self.m.panel_entries(self.m.chatgpt_lines(data)+self.m.api_lines('kimi-api',data))
+            self.assertEqual([r['value'] for r in rows],['已用 60%','余额 ¥12.50'])
+            self.assertEqual([next(c['value'] for c in (r['children'] if r is rows[0] else r['children'][0]['children']) if c['label']=='更新时间') for r in rows],['正在刷新','正在刷新'])
+            for name in ('chatgpt','kimi-api'):
+                self.m.cached_fetch(name,lambda:(None,(0,'网络超时',None)),300)
+            data=self.m.gather()
+            rows=self.m.panel_entries(self.m.chatgpt_lines(data)+self.m.api_lines('kimi-api',data))
+        self.assertEqual([r['value'] for r in rows],['已用 60% · 刷新失败','余额 ¥12.50 · 刷新失败'])
+        status=next(c for c in rows[0]['children'] if c['label']=='更新时间')
+        self.assertEqual(status['value'],'刷新失败');self.assertIn('网络超时',status['detail']);self.assertIn('保留最近一次成功的数据',status['detail'])
+        self.assertNotIn('上次',json.dumps(rows,ensure_ascii=False))
+
     def test_gather_does_not_call_remote_services(self):
         def request(path,**kwargs):
             if path=='/healthz': return {'version':'1.0'},None
@@ -190,11 +208,30 @@ class PluginTests(unittest.TestCase):
              patch.object(self.m,'deepseek_balance_direct',side_effect=AssertionError('foreground remote')):
             self.assertTrue(self.m.gather()['healthz'])
 
+    def test_remote_names_cannot_fake_menu_structure(self):
+        for name in ('--fake submenu','---','-3% 模型'):
+            line=self.m.item(name,level=1)
+            self.assertTrue(line.startswith('--')and not line.startswith('---'),line)
+            self.assertEqual(self.m.panel_entries(['父项',line])[0]['children'][0]['label'],line[2:].split(' | ')[0])
+        self.assertEqual(self.m.sanitize('a|b'),'a｜b')
+
+    def test_admin_token_is_never_sent_in_clear_text(self):
+        token=Path(self.temp.name)/'token';token.write_text('PRIVATE-ADMIN')
+        sent=[]
+        with patch.object(self.m,'TOKEN_FILE',str(token)),patch.object(self.m.urllib.request,'build_opener',side_effect=lambda *a:sent.append(a)):
+            for base in ('http://192.168.1.20:10100','http://example.test'):
+                with patch.object(self.m,'BASE',base):
+                    value,error=self.m.request('/api/codex-auth/accounts')
+                self.assertIsNone(value);self.assertIn('HTTPS',error[1])
+            with patch.object(self.m,'BASE','http://example.test'):
+                self.m.request('/healthz',auth=False)
+        self.assertEqual(len(sent),1)  # only the unauthenticated health check went out
+
     def test_callback_paths_with_spaces_are_quoted(self):
-        self.m.PLUGIN='/tmp/test path/opencodex.30s.sh'
+        self.m.PLUGIN='/tmp/test path/token-monitor.30s.sh'
         out=self.m.item('刷新',**self.m.act('refresh'))
         self.assertIn('bash=/bin/bash',out)
-        self.assertIn('param1="/tmp/test path/opencodex.30s.sh"',out)
+        self.assertIn('param1="/tmp/test path/token-monitor.30s.sh"',out)
         self.assertIn('param2=--action',out)
         self.assertIn('param3=refresh',out)
         self.assertNotIn('\n',out)
@@ -211,10 +248,28 @@ class PluginTests(unittest.TestCase):
         data={'komari':{'_fetchedAt':time.time()-35,'_stale':True,'statusAvailable':True,
                         'servers':[{'uuid':'a','name':'server-a','online':True}]}}
         lines=self.m.komari_lines(data)
-        self.assertEqual(lines[0].split(' | ')[0],'Komari 监控 · 1/1 在线')
+        self.assertEqual(lines[0].split(' | ')[0],'Komari 监控')
+        self.assertEqual(self.m.panel_entries(lines)[0]['value'],'1/1 在线')
         self.assertIn('1/1 在线',lines[0])
         self.assertFalse(any(line.startswith('--Komari ·') for line in lines))
         self.assertTrue(any(line.startswith('--●') and '在线' in line for line in lines))
+        # The panel shows the same status light as app updates, with the server name in normal text.
+        servers=self.m.panel_entries(lines)[0]['children']
+        self.assertEqual((servers[0]['label'],servers[0]['statusLight']),('server-a','ok'))
+
+    def test_komari_offline_and_unknown_lights(self):
+        data={'komari':{'_fetchedAt':time.time(),'statusAvailable':True,
+                        'servers':[{'uuid':'a','name':'down','online':False},{'uuid':'b','name':'odd'}]}}
+        servers=self.m.panel_entries(self.m.komari_lines(data))[0]['children']
+        self.assertEqual({e['label']:e['statusLight'] for e in servers if e.get('statusLight')},{'down':'issue','odd':'unknown'})
+
+    def test_opencodex_accounts_are_a_radio_group(self):
+        data={'accounts':{'accounts':[{'id':'a','logLabel':'main'},{'id':'b','logLabel':'spare'},{'id':'c','logLabel':'rest','paused':True}]},
+              'active':{'pinnedAccountId':'a'}}
+        rows=self.m.panel_entries(self.m.account_quick_lines(data))
+        self.assertEqual([(r['label'],r.get('radio'),r.get('checked')) for r in rows[:2]],[('main',True,True),('spare',True,False)])
+        self.assertNotIn('action',rows[0]);self.assertEqual(rows[1]['action'],['account-use','b'])
+        self.assertTrue(rows[2]['label'].startswith('启用 · rest'))
 
     def test_old_snapshot_does_not_claim_current_online(self):
         data={'komari':{'_fetchedAt':time.time()-91,'statusAvailable':True,

@@ -1,7 +1,7 @@
 import json,os,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
-SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+SOURCE=Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class PanelTests(unittest.TestCase):
  def setUp(self):
@@ -35,25 +35,33 @@ class PanelTests(unittest.TestCase):
   self.assertFalse(snapshot['dashboard']['providers'][0]['available'])
   self.assertTrue(any('未连接' in entry['label'] for entry in snapshot['entries']))
   self.assertIn('param3=panel',output)
-  self.assertNotIn('SwiftBar 管理',output)
-  self.assertTrue(any(e['label']=='SwiftBar 管理' for e in snapshot['entries']))
+  # Refresh moved to the Summary button; SwiftBar's own submenu already covers its housekeeping.
+  self.assertNotIn('SwiftBar 管理',output);self.assertNotIn('swiftbar-folder',output)
+  self.assertFalse(any(e['label']=='刷新数据' for e in snapshot['entries']))
+  # A compact About submenu replaces SwiftBar's fixed-size popover, which the entry hides.
+  self.assertIn('关于 token-monitor',output);self.assertIn('--版本 '+self.m.VERSION,output);self.assertIn('--作者 minicoke',output)
+  self.assertIn('href=https://github.com/timecatbit/swiftbar-token-monitor/blob/main/CHANGELOG.md',output)
+  # SwiftBar greys out rows with neither an action nor a submenu, so every right-click row needs one.
+  rows=output.split('\n')[2:]
+  for i,line in enumerate(rows):
+   if set(line)<={'-'}:continue
+   depth=len(line)-len(line.lstrip('-'));opens=i+1<len(rows) and len(rows[i+1])-len(rows[i+1].lstrip('-'))>depth and not set(rows[i+1])<={'-'}
+   self.assertTrue(opens or any(k in line for k in ('href=','bash=','refresh=true')),line[:60])
+  self.assertIn('<swiftbar.hideAbout>true</swiftbar.hideAbout>',SOURCE.read_text())
  def test_menu_hierarchy_and_callback_spaces(self):
   lines=['账户管理 | sfimage=person.crop.circle','--切换 main | bash=/bin/bash param1="/tmp/path with spaces/plugin.sh" param2=--action param3=account-use param4="account one"','---','服务器监控 · 1/1 在线 | sfimage=server.rack','--● node  在线 · 长期 | href=https://example.test tooltip="在线 · CPU 1% · 内存 20%"']
   nodes=self.m.panel_entries(lines)
   self.assertEqual(nodes[0]['children'][0]['action'],['account-use','account one'])
   self.assertTrue(nodes[1]['separator']);self.assertEqual(nodes[2]['symbol'],'server.rack')
-  self.assertEqual(nodes[2]['children'][0]['label'],'● node');self.assertIn('CPU 1%',nodes[2]['children'][0]['detail'])
+  self.assertEqual(nodes[2]['children'][0]['label'],'node');self.assertIn('CPU 1%',nodes[2]['children'][0]['detail'])
  def test_management_actions_belong_to_the_correct_application(self):
   data={'healthz':{'version':'test'},'accounts':{'accounts':[{'id':'account-a','logLabel':'main'}]}}
   with patch.object(self.m,'deepseek_logo_image',return_value=None):
    entries=self.m.panel_entries(self.m.management_lines(data))
   by_name={e['label']:e for e in entries if not e.get('separator')}
-  self.assertEqual(list(by_name),['ChatGPT 订阅','DeepSeek API','OpenCodex 管理','Komari 监控 · 暂无服务器','应用更新','刷新数据','SwiftBar 管理'])
+  self.assertEqual(list(by_name),['ChatGPT 订阅','DeepSeek API','OpenCodex 管理','Komari 监控','应用更新','刷新数据'])
   oc_actions=[e['action'][0] for e in by_name['OpenCodex 管理']['children'] if e.get('action')]
-  sb_actions=[e['action'][0] for e in by_name['SwiftBar 管理']['children'] if e.get('action')]
   self.assertIn('account-use',oc_actions);self.assertIn('stop',oc_actions)
-  self.assertEqual(sb_actions,['swiftbar-folder'])
-  self.assertTrue(any('右键星星' in e['label'] and not e.get('action') for e in by_name['SwiftBar 管理']['children']))
   self.assertFalse(any(e.get('children') for e in by_name['OpenCodex 管理']['children']))
  def test_action_failure_reports_failure_without_crashing_plugin(self):
   self.request(['refresh'])

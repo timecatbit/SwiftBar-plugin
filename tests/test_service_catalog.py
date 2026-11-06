@@ -16,7 +16,7 @@ class CatalogTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
-        env=patch.dict(os.environ,{'OCX_STATE_DIR':str(self.root/'state'),'OCX_CACHE_DIR':str(self.root),'OCX_PLUGIN_PATH':str(ROOT/'opencodex.30s.sh')})
+        env=patch.dict(os.environ,{'OCX_STATE_DIR':str(self.root/'state'),'OCX_CACHE_DIR':str(self.root),'OCX_PLUGIN_PATH':str(ROOT/'token-monitor.30s.sh')})
         env.start();self.addCleanup(env.stop)
         self.m=types.ModuleType('catalog_test')
         code=(ROOT/'lib/swiftbar_plugin.py').read_text()
@@ -49,6 +49,8 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(self.m.connection_ready('gemini-subscription'))
             found=discovery.detect({},self.root,which=lambda _:None)
         self.assertIn('claude-api',found);self.assertIn('gemini-api',found)
+        with patch.dict(os.environ,{'MOONSHOT_API_KEY':'api-test'}):
+            self.assertIn('kimi-api',discovery.detect({},self.root,which=lambda _:None))
         self.assertNotIn('claude-subscription',found);self.assertNotIn('gemini-subscription',found)
         self.assertNotIn('minimax-api',found)
     def test_manual_membership_mark_survives_restart_and_is_not_an_inference(self):
@@ -58,7 +60,7 @@ class CatalogTests(unittest.TestCase):
         found=discovery.detect({},self.root,which=lambda _:None,configured_subscriptions=preferences.read(self.m.STATE_DIR)['configuredSubscriptions'])
         self.assertIn('kimi-subscription',found)
         text=json.dumps(self.m.service_connection_entry('kimi-subscription'),ensure_ascii=False)
-        self.assertIn('preferences.json',text);self.assertIn('不验证套餐状态',text)
+        self.assertIn('preferences.json',text);self.assertIn('未验证套餐',text)
         self.m.run_action('set-subscription',['kimi-subscription','false'])
         self.assertFalse(self.m.connection_ready('kimi-subscription'))
     def test_portal_modules_do_not_request_or_fabricate_balance(self):
@@ -67,11 +69,11 @@ class CatalogTests(unittest.TestCase):
             rows=self.m.resource_panel_entries({})
             for key in catalog.PORTAL_APIS:
                 entry=next(e for e in rows if e['label']==catalog.BY_KEY[key].label)
-                self.assertEqual(entry['value'],'官网查看');self.assertNotIn('onOpenAction',entry)
+                self.assertEqual(entry['value'],'待测试' if key in self.m.accounts.KEY_CHECKS else '已配置');self.assertNotIn('onOpenAction',entry)
                 self.assertNotIn(key,self.m.external_loaders())
                 self.assertNotIn('PRIVATE-KEY',json.dumps(self.m.service_connection_entry(key)))
             network.assert_not_called()
-        self.assertEqual([e['label'] for e in rows if e.get('section')],['订阅用量','API 余额','其他'])
+        self.assertFalse(any(e.get('section') for e in rows));self.assertEqual(sum(1 for e in rows if e.get('separator')),2)
     def test_key_file_reference_is_private_and_shown_without_contents(self):
         key=self.root/'provider-key';key.write_text('SECRET-NEVER-DISPLAY')
         with patch.dict(os.environ,{'MOONSHOT_API_KEY_FILE':str(key)}):
@@ -95,60 +97,116 @@ class CatalogTests(unittest.TestCase):
     def dialogs(self,*answers):
         replies=iter(types.SimpleNamespace(returncode=0 if a is not None else 1,stdout=a or '') for a in answers)
         return patch.object(self.m,'applescript',side_effect=lambda script:next(replies,types.SimpleNamespace(returncode=0,stdout='')))
-    def test_typed_key_is_stored_privately_and_only_referenced(self):
-        with self.dialogs('sk-PRIVATE-TYPED-KEY-123','国际站'),patch.object(self.m,'schedule_background_refresh'):
-            self.m.run_action('enter-api-key',['kimi-api'])
-        stored=Path(self.m.STATE_DIR)/'keys'/'moonshot_api_key.key'
+    def entry(self,label,data=None):
+        return next(e for e in self.m.resource_panel_entries(data or {}) if e['label']==label)
+    def add_key(self,provider,*answers):
+        with self.dialogs(*answers),patch.object(self.m,'schedule_background_refresh'), \
+             patch.object(self.m.accounts,'check_key',return_value={'valid':True,'state':'Key 有效'}):
+            self.m.run_action('add-api-key',[provider])
+        return self.m.keystore.entries(self.m.STATE_DIR,provider)
+    def test_named_keys_are_stored_privately_and_only_referenced(self):
+        rows=self.add_key('kimi-api','工作','sk-PRIVATE-TYPED-KEY-123','国际站')
+        self.assertEqual([(r['label'],r['options']) for r in rows],[('工作',{'region':'international'})])
+        stored=self.m.keystore.secret_path(self.m.STATE_DIR,'kimi-api',rows[0]['id'])
         self.assertEqual(stored.read_text().strip(),'sk-PRIVATE-TYPED-KEY-123')
         self.assertEqual(stored.stat().st_mode&0o777,0o600);self.assertEqual(stored.parent.stat().st_mode&0o777,0o700)
-        config=(Path(self.m.STATE_DIR)/'config.local.sh').read_text()
-        self.assertIn(str(stored),config);self.assertNotIn('PRIVATE-TYPED',config);self.assertIn("MOONSHOT_REGION=international",config)
+        index=(Path(self.m.STATE_DIR)/'keys'/'index.json');self.assertNotIn('PRIVATE',index.read_text());self.assertEqual(index.stat().st_mode&0o777,0o600)
+        self.assertFalse((Path(self.m.STATE_DIR)/'config.local.sh').exists())
         self.assertTrue(self.m.module_enabled('kimi-api'));self.assertTrue(self.m.connection_ready('kimi-api'))
-        self.assertNotIn('PRIVATE-TYPED',json.dumps(self.m.service_connection_entry('kimi-api')))
+        self.assertIn('kimi-api@'+rows[0]['id'],self.m.external_loaders())
+        self.assertNotIn('PRIVATE',json.dumps(self.m.resource_panel_entries({}),ensure_ascii=False))
         with patch.object(self.m,'confirm',return_value=True),patch.object(self.m,'schedule_background_refresh'):
-            self.m.run_action('clear-connection',['kimi-api'])
-        self.assertFalse(stored.exists());self.assertFalse(self.m.connection_ready('kimi-api'))
-    def test_cancelled_or_malformed_typed_key_writes_nothing(self):
-        for answers in [(None,),('sk-PRIVATE-TYPED-KEY-123',None),('short key',)]:
-            with self.dialogs(*answers),patch.object(self.m,'schedule_background_refresh'):
-                self.m.configure_connection('kimi-api',typed=True)
+            self.m.run_action('remove-api-key',['kimi-api',rows[0]['id']])
+        self.assertFalse(stored.exists());self.assertFalse(self.m.connection_ready('kimi-api'));self.assertFalse(self.m.module_enabled('kimi-api'))
+    def test_cancelled_or_malformed_key_input_writes_nothing(self):
+        for answers in [(None,),('工作',None),('工作','sk-PRIVATE-TYPED-KEY-123',None),('工作','short key'),('',)]:
+            self.add_key('kimi-api',*answers)
         self.assertFalse((Path(self.m.STATE_DIR)/'keys').exists())
-        self.assertFalse((Path(self.m.STATE_DIR)/'config.local.sh').exists());self.assertFalse((Path(self.m.STATE_DIR)/'preferences.json').exists())
-    def test_choosing_a_key_file_removes_the_previously_typed_copy_but_never_user_files(self):
+        self.assertFalse((Path(self.m.STATE_DIR)/'preferences.json').exists())
+    def test_several_keys_are_listed_totalled_renamed_and_tested_one_by_one(self):
+        first=self.add_key('kimi-api','工作','sk-PRIVATE-ONE-123456','中国站')[0]['id']
+        second=self.add_key('kimi-api','个人','sk-PRIVATE-TWO-123456','中国站')[1]['id']
+        data={'kimi-api@'+first:{'balance':10.0,'cash':-1.0,'voucher':11.0,'currency':'CNY','_fetchedAt':self.m.time.time()},'kimi-api@'+second:{'balance':2.5,'currency':'CNY','_fetchedAt':self.m.time.time()}}
+        row=self.entry('Kimi API',data)
+        self.assertEqual(row['value'],'余额 ¥12.50')
+        keys={c['label']:c for c in row['children'] if c.get('children')}
+        self.assertEqual({k:v['value'] for k,v in keys.items()},{'工作':'余额 ¥10.00','个人':'余额 ¥2.50'})
+        self.assertEqual([(c['label'],c.get('value')) for c in keys['工作']['children'] if c['label'] in ('现金','代金券')],[('现金','¥-1.00'),('代金券','¥11.00')])
+        self.assertIn(['rename-api-key','kimi-api',first],[c.get('action') for c in keys['工作']['children']])
+        with self.dialogs('主力'):self.m.run_action('rename-api-key',['kimi-api',first])
+        self.assertEqual(self.m.keystore.entries(self.m.STATE_DIR,'kimi-api')[0]['label'],'主力')
+        self.add_key('chatgpt-api','A','sk-PRIVATE-A-1234567');self.add_key('chatgpt-api','B','sk-PRIVATE-B-1234567')
+        ids=[r['id'] for r in self.m.keystore.entries(self.m.STATE_DIR,'chatgpt-api')]
+        with patch.object(self.m.accounts,'check_key',side_effect=lambda provider,secret:{'valid':'-B-' not in secret,'state':'Key 无效或无权限' if '-B-' in secret else 'Key 有效'}):
+            self.m.run_action('test-api-key',['chatgpt-api',ids[1]])
+        row=self.entry('ChatGPT API')
+        self.assertEqual({c['label']:c['value'] for c in row['children'] if c.get('children')},{'A':'Key 有效','B':'Key 无效'})
+        self.assertEqual(row['value'],'2 把 Key')
+    def test_classic_key_file_stays_the_default_and_user_files_are_never_deleted(self):
+        legacy=Path(self.m.STATE_DIR)/'keys'/'openai_api_key.key';legacy.parent.mkdir(parents=True);legacy.write_text('sk-OLD-TYPED-COPY')
         chosen=self.root/'my-openai-key';chosen.write_text('sk-USER-OWNED-FILE')
-        with self.dialogs('sk-PRIVATE-TYPED-KEY-123'),patch.object(self.m,'schedule_background_refresh'):
-            self.m.configure_connection('chatgpt-api',typed=True)
-        typed=Path(self.m.STATE_DIR)/'keys'/'openai_api_key.key';self.assertTrue(typed.exists())
-        with self.dialogs(str(chosen)),patch.object(self.m,'schedule_background_refresh'):
-            self.m.configure_connection('chatgpt-api')
-        self.assertFalse(typed.exists());self.assertEqual(self.m.accounts.credential('OPENAI_API_KEY'),'sk-USER-OWNED-FILE')
-        with patch.object(self.m,'confirm',return_value=True),patch.object(self.m,'schedule_background_refresh'):
-            self.m.configure_connection('chatgpt-api',clear=True)
+        with patch.dict(os.environ,{'OPENAI_API_KEY_FILE':str(legacy)}):
+            with self.dialogs(str(chosen)),patch.object(self.m,'schedule_background_refresh'),patch.object(self.m.accounts,'check_key',return_value={'valid':True,'state':'Key 有效'}):
+                self.m.configure_connection('chatgpt-api')
+            self.assertFalse(legacy.exists());self.assertEqual(self.m.accounts.credential('OPENAI_API_KEY'),'sk-USER-OWNED-FILE')
+            self.assertEqual([e['id'] for e in self.m.api_keys('chatgpt-api')],['default'])
+            self.assertEqual(self.entry('ChatGPT API')['children'][0]['label'],'默认')
+            with patch.object(self.m,'confirm',return_value=True),patch.object(self.m,'schedule_background_refresh'):
+                self.m.run_action('remove-api-key',['chatgpt-api','default'])
         self.assertTrue(chosen.exists())
+    def test_opencodex_supplied_deepseek_key_cannot_be_deleted_here(self):
+        with patch.object(self.m,'default_ready',side_effect=lambda key:key=='deepseek'),patch.object(self.m,'deepseek_logo_image',return_value=None):
+            key=self.m.panel_entries(self.m.api_lines('deepseek',{}))[0]['children'][0]
+        self.assertEqual(next(c['detail'] for c in key['children'] if c['label']=='来源'),self.m.CONFIG_FILE)
+        self.assertFalse(any(c['label']=='删除…' for c in key['children']))
     def test_key_check_is_explicit_and_forgotten_when_the_key_changes(self):
         preferences.update(self.m.STATE_DIR,'module','claude-api','true')
         with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'sk-ant-PRIVATE-ONE'}):
             with patch.object(self.m.accounts,'check_key',side_effect=AssertionError('rendering must not test keys')):
-                rows=self.m.resource_panel_entries({})
-            entry=next(e for e in rows if e['label']=='Claude API')
-            test=next(c for c in entry['children'] if c['label']=='测试 Key')
-            self.assertEqual(test['action'],['test-api-key','claude-api']);self.assertEqual(test['value'],'尚未测试')
+                key=self.entry('Claude API')['children'][0]
+            test=next(c for c in key['children'] if c['label']=='测试 Key')
+            self.assertEqual(test['action'],['test-api-key','claude-api','default']);self.assertEqual(test['value'],'未测试')
             with patch.object(self.m.accounts,'check_key',return_value={'valid':True,'state':'Key 有效'}) as check:
-                self.m.run_action('test-api-key',['claude-api'])
+                self.m.run_action('test-api-key',['claude-api','default'])
             check.assert_called_once_with('claude-api','sk-ant-PRIVATE-ONE')
             self.assertEqual(self.m.key_check('claude-api')['state'],'Key 有效')
             self.assertNotIn('PRIVATE',(Path(self.m.CACHE_DIR)/'key-checks.json').read_text())
         with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'sk-ant-PRIVATE-TWO'}):
             self.assertIsNone(self.m.key_check('claude-api'))
         with self.assertRaises(ValueError):self.m.test_api_key('minimax-api')
-    def test_kimi_balance_row_shows_currency_and_breakdown(self):
-        preferences.update(self.m.STATE_DIR,'module','kimi-api','true')
-        with patch.dict(os.environ,{'MOONSHOT_API_KEY':'sk-PRIVATE'}):
-            self.assertIn('kimi-api',self.m.external_loaders())
-            rows=self.m.resource_panel_entries({'kimi-api':{'balance':49.5,'cash':-0.5,'voucher':50,'currency':'CNY','state':'已同步'}})
-        entry=next(e for e in rows if e['label']=='Kimi API')
-        self.assertEqual(entry['value'],'¥49.50')
-        self.assertEqual([(c['label'],c.get('value')) for c in entry['children'] if c['label'] in ('现金余额','代金券余额')],[('现金余额','¥-0.50'),('代金券余额','¥50.00')])
+    def test_claude_api_shows_monthly_spend_or_why_it_cannot(self):
+        preferences.update(self.m.STATE_DIR,'module','claude-api','true')
+        with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'sk-ant-PRIVATE'}):
+            self.assertIn('claude-api',self.m.external_loaders())
+            row=self.entry('Claude API',{'claude-api':{'monthCost':12.345,'todayCost':1.5,'currency':'USD','state':'已同步','_fetchedAt':self.m.time.time()}})
+            self.assertEqual(row['value'],'本月已用 $12.35')
+            key=row['children'][0];self.assertEqual(key['value'],'本月已用 $12.35')
+            self.assertEqual(next(c['value'] for c in key['children'] if c['label']=='今日已用（UTC）'),'$1.50')
+            row=self.entry('Claude API',{'claude-api':{'state':'Key 所属账户没有查看花费的权限','permission':False,'reason':'role'}})
+            self.assertEqual(row['value'],'无花费权限')
+            hint=next(c for c in row['children'][0]['children'] if c['label']=='Key 所属账户没有查看花费的权限');self.assertIn('sk-ant-admin',hint['detail'])
+            row=self.entry('Claude API',{'claude-api':{'monthCost':3.0,'todayCost':0,'_stale':True},'claude-api_error':(0,'timeout',None)})
+            self.assertEqual(row['value'],'本月已用 $3.00 · 刷新失败')
+        self.assertNotIn('PRIVATE',json.dumps(row))
+    def test_homepage_badges_say_what_is_known_instead_of_portal_hint(self):
+        for key in ('chatgpt-api','claude-api','minimax-api','gemini-subscription'):preferences.update(self.m.STATE_DIR,'module',key,'true')
+        preferences.update(self.m.STATE_DIR,'subscription','gemini-subscription','true')
+        with patch.dict(os.environ,{'OPENAI_API_KEY':'sk-PRIVATE','ANTHROPIC_API_KEY':'sk-ant-PRIVATE','MINIMAX_PLATFORM_API_KEY':'PRIVATE'}):
+            values=lambda data:{e['label']:e.get('value') for e in self.m.resource_panel_entries(data) if not e.get('separator')}
+            self.assertEqual({k:v for k,v in values({}).items() if k in ('ChatGPT API','Claude API','MiniMax API','Gemini 订阅')},
+                             {'ChatGPT API':'待测试','Claude API':'正在读取','MiniMax API':'已配置','Gemini 订阅':'已标记'})
+            with patch.object(self.m.accounts,'check_key',return_value={'valid':False,'state':'Key 无效或无权限'}):
+                self.m.test_api_key('chatgpt-api');self.m.test_api_key('claude-api')
+            current=values({'claude-api':{'state':'Key 所属账户没有查看花费的权限','permission':False,'reason':'role'}})
+            self.assertEqual((current['ChatGPT API'],current['Claude API']),('Key 无效','Key 无效'))
+        self.assertNotIn('官网查看',[e.get('value') for e in self.m.resource_panel_entries({})])
+    def test_saving_a_classic_key_file_tests_it_once(self):
+        chosen=self.root/'claude-key';chosen.write_text('sk-ant-usr-PRIVATE-123')
+        with self.dialogs(str(chosen)),patch.object(self.m,'schedule_background_refresh'), \
+             patch.object(self.m.accounts,'check_key',return_value={'valid':True,'state':'Key 有效 · 个人 Key'}) as check:
+            self.m.configure_connection('claude-api')
+        check.assert_called_once_with('claude-api','sk-ant-usr-PRIVATE-123')
+        self.assertEqual(self.m.key_check('claude-api')['state'],'Key 有效 · 个人 Key')
     def test_cancel_portal_key_configuration_leaves_preferences_untouched(self):
         for key in catalog.PORTAL_APIS:
             with patch.object(self.m,'applescript',return_value=types.SimpleNamespace(returncode=1,stdout='')),patch.object(self.m.connections,'write_overrides') as write:

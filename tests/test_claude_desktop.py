@@ -8,7 +8,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
 import swiftbar_claude as desktop
 import swiftbar_claude_live as live
 import swiftbar_preferences as preferences
-SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+SOURCE=Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 ACCOUNT='11111111-1111-4111-8111-111111111111'
 ORG='22222222-2222-4222-8222-222222222222'

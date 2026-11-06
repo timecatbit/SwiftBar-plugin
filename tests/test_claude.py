@@ -3,7 +3,7 @@ import os,json,types,tempfile,unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
-SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+SOURCE=Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class ClaudeTests(unittest.TestCase):
  def setUp(self):

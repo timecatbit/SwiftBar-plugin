@@ -52,7 +52,7 @@ class ConnectionTests(unittest.TestCase):
 class PowerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/state','OCX_PLUGIN_PATH':str(ROOT/'opencodex.30s.sh'),'OS_APPEARANCE':'Light'})
+        env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/state','OCX_PLUGIN_PATH':str(ROOT/'token-monitor.30s.sh'),'OS_APPEARANCE':'Light'})
         env.start();self.addCleanup(env.stop)
         self.m=types.ModuleType('power_test')
         code=(ROOT/'lib/swiftbar_plugin.py').read_text()
@@ -185,9 +185,9 @@ class PowerTests(unittest.TestCase):
         for row in rows:
             if row.get('section'):current=row['label'];groups[current]=[]
             elif (row.get('action') or [''])[0]=='set-module':groups[current].append(row['label'])
-        self.assertEqual(list(groups),['概览','Harness Token 用量','订阅用量','API 余额','其他'])
+        self.assertEqual(list(groups),['概览','Harness Token 用量','订阅用量','API','其他'])
         self.assertIn('Claude',groups['Harness Token 用量']);self.assertIn('OpenCodex',groups['Harness Token 用量'])
-        self.assertEqual(groups['API 余额'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
+        self.assertEqual(groups['API'],[s.label for s in self.m.catalog.SERVICES if s.category=='API'])
         self.assertEqual(groups['订阅用量'],[s.label for s in self.m.catalog.SERVICES if s.category=='订阅'])
         self.assertEqual(groups['其他'],['Komari 监控','应用更新'])
         self.assertFalse(any(r['label']=='连接与数据' for r in rows))
@@ -205,14 +205,17 @@ class PowerTests(unittest.TestCase):
         rows=self.m.resource_panel_entries({})
         self.assertFalse(any(r.get('section') for r in rows))
         for key in ('chatgpt','minimax','deepseek','grok','komari'):self.m.preferences.update(self.m.STATE_DIR,'module',key,'true')
-        rows=self.m.resource_panel_entries({});groups={};current=None
+        # Groups keep their order but are divided by lines instead of headings.
+        rows=self.m.resource_panel_entries({});groups=[[]]
+        self.assertFalse(any(r.get('section') for r in rows))
         for row in rows:
-            if row.get('section'):current=row['label'];groups[current]=[]
-            elif not row.get('separator') and row['label'] not in ('刷新数据','SwiftBar 管理'):groups[current].append(row['label'])
-        self.assertEqual(list(groups),['订阅用量','API 余额','其他'])
-        self.assertIn('ChatGPT 订阅',groups['订阅用量']);self.assertIn('MiniMax 订阅',groups['订阅用量'])
-        self.assertIn('DeepSeek API',groups['API 余额']);self.assertIn('Grok API',groups['API 余额'])
-        self.assertTrue(any(x.startswith('Komari') for x in groups['其他']))
+            if row.get('separator'):groups.append([])
+            elif row['label']!='刷新数据':groups[-1].append(row['label'])
+        groups=[g for g in groups if g]
+        self.assertEqual(len(groups),3)
+        self.assertIn('ChatGPT 订阅',groups[0]);self.assertIn('MiniMax 订阅',groups[0])
+        self.assertIn('DeepSeek API',groups[1]);self.assertIn('Grok API',groups[1])
+        self.assertTrue(any(x.startswith('Komari') for x in groups[2]))
     def test_client_configuration_actions_are_visible_and_whitelisted(self):
         choices=self.m.module_options()
         for label,action in [('ChatGPT 订阅',['choose-client-home','chatgpt']),('OpenCodex',['set-proxy-address'])]:

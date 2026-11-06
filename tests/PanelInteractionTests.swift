@@ -98,10 +98,10 @@ var grouped=initial.dashboard!
 let sampleProvider=ProviderUsage(id:"claude",name:"Claude",subtitle:"",status:"",available:false,cost:nil,tokens:0,requests:0,output:0,cache:nil,coverage:nil,sessions:0,unpriced:0,summaryIncluded:true,models:[],history:[])
 expect(DashboardView.harnessHeaderHeight(grouped)==0,"Empty Harness group has no header")
 grouped.providers=[sampleProvider]
-expect(DashboardView.harnessHeaderHeight(grouped)==24,"Harness group header gets its own space")
+expect(DashboardView.harnessHeaderHeight(grouped)==6,"Harness rows get a small gap instead of a heading")
 let groupedView=DashboardView(grouped,width:344)
 let disclosure=groupedView.subviews.compactMap{$0 as? DisclosureButton}.first!
-expect(disclosure.frame.minY==DashboardView.summaryHeight(grouped)+24+2,"Disclosure hitbox moves with Harness heading")
+expect(disclosure.frame.minY==DashboardView.summaryHeight(grouped)+DashboardView.harnessHeaderHeight(grouped)+2,"Disclosure hitbox follows the gap above the Harness rows")
 grouped.showSummary=false
 expect(DashboardView.harnessHeaderHeight(grouped)==0,"Hidden Summary uses the title without a duplicate Harness header")
 expect(MenuLayout.configured("已配置")==true,"Configured gets a filled indicator")
@@ -154,4 +154,40 @@ expect(!MenuLayout.aiming(from:NSPoint(x:350,y:480),to:NSPoint(x:350,y:450),flyo
 expect(!MenuLayout.aiming(from:NSPoint(x:350,y:480),to:NSPoint(x:330,y:470),flyout:openFlyout),"Moving away from the flyout switches rows")
 expect(!MenuLayout.aiming(from:NSPoint(x:330,y:480),to:NSPoint(x:340,y:250),flyout:openFlyout),"Steep movement below the flyout switches rows")
 expect(MenuLayout.aiming(from:NSPoint(x:700,y:480),to:NSPoint(x:680,y:470),flyout:NSRect(x:400,y:300,width:240,height:200)),"Left-opening flyouts use their right edge")
+// Key tests report in place; dialogs still close the panel first.
+expect(PanelInteraction.keepsPanelOpen(["test-api-key","claude-api"]),"Testing a key keeps the panel open")
+expect(!PanelInteraction.keepsPanelOpen(["enter-api-key","claude-api"]),"Typing a key closes the panel for its dialog")
+expect(PanelInteraction.keepsPanelOpen(["set-module","claude-api","true"]),"Preferences keep the panel open")
+func keyRow(_ key:String)->Entry {try! JSONDecoder().decode(Entry.self,from:Data("{\"label\":\"测试 Key\",\"action\":[\"test-api-key\",\"\(key)\"],\"children\":[]}".utf8))}
+expect(PanelInteraction.runningLabel(keyRow("claude-api"),active:["test-api-key","claude-api"])=="正在测试…","The tested key shows progress")
+expect(PanelInteraction.runningLabel(keyRow("chatgpt-api"),active:["test-api-key","claude-api"])==nil,"Other keys are not marked as testing")
+expect(PanelInteraction.runningLabel(keyRow("claude-api"),active:nil)==nil,"Idle rows keep their label")
+// Provider cards: one stats line, normal states stay quiet, notes that change the reading stay visible.
+var card=ProviderUsage(id:"claude",name:"Claude",subtitle:"",status:"已同步",available:true,cost:1,tokens:1000,requests:731,output:810000,cache:0.992,coverage:1,sessions:2,unpriced:0,summaryIncluded:true,models:[],history:[])
+expect(DashboardView.stats(card)=="731 请求 · 缓存 99.2% · 输出 810.0K · 2 会话","Request, cache, output and session counts share one line")
+expect(DashboardView.note(card)==nil,"A synced provider shows no status text")
+card.subtitle="未计入 Summary";expect(DashboardView.note(card)?.0=="未计入 Summary","A note that changes how to read the totals is shown")
+card.status="部分记录未读取";expect(DashboardView.note(card)?.1==true,"Problems take the slot and are highlighted")
+// Turning folding back on folds every card at once; replaying saved settings does not.
+var folding=PanelInteraction(source:initial)
+_ = folding.submit(["set-expanded","claude","true"]);folding.finish(saved(40,["claude"]))
+_ = folding.submit(["set-collapse","false"]);folding.finish(PresentationPreferences(revision:41,visible:["summary","opencodex","claude"],appearance:"glass",allowCollapse:false,expandedProviders:["claude"]))
+expect(expanded(folding)==Set(["claude"]),"Saved expansions are kept while folding is off")
+_ = folding.submit(["set-collapse","true"])
+expect(folding.displayed()?.dashboard?.allowCollapse==true && expanded(folding).isEmpty,"Enabling folding collapses every card immediately")
+// The legend justifies its columns across the full width, three or four per row.
+let legendLabels=["总量","OpenCodex","Claude","OpenCode","DeepSeek","WorkBuddy","Gemini CLI"]
+let legendRows=DashboardView.legendLayout(legendLabels,width:320)
+expect(legendRows.map{$0.count}==[4,3],"Seven short entries fill two balanced rows of four and three")
+let starts=legendRows[0].map{$0.minX}
+expect(starts[0]==0 && legendRows[0].last!.maxX==320 && abs((starts[1]-starts[0])-(starts[3]-starts[2]))<0.5,"Columns start at the left edge, end at the right edge and are evenly spaced")
+for (i,cell) in legendRows[1].enumerated(){expect(cell.minX==legendRows[0][i].minX,"Each legend column starts at the same x on every row")}
+expect(DashboardView.legendLayout(Array(legendLabels.prefix(6)),width:320).map{$0.count}==[3,3],"Six entries split three and three")
+let wide=DashboardView.legendLayout(["总量","OpenCodex","Claude","OpenCode","Very Long Harness Name","WorkBuddy","Gemini CLI"],width:320)
+expect(wide.map{$0.count}==[3,3,1] && wide[0][2].maxX==320 && wide[2][0].minX==0,"A label too long for four columns falls back to three")
+let crowded=DashboardView.legendLayout((1...8).map{"Very long harness name \($0)"},width:320)
+expect(crowded.allSatisfy{$0.count<=3} && crowded.flatMap{$0}.allSatisfy{$0.minX>=0 && $0.maxX<=320},"Wide labels stay inside the width")
+var legendData=grouped;legendData.providers=[("deepseek","DeepSeek Harness"),("codex","ChatGPT 本机用量"),("claude","Claude App")].map{var p=grouped.providers[0];p.id=$0.0;p.name=$0.1;p.summaryIncluded=true;return p}
+expect(DashboardView.legendLabels(legendData)==["总量","DeepSeek","ChatGPT","Claude"],"Legend names drop suffixes the cards already show")
+expect(!MenuLayout.aiming(from:NSPoint(x:330,y:480),to:NSPoint(x:332,y:479),flyout:openFlyout),"A tiny drift toward the flyout is not aiming")
 print("Native interaction assertions: \(assertions) passed")

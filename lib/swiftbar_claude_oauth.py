@@ -189,7 +189,7 @@ def fetch(state,consent=False,force=False,requested_at=0):
             return payload,None
         except OAuthError as error:
             payload=cached.get('payload') if owner and owner==cached.get('owner') else None
-            if payload:payload=dict(payload,stale=True,state='上次用量')
+            if payload:payload=dict(payload,stale=True,state='刷新失败')
             paused=error.code in ('keychain','missing','scope','credential','profile')
             write(path,{'schema':1,'owner':owner,'payload':payload,'checkedAt':now,
                 'lastRenewAt':cached.get('lastRenewAt',0),'error':str(error),'paused':paused,

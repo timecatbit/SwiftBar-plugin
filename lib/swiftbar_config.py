@@ -55,21 +55,6 @@ def write_overrides(directory, values):
 KEY_FORMAT = re.compile(r'[\x21-\x7e]{8,1024}')
 
 
-def store_key(directory, name, value):
-    """A typed key goes to a private file; config.local.sh only references its path."""
-    if not isinstance(value, str) or not KEY_FORMAT.fullmatch(value):
-        raise ValueError('invalid API key')
-    root = Path(directory) / 'keys'; root.mkdir(parents=True, exist_ok=True, mode=0o700); os.chmod(root, 0o700)
-    path = root / (name.lower() + '.key')
-    fd, temporary = tempfile.mkstemp(prefix='.key-', dir=root)
-    try:
-        with os.fdopen(fd, 'w') as out: out.write(value + '\n')
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary): os.unlink(temporary)
-    return str(path)
-
-
 def managed_key(directory, filename):
     """Only keys typed into the plugin are ours to delete; chosen files are never removed."""
     try:

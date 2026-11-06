@@ -1,7 +1,7 @@
 import json,os,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
-SOURCE=Path(__file__).resolve().parents[1]/'opencodex.30s.sh'
+SOURCE=Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class UpdateTests(unittest.TestCase):
  def setUp(self):
@@ -22,7 +22,7 @@ class UpdateTests(unittest.TestCase):
    self.m.notify_app_updates([self.row()]);self.m.notify_app_updates([self.row()])
    send.assert_called_once()
    self.m.notify_app_updates([self.row('4.16337.0')]);self.assertEqual(send.call_count,2)
-  state=json.loads(Path(self.tmp.name,'updates-notified.json').read_text())
+  state=json.loads(Path(self.m.STATE_DIR,'updates-notified.json').read_text())
   self.assertEqual(state['claude'],['4.16336.0','4.16337.0'])
   with patch.object(self.m,'send_update_notification') as send:
    self.m.notify_app_updates([self.row()]);send.assert_not_called()
@@ -45,7 +45,7 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'update_rows',return_value=rows),patch.object(self.m.terminal_jobs,'latest_log',return_value=None):
    entries=self.m.panel_entries(self.m.app_update_lines({}))[0]['children'][:5]
   self.assertEqual([e['label'].split(' · ')[0] for e in entries],['Claude','Claude Code','OpenCodex','Codex','ChatGPT'])
-  self.assertEqual([e['updateState'] for e in entries],['available','available','current','issue','unknown'])
+  self.assertEqual([e['statusLight'] for e in entries],['new','new','ok','issue','unknown'])
   self.assertEqual(entries[1]['action'],['update-cli','claude-code'])
   self.assertEqual(entries[0]['href'],'https://example.test/claude')
  def test_claude_checks_the_desktop_app_and_official_desktop_feed(self):
@@ -76,7 +76,7 @@ class UpdateTests(unittest.TestCase):
    with patch.object(self.m,'release_body',return_value=b'<rss/>'),patch.object(self.m,'sparkle_release',return_value=('26.1029.61003','24614')):
     row=self.m.app_update_probe('chatgpt')
    self.assertTrue(row['available']);self.assertEqual(row['latest'],'26.1103.31037');self.assertEqual(row['channel'],'已下载')
-   self.assertEqual(self.m.update_indicator(row),'available')
+   self.assertEqual(self.m.update_indicator(row),'new')
    with patch.object(self.m,'release_body',side_effect=TimeoutError):row=self.m.app_update_probe('chatgpt')
    self.assertTrue(row['available']);self.assertEqual(row['status'],'有新版本')
  def test_chatgpt_anonymous_or_empty_feed_never_claims_account_is_current(self):
@@ -103,10 +103,13 @@ class UpdateTests(unittest.TestCase):
   self.assertFalse(next(r for r in rows if r['id']=='chatgpt')['available'])
  def test_home_balances_are_visible_and_not_nested_under_management(self):
   data={'healthz':{'version':'2.97.0'},'provider_quotas':{'reports':[{'provider':'deepseek','quota':{'customWindows':[{'label':'¥229.61'}]}}]},'accounts':{'accounts':[{'id':'a','logLabel':'main'}]},'quota':{'quotas':{'a':{'weeklyPercent':76}}}}
-  with patch.object(self.m,'deepseek_logo_image',return_value=None),patch.object(self.m,'chatgpt_source',return_value='proxy'):
+  with patch.object(self.m,'deepseek_logo_image',return_value=None),patch.object(self.m,'chatgpt_source',return_value='proxy'),patch.object(self.m,'default_ready',side_effect=lambda key:key=='deepseek'):
    entries=self.m.panel_entries(self.m.management_lines(data))
   by_name={e['label']:e for e in entries}
-  self.assertIn('229.61',by_name['DeepSeek API']['value']);self.assertIn('main 24%',by_name['ChatGPT 订阅']['value'])
+  self.assertIn('229.61',by_name['DeepSeek API']['value'])
+  # Subscriptions report the share used, like Claude, with the same 70%/90% colours.
+  chatgpt=by_name['ChatGPT 订阅'];self.assertEqual((chatgpt['value'],chatgpt['usageLevel']),('已用 76%','warning'))
+  self.assertIn(('main','已用 76%'),[(e['label'],e.get('value')) for e in chatgpt['children']])
   management=next(e for e in entries if e['label']=='OpenCodex 管理')
   self.assertFalse(any('DeepSeek' in e['label'] for e in management['children']))
  def select(self,*harnesses,updates=True):
@@ -124,7 +127,7 @@ class UpdateTests(unittest.TestCase):
    self.m.app_updates_cached()
    self.assertCountEqual([c.args[0] for c in probe.call_args_list],['claude','claude-code','chatgpt','codex-cli'])
    self.assertNotIn('badge',self.m.external_loaders())
-   self.assertIn('按 Harness 勾选及客户端联动规则检查','\n'.join(self.m.app_update_lines({})))
+   self.assertIn('选择 Harness…','\n'.join(self.m.app_update_lines({})))
   self.assertEqual(self.m.preferences.read(self.m.STATE_DIR),before)
  def test_configured_opencodex_adds_chatgpt_once_even_with_no_selected_harness(self):
   with patch.object(self.m,'ocx_configured',return_value=True):

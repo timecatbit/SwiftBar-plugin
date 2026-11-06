@@ -14,7 +14,7 @@ import swiftbar_preferences as preferences
 class ModuleTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/settings','OCX_PLUGIN_PATH':str(ROOT/'opencodex.30s.sh'),'OS_APPEARANCE':'Light'})
+        env=patch.dict(os.environ,{'OCX_CACHE_DIR':self.temp.name,'OCX_STATE_DIR':self.temp.name+'/settings','OCX_PLUGIN_PATH':str(ROOT/'token-monitor.30s.sh'),'OS_APPEARANCE':'Light'})
         env.start();self.addCleanup(env.stop)
         self.m=types.ModuleType('module_test')
         code=(ROOT/'lib/swiftbar_plugin.py').read_text()
@@ -56,7 +56,7 @@ class ModuleTests(unittest.TestCase):
         for key in ('opencodex','codex-quota','deepseek','komari','updates'):self.toggle(key,False)
         lines='\n'.join(self.m.management_lines({}))
         for text in ('OpenCodex 管理','DeepSeek API','ChatGPT 订阅','Komari 监控','应用更新'):self.assertNotIn(text,lines)
-        self.assertIn('刷新数据',lines);self.assertIn('SwiftBar 管理',lines)
+        self.assertIn('刷新数据',lines)
     def test_usage_selection_changes_chart_and_cache_scope(self):
         old=self.m.range_cache_name()
         self.toggle('opencodex',False);self.toggle('codex',True)
@@ -128,8 +128,9 @@ class ModuleTests(unittest.TestCase):
         direct.assert_called_once();proxy.assert_not_called()
     def test_optional_account_resources_are_on_homepage(self):
         for key in ('grok','minimax'):self.toggle(key,True)
-        lines='\n'.join(self.m.resource_lines({'grok':{'balance':12.3},'minimax':{'windows':[{'name':'text','remaining':65}]}}))
-        self.assertIn('Grok API',lines);self.assertIn('$12.30',lines);self.assertIn('65% 可用',lines)
+        with patch.dict(os.environ,{'XAI_MANAGEMENT_API_KEY':'test-key','XAI_TEAM_ID':'test-team','MINIMAX_API_KEY':'test-key'}):
+            lines='\n'.join(self.m.resource_lines({'grok':{'balance':12.3,'currency':'USD'},'minimax':{'windows':[{'name':'text','remaining':65}]}}))
+        self.assertIn('Grok API',lines);self.assertIn('余额 $12.30',lines);self.assertIn('已用 35%',lines)
         self.assertNotIn('grok',self.m.external_loaders());self.assertNotIn('minimax',self.m.external_loaders())
         with patch.dict(os.environ,{'XAI_MANAGEMENT_API_KEY':'test-key','XAI_TEAM_ID':'test-team','MINIMAX_API_KEY':'test-key'}):
             self.assertIn('grok',self.m.external_loaders());self.assertIn('minimax',self.m.external_loaders())
@@ -169,7 +170,7 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(folded['providers'],original['providers'])
         self.assertFalse(folded['allowCollapse']);self.assertEqual(folded['expandedProviders'],['claude'])
         preferences.update(self.m.STATE_DIR,'collapse','true')
-        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],['claude'])
+        self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],[])
         with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'expanded','komari','true')
         with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'collapse','maybe')
         preferences.update(self.m.STATE_DIR,'reset')
@@ -211,20 +212,20 @@ class ModuleTests(unittest.TestCase):
         response.stdout='button returned:覆盖当前选项'
         with patch.object(self.m,'applescript',return_value=response):self.assertTrue(self.m.confirm('覆盖?',accept='覆盖当前选项'))
     def test_discovery_help_is_hoverable_and_fallback_menu_renders(self):
+        # Right-click: one clickable row whose dialog explains detection; the panel keeps its hover help.
         lines=self.m.detection_menu_lines()
-        self.assertNotIn('param1=',lines[0]);self.assertIn('自动检测',lines[0])
-        self.assertTrue(any('确认后覆盖当前模块选择' in line for line in lines))
-        self.assertTrue(any(line.startswith('--开始检测') and 'detect-modules' in line for line in lines))
+        self.assertEqual(len(lines),1);self.assertIn('自动检测…',lines[0]);self.assertIn('param3=detect-modules',lines[0])
         self.assertIn('不读取对话正文', '\n'.join(self.m.module_menu_lines()))
 
     def test_multiple_expanded_modules_are_independent_and_survive_visibility_changes(self):
         for key in ('opencodex','claude','codex'):preferences.update(self.m.STATE_DIR,'expanded',key,'true')
         preferences.update(self.m.STATE_DIR,'expanded','claude','false')
         self.toggle('codex',False);self.toggle('codex',True)
-        preferences.update(self.m.STATE_DIR,'collapse','false')
-        preferences.update(self.m.STATE_DIR,'collapse','true')
         self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],['opencodex','codex'])
         self.assertEqual(self.m.dashboard_payload({})['expandedProviders'],['opencodex','codex'])
+        preferences.update(self.m.STATE_DIR,'collapse','false')
+        preferences.update(self.m.STATE_DIR,'collapse','true')
+        self.assertEqual(self.m.dashboard_payload({})['expandedProviders'],[])
     def test_legacy_single_expansion_migrates_without_touching_file(self):
         p=Path(self.m.STATE_DIR)/'preferences.json';p.parent.mkdir(parents=True,exist_ok=True)
         p.write_text(json.dumps({'schema':1,'expandedProvider':'claude','visible':['claude']}));before=p.read_bytes()

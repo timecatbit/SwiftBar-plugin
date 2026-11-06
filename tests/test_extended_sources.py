@@ -66,6 +66,48 @@ class ExtendedSourcesTests(unittest.TestCase):
         with patch.object(accounts.urllib.request,'build_opener',return_value=types.SimpleNamespace(open=lambda request,timeout:requests.append(request) or Response())):
             self.assertEqual(accounts.check_key('claude-api','sk-ant-key'),{'valid':True,'state':'Key 有效'})
         self.assertEqual(requests[0].get_method(),'GET');self.assertEqual(requests[0].headers.get('X-api-key'),'sk-ant-key')
+    def responder(self,pages,seen):
+        class Response:
+            def __init__(self,body):self.body=json.dumps(body).encode()
+            def __enter__(self):return self
+            def __exit__(self,*a):return False
+            def read(self,n):return self.body
+        bodies=iter(pages)
+        return types.SimpleNamespace(open=lambda request,timeout:seen.append(request) or Response(next(bodies)))
+    def test_anthropic_cost_sums_month_and_utc_today_in_cents_across_pages(self):
+        from datetime import datetime,timezone
+        now=datetime(2026,11,6,5,tzinfo=timezone.utc);seen=[]
+        pages=[{'data':[{'starting_at':'2026-11-01T00:00:00Z','results':[{'currency':'USD','amount':'1050.000000'}]}],'has_more':True,'next_page':'p2'},
+               {'data':[{'starting_at':'2026-11-06T00:00:00Z','results':[{'currency':'USD','amount':'234.5'},{'amount':'100'}]}],'has_more':False,'next_page':None}]
+        with patch.object(accounts.urllib.request,'build_opener',return_value=self.responder(pages,seen)):
+            cost=accounts.anthropic_cost('sk-ant-admin01-test',now)
+        self.assertAlmostEqual(cost['monthCost'],13.845);self.assertAlmostEqual(cost['todayCost'],3.345);self.assertEqual(cost['month'],'2026-11')
+        self.assertIn('starting_at=2026-11-01T00%3A00%3A00Z',seen[0].full_url);self.assertIn('bucket_width=1d',seen[0].full_url)
+        self.assertIn('page=p2',seen[1].full_url);self.assertEqual(seen[0].headers.get('X-api-key'),'sk-ant-admin01-test')
+        import urllib.error
+        def denied(*a,**k):raise urllib.error.HTTPError('https://api.anthropic.com',403,'x',{},None)
+        with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'sk-ant-usr-test'}),patch.object(accounts,'anthropic_cost',side_effect=denied):
+            self.assertEqual(accounts.account('claude-api'),{'state':'Key 所属账户没有查看花费的权限','permission':False,'reason':'role'})
+        import io
+        def workspace_key(*a,**k):
+            raise urllib.error.HTTPError('https://api.anthropic.com',401,'x',{},io.BytesIO(b'{"error":{"type":"authentication_error","message":"The Admin API requires an Admin API key or an organization-scoped API key."}}'))
+        def invalid(*a,**k):
+            raise urllib.error.HTTPError('https://api.anthropic.com',401,'x',{},io.BytesIO(b'{"error":{"type":"authentication_error","message":"invalid x-api-key"}}'))
+        with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'sk-ant-usr-test'}):
+            with patch.object(accounts,'anthropic_cost',side_effect=workspace_key):
+                self.assertEqual(accounts.account('claude-api')['reason'],'workspace')
+            with patch.object(accounts,'anthropic_cost',side_effect=invalid):
+                self.assertEqual(accounts.account('claude-api'),{'state':'凭据或查询权限待检查'})
+    def test_claude_key_check_accepts_personal_keys_and_proves_admin_keys(self):
+        import io,urllib.error
+        def workspace(*a,**k):
+            raise urllib.error.HTTPError('https://api.anthropic.com',400,'x',{},io.BytesIO(json.dumps({'error':{'type':'invalid_request_error','message':'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header'}}).encode()))
+        with patch.object(accounts.urllib.request,'build_opener',return_value=types.SimpleNamespace(open=workspace)):
+            self.assertEqual(accounts.check_key('claude-api','sk-ant-usr-test'),{'valid':True,'state':'Key 有效 · 个人 Key'})
+        seen=[]
+        with patch.object(accounts.urllib.request,'build_opener',return_value=self.responder([{'id':'org'}],seen)):
+            self.assertEqual(accounts.check_key('claude-api','sk-ant-admin01-test'),{'valid':True,'state':'管理员 Key 有效'})
+        self.assertEqual(seen[0].full_url,'https://api.anthropic.com/v1/organizations/me')
     def test_gemini_deleted_session_stops_counting(self):
         root=self.root/'tmp/project/chats';self.write(root/'session-one.jsonl',[{'sessionId':'s'},self.gemini()]);self.write(root/'session-two.jsonl',[{'sessionId':'t'},self.gemini('two')])
         self.assertEqual(self.read_gemini()['summary']['requests'],2)

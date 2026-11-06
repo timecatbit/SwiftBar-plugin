@@ -63,7 +63,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
     if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
     if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
-    for key in catalog.PORTAL_APIS:
+    for key in catalog.KEY_ONLY_APIS:
         if any(accounts.credential(name) for name in catalog.credential_names(key)):found.add(key)
     found.update(k for k in configured_subscriptions if k in catalog.MANUAL_SUBSCRIPTIONS)
     if monitor_url(komari_url):found.add('komari')

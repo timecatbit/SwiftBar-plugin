@@ -7,7 +7,7 @@ report a synthetic balance.
 from typing import NamedTuple
 
 # Keep category identifiers stable while explaining what each group measures.
-GROUP_LABELS = {'Harness': 'Harness Token 用量', '订阅': '订阅用量', 'API': 'API 余额'}
+GROUP_LABELS = {'Harness': 'Harness Token 用量', '订阅': '订阅用量', 'API': 'API'}
 
 class Service(NamedTuple):
     key: str
@@ -29,7 +29,7 @@ SERVICES = (
     Service('grok-subscription', 'Grok', '订阅', 'https://grok.com'),
     Service('kimi-subscription', 'Kimi', '订阅', 'https://www.kimi.com'),
     Service('chatgpt-api', 'ChatGPT', 'API', 'https://platform.openai.com/usage', 'OPENAI_API_KEY'),
-    Service('claude-api', 'Claude', 'API', 'https://platform.claude.com/usage', 'ANTHROPIC_API_KEY'),
+    Service('claude-api', 'Claude', 'API', 'https://platform.claude.com/usage', 'ANTHROPIC_API_KEY', 'cost'),
     Service('deepseek', 'DeepSeek', 'API', 'https://platform.deepseek.com/usage', 'DEEPSEEK_API_KEY', 'balance'),
     Service('minimax-api', 'MiniMax', 'API', 'https://platform.minimax.io/user-center/payment/balance', 'MINIMAX_PLATFORM_API_KEY'),
     Service('gemini-api', 'Gemini', 'API', 'https://aistudio.google.com/usage', 'GEMINI_API_KEY'),
@@ -39,6 +39,8 @@ SERVICES = (
 BY_KEY = {s.key: s for s in SERVICES}
 MANUAL_SUBSCRIPTIONS = tuple(s.key for s in SERVICES if s.category == '订阅' and s.capability == 'portal')
 PORTAL_APIS = tuple(s.key for s in SERVICES if s.category == 'API' and s.capability == 'portal')
+# A key alone configures these; DeepSeek can also come from OpenCodex and Grok needs a Team ID.
+KEY_ONLY_APIS = tuple(s.key for s in SERVICES if s.category == 'API' and s.key not in ('deepseek', 'grok'))
 API_KEYS = {s.key: s.credential for s in SERVICES if s.credential}
 # These aliases only identify API configuration; they never imply subscription.
 KEY_ALIASES = {'gemini-api': ('GOOGLE_API_KEY',)}

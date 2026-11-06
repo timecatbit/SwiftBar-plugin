@@ -9,6 +9,10 @@ import subprocess
 import sys
 import uuid
 
+ENTRY = 'token-monitor.30s.sh'
+# Earlier releases: the old entry name and a visible assets folder, which SwiftBar ran as plugins.
+LEGACY = [Path('opencodex.30s.sh'), Path('assets/deepseek-logo.svg'), Path('assets/deepseek-logo.png'), Path('assets/logos')]
+LEGACY_DATA = ('auto-update.json', 'updates-notified.json')
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
 from swiftbar_config import migrate_config
@@ -44,14 +48,15 @@ def main():
     if not args.skip_build:
         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'build.py')], check=True)
     # Ask the shell entry point so OCX_PYTHON and its PATH match the running plugin.
-    python = subprocess.run(['/bin/bash',str(ROOT/'opencodex.30s.sh'),'--python-path'],
+    python = subprocess.run(['/bin/bash',str(ROOT/ENTRY),'--python-path'],
                             capture_output=True,text=True,check=True).stdout.strip()
     if not Path(python).is_file():parser.error('The plugin Python interpreter is unavailable.')
     transport = prepare_transport(ROOT,python)
     relative_app = Path('.opencodex-panel/OpenCodexPanel.app')
     local_config = Path('.opencodex-panel/config.local.sh')
     relative_transport=Path('.opencodex-panel/python')/transport.name
-    paths = [Path('opencodex.30s.sh'), relative_app, Path('assets/deepseek-logo.svg'), local_config, Path('.opencodex-panel/lib'),relative_transport]
+    relative_assets = Path('.opencodex-panel/assets')
+    paths = [Path(ENTRY), relative_app, relative_assets, local_config, Path('.opencodex-panel/lib'),relative_transport]+LEGACY
     previous = [p for p in paths if (destination / p).exists()]
     if previous:
         stamp = datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
@@ -67,28 +72,41 @@ def main():
                    capture_output=True, timeout=8, check=False)
     copy(ROOT / 'build/OpenCodexPanel.app', destination / relative_app)
     subprocess.run(['codesign', '--verify', '--deep', str(destination / relative_app)], check=True)
-    copy(ROOT / 'assets/deepseek-logo.svg', destination / 'assets/deepseek-logo.svg')
+    if (destination / relative_assets).exists(): shutil.rmtree(destination / relative_assets)
+    copy(ROOT / 'assets', destination / relative_assets)
     shutil.copytree(ROOT / 'lib', destination / '.opencodex-panel/lib', dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     copy(transport,destination/relative_transport)
     migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
     state=Path.home()/'Library/Application Support/SwiftBarToken'
+    # Update reminders used to live in SwiftBar's per-plugin data folder, which follows the file name.
+    old_data = Path.home() / 'Library/Application Support/SwiftBar/Plugins/opencodex.30s.sh'
+    for name in LEGACY_DATA:
+        if (old_data / name).is_file() and not (state / name).exists():
+            state.mkdir(parents=True, exist_ok=True, mode=0o700); shutil.copy2(old_data / name, state / name)
     if claude_local.enabled(state):claude_local.install(state)
     # Publish the script last; other plugins and runtime state are preserved.
     destination.mkdir(parents=True, exist_ok=True)
     temporary = destination / '.opencodex-install.tmp'
-    shutil.copyfile(ROOT / 'opencodex.30s.sh', temporary)
+    shutil.copyfile(ROOT / ENTRY, temporary)
     temporary.chmod(0o755)
-    os.replace(temporary, destination / 'opencodex.30s.sh')
-    detected = subprocess.run(['/bin/bash', str(destination / 'opencodex.30s.sh'), '--initialize-modules'],
+    os.replace(temporary, destination / ENTRY)
+    # One plugin only: the old entry and visible assets are in the backup above.
+    for relative in LEGACY:
+        target = destination / relative
+        if target.is_dir() and not target.is_symlink(): shutil.rmtree(target)
+        elif target.exists() or target.is_symlink(): target.unlink()
+    try: (destination / 'assets').rmdir()
+    except OSError: pass
+    detected = subprocess.run(['/bin/bash', str(destination / ENTRY), '--initialize-modules'],
                               capture_output=True, text=True, timeout=30)
     if detected.returncode:
         print('Module detection could not finish; choose modules from the right-click menu.')
     else:
         print(detected.stdout.strip())
     if not args.no_refresh:
-        subprocess.run(['open', '-g', 'swiftbar://refreshplugin?name=opencodex.30s.sh'], check=True)
-    print('Installed:', destination / 'opencodex.30s.sh')
+        subprocess.run(['open', '-g', 'swiftbar://refreshplugin?name=' + ENTRY], check=True)
+    print('Installed:', destination / ENTRY)
 
 if __name__ == '__main__':
     main()

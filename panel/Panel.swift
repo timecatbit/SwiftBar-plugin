@@ -4,7 +4,7 @@ import Darwin
 
 struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
-    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var usageLevel:String?;var updateState:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
+    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var usageLevel:String?;var statusLight:String?;var radio:Bool?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
     var actionable:Bool { !children.isEmpty || href != nil || action != nil }
     var isModule:Bool {action?.first=="set-module"}
     var key:String {if isModule,let action{return action.prefix(2).joined(separator:"\u{001F}")}
@@ -16,7 +16,7 @@ struct ProviderUsage:Decodable {
     var cost:Double?;var tokens:Double;var requests:Int;var output:Double;var cache:Double?;var coverage:Double?
     var sessions:Int;var unpriced:Int;var summaryIncluded:Bool?;var models:[ModelUsage];var history:[Double]
 }
-struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var note:String;var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProviders:[String]?}
+struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProviders:[String]?}
 struct Snapshot:Decodable {var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?;var preferences:PresentationPreferences?}
 func dark(_ view:NSView)->Bool {view.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua}
 func background(_ view:NSView)->NSColor {dark(view) ? NSColor(calibratedWhite:0.115,alpha:1) : NSColor(calibratedWhite:0.992,alpha:1)}
@@ -30,6 +30,16 @@ func accent(_ id:String,_ view:NSView)->NSColor {
     return dark(view) ? NSColor(srgbRed:0.55,green:0.71,blue:0.94,alpha:1) : NSColor(srgbRed:0.32,green:0.51,blue:0.78,alpha:1)
 }
 func statusGreen(_ view:NSView)->NSColor {dark(view) ? NSColor(srgbRed:0.49,green:0.79,blue:0.61,alpha:1) : NSColor(srgbRed:0.18,green:0.49,blue:0.31,alpha:1)}
+// One status light for every row: new (accent), ok (green), issue (orange), anything else a hollow grey ring.
+func drawStatusLight(_ state:String,centre:NSPoint,in view:NSView){
+    let dot=NSBezierPath(ovalIn:NSRect(x:centre.x-3.5,y:centre.y-3.5,width:7,height:7))
+    switch state {
+    case "new":NSColor.controlAccentColor.setFill();dot.fill()
+    case "ok":statusGreen(view).setFill();dot.fill()
+    case "issue":NSColor.systemOrange.setFill();dot.fill()
+    default:NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()
+    }
+}
 func usageColor(_ level:String?)->NSColor? {
     switch level {case "normal":return .labelColor;case "warning":return .systemOrange;case "critical":return .systemRed;default:return nil}
 }
@@ -94,6 +104,10 @@ final class Surface:FlippedView {
         NSColor.separatorColor.withAlphaComponent(0.35).setStroke();shape.lineWidth=0.5;shape.stroke()
     }
 }
+// Section divider on the homepage: a little heavier than a hairline so groups read apart.
+final class Divider:NSView {
+    override func draw(_ dirtyRect:NSRect){NSColor.labelColor.withAlphaComponent(0.16).setFill();NSBezierPath(roundedRect:bounds,xRadius:1,yRadius:1).fill()}
+}
 final class Panel:NSPanel {
     var escape:(()->Void)?
     override var canBecomeKey:Bool {true}
@@ -126,15 +140,22 @@ final class DisclosureButton:NSButton {
 final class DashboardView:FlippedView {
     var data:Dashboard;var toggleProvider:((String,Bool)->Void)?;private var hoveredProvider:String?
     private var summaryProviders:[ProviderUsage] {data.providers.filter{$0.summaryIncluded != false}}
-    static func sectionHeight(_ p:ProviderUsage)->CGFloat {122+CGFloat(max(1,p.models.count))*18}
+    static func sectionHeight(_ p:ProviderUsage)->CGFloat {78+CGFloat(max(1,p.models.count))*18}
     static func providerHeight(_ p:ProviderUsage,_ d:Dashboard)->CGFloat {
         guard d.allowCollapse==true else{return sectionHeight(p)}
-        return (d.expandedProviders ?? []).contains(p.id) ? 113+CGFloat(max(1,p.models.count))*18 : 56
+        return (d.expandedProviders ?? []).contains(p.id) ? 74+CGFloat(max(1,p.models.count))*18 : 52
     }
-    static func chartExtra(_ d:Dashboard)->CGFloat {CGFloat(max(0,(d.providers.filter{$0.summaryIncluded != false}.count+3)/3-1))*17}
-    static func summaryHeight(_ d:Dashboard)->CGFloat {d.showSummary==false ? 44 : 254+chartExtra(d)}
-    static func harnessHeaderHeight(_ d:Dashboard)->CGFloat {d.providers.isEmpty || d.showSummary==false ? 0 : 24}
-    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+harnessHeaderHeight(d)+d.providers.reduce(0){$0+providerHeight($1,d)}+(d.providers.isEmpty ? 0 : 22)}
+    // Legend names drop suffixes the cards below already show, so four fit on a row.
+    static func legendLabels(_ d:Dashboard)->[String] {
+        ["总量"]+d.providers.filter{$0.summaryIncluded != false}.map{p in
+            p.id=="claude" ? "Claude" : [" Harness"," 本机用量"].reduce(p.name){$0.hasSuffix($1) ? String($0.dropLast($1.count)) : $0}
+        }
+    }
+    // The dashboard is always 344pt wide, so the legend gets 320pt between the margins.
+    static func chartExtra(_ d:Dashboard)->CGFloat {CGFloat(max(0,legendLayout(legendLabels(d),width:320).count-1))*17}
+    static func summaryHeight(_ d:Dashboard)->CGFloat {d.showSummary==false ? 44 : 222+chartExtra(d)}
+    static func harnessHeaderHeight(_ d:Dashboard)->CGFloat {d.providers.isEmpty || d.showSummary==false ? 0 : 6}
+    static func height(_ d:Dashboard)->CGFloat {summaryHeight(d)+harnessHeaderHeight(d)+d.providers.reduce(0){$0+providerHeight($1,d)}+(d.providers.isEmpty ? 0 : 4)}
     init(_ data:Dashboard,width:CGFloat){
         self.data=data;super.init(frame:NSRect(x:0,y:0,width:width,height:Self.height(data)))
         setAccessibilityElement(true);setAccessibilityRole(.group);setAccessibilityLabel("用量概览")
@@ -142,7 +163,7 @@ final class DashboardView:FlippedView {
             var y=Self.summaryHeight(data)+Self.harnessHeaderHeight(data)
             for p in data.providers {
                 let expanded=(data.expandedProviders ?? []).contains(p.id)
-                let button=DisclosureButton(label:(expanded ? "收起 " : "展开 ")+p.name+" 明细",frame:NSRect(x:4,y:y+2,width:width-8,height:49))
+                let button=DisclosureButton(label:(expanded ? "收起 " : "展开 ")+p.name+" 明细",frame:NSRect(x:4,y:y+2,width:width-8,height:46))
                 button.setAccessibilityValue(expanded ? "已展开" : "已折叠")
                 button.invoke={[weak self] in self?.toggleProvider?(p.id,!expanded)}
                 button.hovered={[weak self] over in self?.hoveredProvider=over ? p.id : nil;self?.needsDisplay=true}
@@ -159,73 +180,93 @@ final class DashboardView:FlippedView {
         text(data.showSummary==false ? "Harness Token 用量" : "Summary",x:left,y:10,w:150,size:14,weight:.semibold)
         if data.showSummary != false {
         let partial=valid.count != summaryProviders.count || valid.contains{$0.unpriced>0}
-        let columns:[CGFloat]=[width*0.38,width*0.38,width*0.24]
         let labels=[partial ? "已知 API 估算" : "API 估算","Token 用量","请求"]
         let values=[money(costs.isEmpty ? nil : costs.reduce(0,+)),valid.isEmpty ? "—" : tokens(valid.reduce(0){$0+$1.tokens}),valid.isEmpty ? "—" : String(valid.reduce(0){$0+$1.requests})]
-        for i in 0..<3 {let column=columns[i],x=left+columns.prefix(i).reduce(0,+);text(labels[i],x:x,y:40,w:column-8,size:10,color:.secondaryLabelColor);text(values[i],x:x,y:56,w:column-6,size:i==2 ? 20 : 21,weight:.medium,numeric:true)}
+        // Justified like the legend: left, centre and right thirds, each label above its value.
+        // Each cell keeps 4pt clear of its neighbours: the first hugs the left edge, the last the right.
+        let third=width/3,alignments:[NSTextAlignment]=[.left,.center,.right]
+        for i in 0..<3 {let x=left+third*CGFloat(i)+2*CGFloat(i);text(labels[i],x:x,y:40,w:third-4,size:10,color:.secondaryLabelColor,align:alignments[i]);text(values[i],x:x,y:56,w:third-4,size:i==2 ? 20 : 21,weight:.medium,align:alignments[i],numeric:true)}
         drawSummaryChart(left:left,right:right)
         }
         var y:CGFloat=Self.summaryHeight(data)
-        if Self.harnessHeaderHeight(data)>0{text("Harness Token 用量",x:left,y:y+5,w:width,size:10.5,color:.secondaryLabelColor,weight:.medium);y+=Self.harnessHeaderHeight(data)}
+        y+=Self.harnessHeaderHeight(data)
         for p in data.providers {if data.allowCollapse==true{drawCollapsibleProvider(p,y:y,left:left,right:right)}else{drawProvider(p,y:y,left:left,right:right)};y+=Self.providerHeight(p,data)}
-        if !data.providers.isEmpty{text(data.note,x:left,y:y+3,w:width,size:8.5,color:.secondaryLabelColor)}
     }
-    private func drawCollapsibleProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
-        let width=right-left,c=accent(p.id,self),expanded=(data.expandedProviders ?? []).contains(p.id)
-        if hoveredProvider==p.id {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.08 : 0.045).setFill();NSBezierPath(roundedRect:NSRect(x:4,y:y+2,width:bounds.width-8,height:49),xRadius:7,yRadius:7).fill()}
-        c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+13,width:5,height:5)).fill()
-        text(p.name,x:left+12,y:y+7,w:width-142,size:12,weight:.semibold)
-        let status=p.available ? p.status : (p.status=="运行正常" ? "数据暂不可用" : p.status)
-        text(status,x:right-120,y:y+9,w:103,size:9,color:status=="运行正常" || status=="已同步" ? statusGreen(self) : .secondaryLabelColor,align:.right)
-        let arrow=NSBezierPath(),x=right-5,cy=y+15
-        arrow.move(to:NSPoint(x:x-3,y:cy-3));arrow.line(to:NSPoint(x:expanded ? x : x+0.5,y:cy));arrow.line(to:NSPoint(x:expanded ? x+3 : x-3,y:expanded ? cy-3 : cy+3))
-        arrow.lineWidth=1.2;arrow.lineCapStyle = .round;arrow.lineJoinStyle = .round;NSColor.secondaryLabelColor.setStroke();arrow.stroke()
-        text(p.available ? money(p.cost) : "—",x:left+12,y:y+29,w:100,size:14,weight:.medium,numeric:true)
-        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+120,y:y+30,w:width-120,size:12,weight:.medium,align:.right,numeric:true)
-        if expanded {
-            text(p.subtitle,x:left+12,y:y+52,w:width-12,size:9,color:.secondaryLabelColor)
-            let cache=p.cache.map{String(format:"%.1f%% 缓存",$0*100)} ?? "缓存 —"
-            text(p.available ? "\(p.requests) 请求 · \(cache)" : p.status,x:left+12,y:y+69,w:width-12,size:10,color:.secondaryLabelColor)
-            var extra=p.available ? "输出 \(tokens(p.output))" : "等待可用数据"
-            if p.id != "opencodex",p.available{extra += " · \(p.sessions) 会话"}
-            if p.id=="opencodex",p.available,let coverage=p.coverage{extra += String(format:" · 计费覆盖 %.0f%%",coverage*100)}
-            text(extra,x:left+12,y:y+84,w:width-12,size:9.5,color:.secondaryLabelColor)
-            if p.models.isEmpty{text(p.available ? "此时段暂无模型调用" : "模型明细暂不可用",x:left+12,y:y+106,w:width-12,size:10,color:.secondaryLabelColor)}
-            for (i,m) in p.models.enumerated(){
-                let top=y+106+CGFloat(i)*18
-                text(modelName(m.name),x:left+12,y:top,w:width-132,size:10.5)
-                text(tokens(m.tokens),x:right-115,y:top,w:72,size:10.5,align:.right,numeric:true)
-                text(share(m.share),x:right-38,y:top,w:38,size:10,color:.secondaryLabelColor,align:.right,numeric:true)
-                NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();NSRect(x:left+12,y:top+14,width:width-12,height:1.5).fill()
-                c.withAlphaComponent(0.55).setFill();NSRect(x:left+12,y:top+14,width:(width-12)*CGFloat(m.share),height:1.5).fill()
-            }
-        }
-        line(NSPoint(x:left+12,y:y+Self.providerHeight(p,data)-1),NSPoint(x:right,y:y+Self.providerHeight(p,data)-1),color:NSColor.separatorColor.withAlphaComponent(0.45))
+    // Normal states say nothing; the slot shows a problem, or a note that changes how to read the numbers.
+    static func note(_ p:ProviderUsage)->(String,Bool)? {
+        if !p.available {return (p.status=="运行正常" || p.status=="已同步" ? "数据暂不可用" : p.status,true)}
+        if p.status != "运行正常" && p.status != "已同步" {return (p.status,true)}
+        return p.subtitle.isEmpty ? nil : (p.subtitle,false)
     }
-    private func drawProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
-        let width=right-left,c=accent(p.id,self)
-        c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+14,width:5,height:5)).fill()
-        text(p.name,x:left+12,y:y+8,w:width-140,size:12,weight:.semibold)
-        let status=p.available ? p.status : (p.status=="运行正常" ? "数据暂不可用" : p.status)
-        text(status,x:right-130,y:y+10,w:130,size:9,color:status=="运行正常" || status=="已同步" ? statusGreen(self) : .secondaryLabelColor,align:.right)
-        text(p.subtitle,x:left+12,y:y+26,w:width-12,size:9,color:.secondaryLabelColor)
-        text(p.available ? money(p.cost) : "—",x:left,y:y+45,w:width*0.43,size:19,weight:.medium,numeric:true)
-        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+width*0.43,y:y+47,w:width*0.57,size:16,weight:.medium,align:.right,numeric:true)
-        let cache=p.cache.map{String(format:"%.1f%% 缓存",$0*100)} ?? "缓存 —"
-        let meta=p.available ? "\(p.requests) 请求 · \(cache)" : "等待可用数据"
-        var extra=p.available ? "输出 \(tokens(p.output))" : ""
-        if p.id != "opencodex" && p.available {extra += " · \(p.sessions) 会话"}
-        if p.id=="opencodex",p.available,let coverage=p.coverage,coverage<1 {extra += String(format:" · 计费覆盖 %.0f%%",coverage*100)}
-        text(meta,x:left,y:y+72,w:width,size:10,color:.secondaryLabelColor)
-        text(extra,x:left,y:y+87,w:width,size:9.5,color:.secondaryLabelColor)
-        if p.models.isEmpty {text(p.available ? "此时段暂无模型调用" : "模型明细暂不可用",x:left,y:y+106,w:width,size:10.5,color:.secondaryLabelColor)}
+    static func stats(_ p:ProviderUsage)->String {
+        guard p.available else{return "等待可用数据"}
+        var parts=["\(p.requests) 请求",p.cache.map{String(format:"缓存 %.1f%%",$0*100)} ?? "缓存 —","输出 \(tokens(p.output))"]
+        if p.id=="opencodex"{if let coverage=p.coverage,coverage<1{parts.append(String(format:"已定价 %.0f%%",coverage*100))}}else{parts.append("\(p.sessions) 会话")}
+        return parts.joined(separator:" · ")
+    }
+    private func drawNote(_ p:ProviderUsage,y:CGFloat,right:CGFloat){
+        guard let (note,warning)=Self.note(p) else{return}
+        text(note,x:right-150,y:y,w:133,size:9,color:warning ? .systemOrange : .secondaryLabelColor,align:.right)
+    }
+    private func drawModels(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat,color c:NSColor){
+        let width=right-left
+        if p.models.isEmpty{text(p.available ? "此时段暂无模型调用" : "模型明细暂不可用",x:left,y:y,w:width,size:10,color:.secondaryLabelColor)}
         for (i,m) in p.models.enumerated(){
-            let top=y+106+CGFloat(i)*18
+            let top=y+CGFloat(i)*18
             text(modelName(m.name),x:left,y:top,w:width-120,size:10.5)
             text(tokens(m.tokens),x:right-115,y:top,w:72,size:10.5,align:.right,numeric:true)
             text(share(m.share),x:right-38,y:top,w:38,size:10,color:.secondaryLabelColor,align:.right,numeric:true)
             NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();NSRect(x:left,y:top+14,width:width,height:1.5).fill()
             c.withAlphaComponent(0.55).setFill();NSRect(x:left,y:top+14,width:width*CGFloat(m.share),height:1.5).fill()
+        }
+    }
+    private func drawCollapsibleProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
+        let width=right-left,c=accent(p.id,self),expanded=(data.expandedProviders ?? []).contains(p.id)
+        if hoveredProvider==p.id {NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.08 : 0.045).setFill();NSBezierPath(roundedRect:NSRect(x:4,y:y+2,width:bounds.width-8,height:46),xRadius:7,yRadius:7).fill()}
+        c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+12,width:5,height:5)).fill()
+        text(p.name,x:left+12,y:y+6,w:width-170,size:12,weight:.semibold)
+        drawNote(p,y:y+8,right:right)
+        let arrow=NSBezierPath(),x=right-5,cy=y+14
+        arrow.move(to:NSPoint(x:x-3,y:cy-3));arrow.line(to:NSPoint(x:expanded ? x : x+0.5,y:cy));arrow.line(to:NSPoint(x:expanded ? x+3 : x-3,y:expanded ? cy-3 : cy+3))
+        arrow.lineWidth=1.2;arrow.lineCapStyle = .round;arrow.lineJoinStyle = .round;NSColor.secondaryLabelColor.setStroke();arrow.stroke()
+        text(p.available ? money(p.cost) : "—",x:left+12,y:y+26,w:100,size:14,weight:.medium,numeric:true)
+        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+120,y:y+27,w:width-120,size:12,weight:.medium,align:.right,numeric:true)
+        if expanded {
+            text(Self.stats(p),x:left+12,y:y+50,w:width-12,size:10,color:.secondaryLabelColor)
+            drawModels(p,y:y+70,left:left+12,right:right,color:c)
+        }
+    }
+    private func drawProvider(_ p:ProviderUsage,y:CGFloat,left:CGFloat,right:CGFloat){
+        let width=right-left,c=accent(p.id,self)
+        c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+14,width:5,height:5)).fill()
+        text(p.name,x:left+12,y:y+8,w:width-170,size:12,weight:.semibold)
+        drawNote(p,y:y+10,right:right+17)
+        text(p.available ? money(p.cost) : "—",x:left,y:y+26,w:width*0.43,size:19,weight:.medium,numeric:true)
+        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+width*0.43,y:y+28,w:width*0.57,size:16,weight:.medium,align:.right,numeric:true)
+        text(Self.stats(p),x:left,y:y+54,w:width,size:10,color:.secondaryLabelColor)
+        drawModels(p,y:y+74,left:left,right:right,color:c)
+    }
+    // Legend columns are justified: the first starts at the left edge, the last column's longest
+    // label ends at the right edge, and column starts are evenly spaced. Four per row when they
+    // fit, otherwise three, with rows as even as possible.
+    static func legendLayout(_ labels:[String],width:CGFloat)->[[NSRect]] {
+        guard !labels.isEmpty else{return []}
+        let font=NSFont.systemFont(ofSize:8.5),gap:CGFloat=6
+        let sizes=labels.map{ceil(($0 as NSString).size(withAttributes:[.font:font]).width)+16}
+        func shape(_ most:Int)->(count:Int,pitch:CGFloat){
+            let rows=(labels.count+most-1)/most,count=(labels.count+rows-1)/rows
+            let last=stride(from:count-1,to:sizes.count,by:count).map{sizes[$0]}.max() ?? 0
+            return (count,count>1 ? (width-last)/CGFloat(count-1) : 0)
+        }
+        func fits(_ s:(count:Int,pitch:CGFloat))->Bool{sizes.enumerated().allSatisfy{$0.offset%s.count==s.count-1 || $0.element+gap<=s.pitch}}
+        var s=shape(4)
+        if !fits(s){s=shape(3)}
+        if !fits(s){s.pitch=width/CGFloat(s.count)}
+        return stride(from:0,to:labels.count,by:s.count).map{start in
+            (0..<min(s.count,labels.count-start)).map{c in
+                let x=CGFloat(c)*s.pitch
+                return NSRect(x:x,y:0,width:c==s.count-1 ? width-x : s.pitch-gap,height:12)
+            }
         }
     }
     private func drawSummaryChart(left:CGFloat,right:CGFloat){
@@ -234,32 +275,35 @@ final class DashboardView:FlippedView {
         let series=summaryProviders.map{p in (0..<n).map{i in i<p.history.count ? max(0,p.history[i]) : 0}}
         let totals=(0..<n).map{i in series.reduce(0){$0+$1[i]}}
         let totalColor=dark(self) ? NSColor(srgbRed:0.43,green:0.79,blue:0.75,alpha:1) : NSColor(srgbRed:0.15,green:0.47,blue:0.46,alpha:1)
-        text("Token 趋势 · "+data.chartUnit,x:left,y:98,w:135,size:9.5,color:.secondaryLabelColor)
-        text(data.chartSpan,x:left+125,y:99,w:width-125,size:8.5,color:.secondaryLabelColor,align:.right)
-        let legend:[(String,NSColor)]=[("总量",totalColor)]+summaryProviders.map{($0.id=="claude" ? "Claude" : $0.name,accent($0.id,self))}
-        for (i,entry) in legend.enumerated(){
-            let columns=min(3,legend.count),cell=width/CGFloat(columns),x=left+CGFloat(i%columns)*cell,y=CGFloat(i/columns)*17
-            entry.1.setFill();NSBezierPath(roundedRect:NSRect(x:x,y:120+y,width:11,height:i==0 ? 3 : 2),xRadius:1.5,yRadius:1.5).fill()
-            text(entry.0,x:x+17,y:114+y,w:cell-20,size:8.5,color:.secondaryLabelColor)
+        let labels=Self.legendLabels(data),colors=[totalColor]+summaryProviders.map{accent($0.id,self)}
+        var index=0
+        for (row,frame) in Self.legendLayout(labels,width:width).enumerated(){
+            for cell in frame{
+                let x=left+cell.minX,y=CGFloat(row)*17
+                colors[index].setFill();NSBezierPath(roundedRect:NSRect(x:x,y:96+y,width:11,height:index==0 ? 3 : 2),xRadius:1.5,yRadius:1.5).fill()
+                text(labels[index],x:x+16,y:90+y,w:cell.width-16,size:8.5,color:.secondaryLabelColor)
+                index+=1
+            }
         }
         NSGraphicsContext.saveGraphicsState()
         defer{NSGraphicsContext.restoreGraphicsState()}
         NSGraphicsContext.current?.cgContext.translateBy(x:0,y:Self.chartExtra(data))
         let observed=max(totals.max() ?? 0,1),unit=pow(10,floor(log10(observed)))
         let ceiling=ceil(observed*1.08/unit*2)/2*unit
-        let plot=NSRect(x:left+32,y:143,width:width-36,height:78)
-        let card=NSBezierPath(roundedRect:NSRect(x:left+27,y:135,width:width-27,height:90),xRadius:7,yRadius:7)
+        let plot=NSRect(x:left+32,y:119,width:width-36,height:78)
+        let cardFrame=NSRect(x:left+27,y:111,width:width-27,height:90),card=NSBezierPath(roundedRect:cardFrame,xRadius:7,yRadius:7)
         totalColor.withAlphaComponent(dark(self) ? 0.035 : 0.025).setFill();card.fill()
         for f in [CGFloat(0),0.5,1]{
             let yy=plot.maxY-f*plot.height
             text(axisTokens(ceiling*Double(f)),x:left-2,y:yy-5,w:27,size:8,color:.secondaryLabelColor,align:.right,numeric:true)
             line(NSPoint(x:plot.minX,y:yy),NSPoint(x:plot.maxX,y:yy),color:NSColor.separatorColor.withAlphaComponent(0.22),width:0.5)
         }
+        // Partial data is a faint note in the card's top-right corner, above the top grid line.
+        if !data.chartStatus.isEmpty {text(data.chartStatus,x:cardFrame.minX+6,y:plot.minY-11,w:cardFrame.width-12,size:7.5,color:.tertiaryLabelColor,align:.right)}
         if n==1 {
             for (i,values) in series.enumerated(){let y=plot.maxY-CGFloat(values[0]/ceiling)*plot.height;accent(summaryProviders[i].id,self).setFill();NSBezierPath(ovalIn:NSRect(x:plot.midX-2.5,y:y-2.5,width:5,height:5)).fill()}
             let y=plot.maxY-CGFloat(totals[0]/ceiling)*plot.height;totalColor.setFill();NSBezierPath(ovalIn:NSRect(x:plot.midX-3,y:y-3,width:6,height:6)).fill()
-            text(data.dates[0],x:plot.midX-30,y:228,w:60,size:8.5,color:.secondaryLabelColor,align:.center)
-            line(NSPoint(x:left,y:246),NSPoint(x:right,y:246));return
+            text(data.dates[0],x:plot.midX-30,y:204,w:60,size:8.5,color:.secondaryLabelColor,align:.center);return
         }
         let positions: [Double]
         if let values=data.chartPositions,values.count==n,values.allSatisfy({$0.isFinite}),zip(values,values.dropFirst()).allSatisfy({$0<$1}) {positions=values}
@@ -311,9 +355,7 @@ final class DashboardView:FlippedView {
         }
         let middle=(1..<n-1).filter{positions[$0]>=0.25 && positions[$0]<=0.75}.min{abs(positions[$0]-0.5)<abs(positions[$1]-0.5)}
         let labelIndices=[0]+(middle.map{[$0]} ?? [])+[n-1]
-        for i in labelIndices{let label=data.dates[i];let x=plot.minX+CGFloat(positions[i])*plot.width;text(label,x:i==0 ? x : (i==n-1 ? x-48 : x-25),y:228,w:i==n-1 ? 48 : 50,size:8.5,color:.secondaryLabelColor,align:i==0 ? .left : (i==n-1 ? .right : .center))}
-        if !data.chartStatus.isEmpty {text(data.chartStatus,x:left+37,y:171,w:width-45,size:10,color:.secondaryLabelColor,align:.center)}
-        line(NSPoint(x:left,y:246),NSPoint(x:right,y:246))
+        for i in labelIndices{let label=data.dates[i];let x=plot.minX+CGFloat(positions[i])*plot.width;text(label,x:i==0 ? x : (i==n-1 ? x-48 : x-25),y:204,w:i==n-1 ? 48 : 50,size:8.5,color:.secondaryLabelColor,align:i==0 ? .left : (i==n-1 ? .right : .center))}
     }
 
 }
@@ -322,7 +364,7 @@ enum MenuLayout {
         e.isModule && !e.children.isEmpty && x>=width-32 && x<=width
     }
     static func configurationHover(_ e:Entry,x:CGFloat)->Bool { !e.isModule || x>=36 }
-    static func hasIcon(_ e:Entry)->Bool {e.image != nil || e.symbol != nil || e.checked != nil || e.updateState != nil}
+    static func hasIcon(_ e:Entry)->Bool {e.image != nil || e.symbol != nil || e.checked != nil || e.statusLight != nil}
     static func column(_ entries:[Entry])->CGFloat {entries.contains(where:hasIcon) ? 36 : 12}
     static func labelFont(_ e:Entry)->NSFont {.systemFont(ofSize:e.section==true ? 10.5 : (e.actionable ? 12 : 10.5),weight:e.section==true ? .medium : .regular)}
     static let valueFont=NSFont.monospacedDigitSystemFont(ofSize:11,weight:.regular)
@@ -371,6 +413,8 @@ enum MenuLayout {
     // Movement from `from` to `to` heads into the open flyout through the triangle spanned by
     // its near edge, so rows crossed on the way must not replace it (native menu safe zone).
     static func aiming(from:NSPoint,to:NSPoint,flyout:NSRect)->Bool {
+        // A slow drift is choosing a row, not travelling into the flyout.
+        guard hypot(to.x-from.x,to.y-from.y)>=4 else{return false}
         let edge=flyout.minX>=from.x ? flyout.minX : flyout.maxX
         guard abs(edge-to.x)<abs(edge-from.x)-0.5 else{return false}
         let top=NSPoint(x:edge,y:flyout.maxY+4),bottom=NSPoint(x:edge,y:flyout.minY-4)
@@ -419,7 +463,7 @@ final class Row:NSButton {
         let left=columnInset
         if let checked=entry.checked {
             let box=NSRect(x:13,y:(bounds.height-12)/2,width:12,height:12)
-            let radio=["set-appearance","set-chatgpt-source"].contains(entry.action?.first ?? "")
+            let radio=entry.radio==true
             let outline=NSBezierPath(roundedRect:box,xRadius:radio ? 6 : 3,yRadius:radio ? 6 : 3)
             if checked {
                 NSColor.controlAccentColor.setFill();outline.fill()
@@ -434,21 +478,13 @@ final class Row:NSButton {
             } else {glyph.draw(in:NSRect(x:12,y:(bounds.height-14)/2,width:14,height:14))}
         }
         let trailing=MenuLayout.trailing(entry),font=MenuLayout.labelFont(entry)
-        let color:NSColor=entry.action?.first=="stop" || entry.label.hasPrefix("○") ? .systemRed : (entry.label.hasPrefix("●") ? statusGreen(self) : (entry.actionable || entry.usageLevel != nil ? .labelColor : .secondaryLabelColor))
+        let color:NSColor=entry.action?.first=="stop" ? .systemRed : (entry.actionable || entry.usageLevel != nil || entry.checked==true ? .labelColor : .secondaryLabelColor)
         let labelWidth=MenuLayout.labelWidth(entry,width:bounds.width,left:left)
         let titleHeight=MenuLayout.height(entry.label,font:font,width:labelWidth)
         let detailHeight=entry.detail.map{MenuLayout.height($0,font:MenuLayout.detailFont,width:bounds.width-left-trailing)} ?? 0
         let blockHeight=titleHeight+(entry.detail == nil ? 0 : detailHeight+3)
         let top=(bounds.height-blockHeight)/2
-        if let state=entry.updateState {
-            let dot=NSBezierPath(ovalIn:NSRect(x:15.5,y:top+titleHeight/2-3.5,width:7,height:7))
-            switch state {
-            case "available":NSColor.controlAccentColor.setFill();dot.fill()
-            case "current":statusGreen(self).setFill();dot.fill()
-            case "issue":NSColor.systemOrange.setFill();dot.fill()
-            default:NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()
-            }
-        }
+        if let state=entry.statusLight {drawStatusLight(state,centre:NSPoint(x:19,y:top+titleHeight/2),in:self)}
         MenuLayout.draw(entry.label,in:NSRect(x:left,y:top,width:labelWidth,height:titleHeight),font:font,color:color)
         if let value=entry.value {
             let valueWidth=MenuLayout.valueWidth(entry)
@@ -459,9 +495,7 @@ final class Row:NSButton {
                 NSBezierPath(roundedRect:valueRect,xRadius:7,yRadius:7).fill()
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX+8,y:bounds.midY-textHeight/2,width:valueRect.width-16,height:textHeight),font:MenuLayout.valueFont,color:dark(self) ? accent("opencodex",self) : .controlAccentColor,alignment:.center)
             }else if let configured=MenuLayout.configured(value){
-                let dot=NSBezierPath(ovalIn:NSRect(x:valueRect.minX,y:bounds.midY-3,width:6,height:6))
-                if configured{statusGreen(self).setFill();dot.fill()}
-                else{NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()}
+                drawStatusLight(configured ? "ok" : "unknown",centre:NSPoint(x:valueRect.minX+3.5,y:bounds.midY),in:self)
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX+12,y:bounds.midY-textHeight/2,width:valueRect.width-12,height:textHeight),font:MenuLayout.valueFont,color:.secondaryLabelColor,alignment:.right)
             }else{
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:bounds.midY-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:usageColor(entry.usageLevel) ?? (entry.actionable ? .labelColor : .secondaryLabelColor),alignment:.right)
@@ -484,6 +518,16 @@ struct PanelInteraction {
     static func isPreference(_ action:[String])->Bool {
         guard let name=action.first else{return false}
         return ["set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(name)
+    }
+    // Actions without a dialog keep the panel open so their result appears in place.
+    static func keepsPanelOpen(_ action:[String])->Bool {
+        ["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-subscription","set-range","test-api-key"].contains(action.first ?? "") || isPreference(action)
+    }
+    // While an action runs, only the row that started it says so.
+    static func runningLabel(_ entry:Entry,active:[String]?)->String? {
+        guard let active,let name=entry.action?.first else{return nil}
+        if name=="test-api-key"{return entry.action==active ? "正在测试…" : nil}
+        return ["refresh","refresh-monitor","check-app-updates","set-range"].contains(name) ? "正在刷新…" : nil
     }
     mutating func submit(_ action:[String])->Submission {
         guard !action.isEmpty else{return .ignored}
@@ -519,8 +563,14 @@ struct PanelInteraction {
                 applyPreference(["set-module",id,settings.visible.contains(id) ? "true" : "false"],to:&value)
             }
         }
-        applyPreference(["set-collapse",settings.allowCollapse ? "true" : "false"],to:&value)
+        syncCollapseOption(settings.allowCollapse,to:&value)
         applyPreference(["set-appearance",settings.appearance],to:&value)
+    }
+    static func syncCollapseOption(_ enabled:Bool,to value:inout Snapshot){
+        value.dashboard?.allowCollapse=enabled
+        for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.first=="set-collapse" {
+            value.moduleOptions?[i].checked=enabled;value.moduleOptions?[i].action=["set-collapse",enabled ? "false" : "true"]
+        }
     }
     static func applyPreference(_ action:[String],to value:inout Snapshot){
         guard let kind=action.first else{return}
@@ -531,10 +581,10 @@ struct PanelInteraction {
             }
         }
         if kind=="set-collapse",action.count==2 {
-            let enabled=action[1]=="true";value.dashboard?.allowCollapse=enabled
-            for i in value.moduleOptions?.indices ?? 0..<0 where value.moduleOptions?[i].action?.first=="set-collapse" {
-                value.moduleOptions?[i].checked=enabled;value.moduleOptions?[i].action=["set-collapse",enabled ? "false" : "true"]
-            }
+            let enabled=action[1]=="true"
+            // Turning folding on starts with every card folded.
+            if enabled{value.dashboard?.expandedProviders=[]}
+            syncCollapseOption(enabled,to:&value)
         }
         if kind=="set-expanded",action.count==3 {
             var expanded=Set(value.dashboard?.expandedProviders ?? [])
@@ -600,9 +650,9 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
-    private var interaction=PanelInteraction();private var running:Bool{interaction.active != nil}
+    private var interaction=PanelInteraction()
     private var sourceChecks:[String:Date]=[:]
-    private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private let hoverIntent=HoverIntent();private var closeTask:DispatchWorkItem?
+    private var flyouts:[Flyout]=[];private var rows:[[String:Row]]=[];private let hoverIntent=HoverIntent();private var closeTask:DispatchWorkItem?;private var closeLevel=0
     private var trail:[(point:NSPoint,time:TimeInterval)]=[]
     private func setup(_ window:Panel){window.backgroundColor = .clear;window.isOpaque=false;window.hasShadow=true;window.level = .popUpMenu;window.hidesOnDeactivate=false;window.isReleasedWhenClosed=false;window.acceptsMouseMovedEvents=true;window.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.transient,.ignoresCycle];window.escape={[weak self] in self?.hide()}}
     func applicationDidFinishLaunching(_ notification:Notification){
@@ -681,7 +731,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
         guard !rangeMenuOpen else{return}
-        if NSEvent.pressedMouseButtons & 1 != 0 {
+        let moving = !flyouts.isEmpty && ProcessInfo.processInfo.systemUptime-(trail.last?.time ?? 0)<0.3
+        if NSEvent.pressedMouseButtons & 1 != 0 || moving {
             reloadTask?.cancel();let task=DispatchWorkItem{[weak self] in self?.reload(force:force)};reloadTask=task
             DispatchQueue.main.asyncAfter(deadline:.now()+0.08,execute:task);return
         }
@@ -692,9 +743,9 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func fillRows(_ entries:[Entry],in content:NSView,y start:CGFloat,width:CGFloat,depth:Int)->CGFloat {
         while rows.count<=depth{rows.append([:])};rows[depth]=[:];var y=start
-        for original in entries {var entry=original;if running,let name=entry.action?.first,["refresh","refresh-monitor","check-app-updates","set-range"].contains(name){entry.label="正在刷新…"}
+        for original in entries {var entry=original;if let label=PanelInteraction.runningLabel(entry,active:interaction.active){entry.label=label}
             let left=MenuLayout.column(entries),h=MenuLayout.rowHeight(entry,width:width,left:left)
-            if entry.separator==true {let divider=NSBox(frame:NSRect(x:8,y:y+5,width:width-16,height:1));divider.boxType = .separator;content.addSubview(divider)}
+            if entry.separator==true {content.addSubview(depth==0 ? Divider(frame:NSRect(x:8,y:y+5,width:width-16,height:2)) : {let line=NSBox(frame:NSRect(x:8,y:y+5,width:width-16,height:1));line.boxType = .separator;return line}())}
             else {let row=Row(entry,frame:NSRect(x:0,y:y,width:width,height:h));row.columnInset=entry.section==true ? 12 : left;row.pointerAllowed={[weak self,weak row] in guard let self,let row else{return false};return self.pointerHits(row)};row.invoke={[weak self] e,r in self?.activate(e,row:r,depth:depth)};row.hover={[weak self] e,r in self?.hover(e,row:r,depth:depth)};content.addSubview(row);rows[depth][entry.key]=row}
             y+=h
         };return y
@@ -715,7 +766,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             let hint=NSTextField(labelWithString:"已启用 \(count) 项");hint.font = .systemFont(ofSize:10);hint.textColor = .secondaryLabelColor;hint.frame=NSRect(x:12,y:29,width:inner-24,height:15);content.addSubview(hint)
             let done=NSButton(title:"完成",target:self,action:#selector(finishModules));done.bezelStyle = .rounded;done.controlSize = .small;done.frame=NSRect(x:inner-65,y:8,width:53,height:25);content.addSubview(done)
         } else if let dashboard=snapshot.dashboard{let view=DashboardView(dashboard,width:inner);view.toggleProvider={[weak self] id,expanded in self?.performAction(["set-expanded",id,expanded ? "true" : "false"])};content.addSubview(view)}else{let label=NSTextField(labelWithString:"AI 用量面板");label.frame=NSRect(x:12,y:10,width:300,height:20);content.addSubview(label)}
-        let divider=NSBox(frame:NSRect(x:8,y:top-5,width:inner-16,height:1));divider.boxType = .separator;content.addSubview(divider)
+        content.addSubview(Divider(frame:NSRect(x:8,y:top-6,width:inner-16,height:2)))
         _=fillRows(entries,in:content,y:top,width:inner,depth:0)
         if !managerOnly,let dashboard=snapshot.dashboard,let choices=snapshot.rangeOptions {
             let picker=NSPopUpButton(frame:NSRect(x:inner-113,y:7.5,width:101,height:25),pullsDown:true)
@@ -729,6 +780,13 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
                 option.isEnabled = true;menu.addItem(option)
             }
             picker.menu=menu;menu.delegate=self;rangePicker=picker;content.addSubview(picker)
+            // Refresh lives beside Summary in the same rounded bezel as the range menu; it dims while a refresh is running.
+            let refresh=NSButton(frame:NSRect(x:inner-145,y:7.5,width:28,height:25))
+            refresh.bezelStyle = .rounded;refresh.controlSize = .small;refresh.title=""
+            refresh.image=NSImage(systemSymbolName:"arrow.clockwise",accessibilityDescription:"刷新数据")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));refresh.imagePosition = .imageOnly
+            refresh.contentTintColor = .labelColor;refresh.toolTip="刷新数据";refresh.setAccessibilityLabel("刷新数据")
+            refresh.target=self;refresh.action=#selector(refreshData);refresh.isEnabled=interaction.active != ["refresh"]
+            content.addSubview(refresh)
         }
         scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
@@ -758,7 +816,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private func settleHover(_ entry:Entry,row:Row?,depth:Int,postponed:Int){
         guard let row,pointerHits(row),allowsConfigurationHover(row) else{return}
         // Still travelling into the open flyout: look again shortly, but never hold the old row for long.
-        if postponed<4,aimingAtFlyout(depth) {
+        if postponed<2,aimingAtFlyout(depth) {
             hoverIntent.schedule(String(depth)+"\u{1f}"+entry.key,after:0.06){[weak self,weak row] in self?.settleHover(entry,row:row,depth:depth,postponed:postponed+1)}
             return
         }
@@ -821,11 +879,18 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             return
         }
         guard !flyouts.isEmpty else{return}
-        if top != nil{closeTask?.cancel();return}
-        if closeTask==nil || closeTask!.isCancelled {
-            let task=DispatchWorkItem{[weak self] in self?.closeFlyouts(from:0);self?.closeTask=nil}
-            closeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:task)
-        }
+        // Inside a panel but off its rows (Summary, gaps, a flyout heading): flyouts beyond that panel
+        // close shortly, unless the pointer is heading into them. Outside every panel, all of them close.
+        guard let top else{scheduleClose(from:0,after:0.15);return}
+        let level=top === panel ? 0 : (flyouts.firstIndex{$0.panel === top}.map{$0+1} ?? 0)
+        if flyouts.count<=level || aimingAtFlyout(level){closeTask?.cancel();return}
+        scheduleClose(from:level,after:0.12)
+    }
+    private func scheduleClose(from level:Int,after delay:TimeInterval){
+        if let closeTask,!closeTask.isCancelled,closeLevel==level{return}
+        closeTask?.cancel();closeLevel=level
+        let task=DispatchWorkItem{[weak self] in self?.closeFlyouts(from:level);self?.closeTask=nil}
+        closeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+delay,execute:task)
     }
     private func checkAction(){
         guard let pendingAction else{return}
@@ -852,6 +917,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     @objc private func rangeTrackingEnded(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuDidClose(menu)}}
     func menuWillOpen(_ menu:NSMenu){rangeMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
     func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
+    @objc private func refreshData(){performAction(["refresh"])}
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
         actionTimeout?.cancel();pendingAction=nil;pendingSince=nil;updateFallback();interaction.active=nil;interaction.queued=[]
@@ -867,7 +933,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     private func dispatchAction(_ action:[String]){
         let passive=["refresh-source","refresh-view"].contains(action[0])
-        let keepOpen=["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-subscription","set-chatgpt-source","set-range","set-module","set-appearance","reset-modules","set-collapse","set-expanded"].contains(action[0])
+        let keepOpen=PanelInteraction.keepsPanelOpen(action)
         if !keepOpen{hide()};if keepOpen && !passive{updatePresentation()}
         let id=UUID().uuidString,request=URL(fileURLWithPath:snapshotPath).deletingLastPathComponent().appendingPathComponent("panel-action.json")
         do{let data=try JSONSerialization.data(withJSONObject:["id":id,"action":action,"createdAt":Date().timeIntervalSince1970]);try data.write(to:request,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:request.path);pendingAction=id;pendingSince=Date();updateFallback()
