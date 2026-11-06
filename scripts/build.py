@@ -10,7 +10,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def build(output):
+def build(output, universal=False):
     if os.uname().sysname != 'Darwin':
         raise SystemExit('The AppKit helper must be built on macOS.')
     output = Path(output).resolve()
@@ -24,9 +24,16 @@ def build(output):
         binary.parent.mkdir(parents=True)
         shutil.copyfile(ROOT / 'panel' / 'Info.plist', app / 'Contents' / 'Info.plist')
         environment = dict(os.environ, MACOSX_DEPLOYMENT_TARGET='13.0')
-        subprocess.run(['xcrun', 'swiftc', '-O', '-module-cache-path', str(cache),
-                        str(ROOT / 'panel' / 'Panel.swift'), '-o', str(binary)],
-                       check=True, env=environment)
+        command = ['xcrun', 'swiftc', '-O', '-module-cache-path', str(cache), str(ROOT / 'panel' / 'Panel.swift')]
+        if universal:
+            # Release packages run on Apple silicon and Intel Macs without a local compiler.
+            slices = [Path(temporary) / arch for arch in ('arm64', 'x86_64')]
+            for part in slices:
+                subprocess.run(command + ['-target', part.name + '-apple-macos13.0', '-o', str(part)],
+                               check=True, env=environment)
+            subprocess.run(['lipo', '-create'] + [str(part) for part in slices] + ['-output', str(binary)], check=True)
+        else:
+            subprocess.run(command + ['-o', str(binary)], check=True, env=environment)
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
         subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
         subprocess.run(['ditto', '--norsrc', '--noextattr', str(app), str(output)], check=True)
@@ -36,4 +43,6 @@ def build(output):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / 'build' / 'OpenCodexPanel.app')
-    build(parser.parse_args().output)
+    parser.add_argument('--universal', action='store_true', help='Build arm64 and x86_64 slices, as release packages do.')
+    args = parser.parse_args()
+    build(args.output, args.universal)

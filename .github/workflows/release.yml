@@ -1,0 +1,66 @@
+# Builds the universal panel once and packages token-monitor-<version>.zip, so users install without
+# git or Xcode Command Line Tools. Pushing a v<version> tag publishes a GitHub release with the zip;
+# a manual run only uploads the package as a workflow artifact for testing.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    # The glass panel needs the macOS 26 SDK (Xcode 26).
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the macOS SDK
+        run: |
+          xcrun swiftc --version
+          sdk=$(xcrun --show-sdk-version)
+          echo "macOS SDK $sdk"
+          [ "${sdk%%.*}" -ge 26 ]
+      - name: Run checks
+        run: python3 scripts/check.py
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python3 scripts/package.py --tag "$GITHUB_REF_NAME"
+          else
+            python3 scripts/package.py
+          fi
+      - name: Install the package into an empty plugin folder
+        run: |
+          scratch="$RUNNER_TEMP/install-test"
+          mkdir -p "$scratch/home" "$scratch/plugins" "$scratch/unpacked"
+          ditto -x -k dist/token-monitor-*.zip "$scratch/unpacked"
+          # No source checkout, no compiler step: the installer must work from the unpacked zip alone.
+          HOME="$scratch/home" python3 "$scratch"/unpacked/token-monitor-*/install.py --plugin-dir "$scratch/plugins" --no-refresh
+          [ "$(ls "$scratch/plugins")" = token-monitor.30s.sh ]
+          test -x "$scratch/plugins/token-monitor.30s.sh"
+          codesign --verify --deep --strict "$scratch/plugins/.opencodex-panel/OpenCodexPanel.app"
+          ls "$scratch/plugins/.opencodex-panel/python/"*/curl_cffi > /dev/null
+          if grep -rqF -e "$GITHUB_WORKSPACE" -e "$scratch/unpacked" "$scratch/plugins"; then
+            echo 'The installed plugin refers to the package or source folder.'; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: token-monitor-package
+          path: dist/
+      - name: Publish release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "token-monitor $version" \
+            --notes-file dist/release-notes.md \
+            "dist/token-monitor-$version.zip" "dist/token-monitor-$version.zip.sha256"

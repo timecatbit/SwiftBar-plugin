@@ -13,7 +13,9 @@ ENTRY = 'token-monitor.30s.sh'
 # Earlier releases: the old entry name and a visible assets folder, which SwiftBar ran as plugins.
 LEGACY = [Path('opencodex.30s.sh'), Path('assets/deepseek-logo.svg'), Path('assets/deepseek-logo.png'), Path('assets/logos')]
 LEGACY_DATA = ('auto-update.json', 'updates-notified.json')
-ROOT = Path(__file__).resolve().parents[1]
+HERE = Path(__file__).resolve().parent
+# A source checkout keeps this script in scripts/; a release package keeps it beside the entry.
+ROOT = HERE if (HERE / ENTRY).is_file() else HERE.parent
 sys.path.insert(0, str(ROOT / 'lib'))
 from swiftbar_config import migrate_config
 from install_transport import prepare as prepare_transport
@@ -45,8 +47,11 @@ def main():
         parser.error('User config already exists; edit it through connection settings.')
     if args.config and not args.config.expanduser().is_file():
         parser.error('--config must name an existing file.')
-    if not args.skip_build:
+    # Release packages ship a prebuilt helper and no Swift source, so they need no compiler.
+    if not args.skip_build and (ROOT / 'panel/Panel.swift').is_file():
         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'build.py')], check=True)
+    if not (ROOT / 'build/OpenCodexPanel.app').is_dir():
+        parser.error('The panel helper is missing; download the release zip again or build from source.')
     # Ask the shell entry point so OCX_PYTHON and its PATH match the running plugin.
     python = subprocess.run(['/bin/bash',str(ROOT/ENTRY),'--python-path'],
                             capture_output=True,text=True,check=True).stdout.strip()
