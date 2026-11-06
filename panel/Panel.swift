@@ -823,7 +823,7 @@ final class HoverIntent {
 
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePickerDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var hintTask:DispatchWorkItem?;private var hintView:NSView?;private var userApp:NSRunningApplication?;private var firstActivation=true;private var managerOnly=false
+    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date,ok:Bool)?;private var toastView:NSView?;private weak var shareButton:NSButton?;private weak var detectButton:NSButton?;private var hintTask:DispatchWorkItem?;private var hintView:NSView?;private var userApp:NSRunningApplication?;private var firstActivation=true;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
@@ -992,7 +992,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             share.bezelStyle = .rounded;share.controlSize = .small;share.title=""
             share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));share.imagePosition = .imageOnly
             share.contentTintColor = .labelColor;share.hint="分享用量图";share.hovered={[weak self] in self?.hoverHint($0,$1)};share.setAccessibilityLabel("分享用量图")
-            share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share)
+            share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share);shareButton=share
             // Auto-detect is a rarely used setup action, so it is a plain icon like its neighbours; the
             // hover hint and accessibility label name it, and it always asks before changing anything.
             let detect=HintButton(frame:NSRect(x:inner-209,y:7.5,width:28,height:25))
@@ -1000,7 +1000,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             detect.image=NSImage(systemSymbolName:"sparkle.magnifyingglass",accessibilityDescription:"自动检测")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));detect.imagePosition = .imageOnly
             detect.contentTintColor = .labelColor;detect.setAccessibilityLabel("自动检测")
             detect.hint="自动检测";detect.hovered={[weak self] in self?.hoverHint($0,$1)}
-            detect.target=self;detect.action=#selector(detectModules);content.addSubview(detect)
+            detect.target=self;detect.action=#selector(detectModules);content.addSubview(detect);detectButton=detect
         }
         scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
@@ -1173,7 +1173,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     @objc private func copySharePicture(){
         guard let data=sharePicture() else{NSSound.beep();return}
         NSPasteboard.general.clearContents()
-        showToast(NSPasteboard.general.writeObjects([ShareCard.pasteboardItem(data)]) ? "已复制图片，可直接粘贴" : "复制失败，请重试")
+        let copied=NSPasteboard.general.writeObjects([ShareCard.pasteboardItem(data)])
+        showToast(copied ? "已复制" : "复制失败",ok:copied)
     }
     @objc private func openSharePicker(_ item:NSMenuItem){
         guard let sender=item.representedObject as? NSButton,sender.window != nil,let data=sharePicture(),let dashboard=snapshot?.dashboard else{NSSound.beep();return}
@@ -1187,26 +1188,39 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}
     }
     // A short confirmation on the panel surface; a rebuild re-places it until it expires.
-    private func showToast(_ text:String){
-        toast=(text,Date().addingTimeInterval(1.8));placeToast()
+    // Copy feedback stays in the header row so it never covers the numbers: the share button briefly
+    // turns into a green check (orange on failure) and a short word sits in the gap left of the buttons.
+    private func showToast(_ text:String,ok:Bool){
+        toast=(text,Date().addingTimeInterval(1.8),ok);placeToast()
         DispatchQueue.main.asyncAfter(deadline:.now()+1.85){[weak self] in
             guard let self,let toast=self.toast,toast.until<=Date() else{return}
-            self.toast=nil;self.toastView?.removeFromSuperview();self.toastView=nil
+            self.toast=nil;self.placeToast()
         }
     }
     private func placeToast(){
         toastView?.removeFromSuperview();toastView=nil
-        guard let toast,toast.until>Date(),let surface=panel.contentView as? Surface else{return}
-        let label=NSTextField(labelWithString:toast.text);label.font = .systemFont(ofSize:12,weight:.medium);label.textColor = .labelColor
-        let icon=NSImageView(image:NSImage(systemSymbolName:"checkmark.circle.fill",accessibilityDescription:nil) ?? NSImage());icon.contentTintColor=statusGreen(surface)
-        let size=label.intrinsicContentSize,width=size.width+48
-        let pill=FlippedView(frame:NSRect(x:(surface.bounds.width-width)/2,y:42,width:width,height:28));pill.wantsLayer=true
-        pill.layer?.cornerRadius=14;pill.layer?.borderWidth=0.5
-        surface.effectiveAppearance.performAsCurrentDrawingAppearance{pill.layer?.backgroundColor=background(surface).cgColor;pill.layer?.borderColor=NSColor.separatorColor.cgColor}
-        icon.frame=NSRect(x:12,y:7,width:14,height:14);label.frame=NSRect(x:32,y:(28-size.height)/2,width:size.width,height:size.height)
-        pill.addSubview(icon);pill.addSubview(label);pill.setAccessibilityElement(true);pill.setAccessibilityRole(.staticText);pill.setAccessibilityLabel(toast.text)
-        surface.addSubview(pill);toastView=pill
-        NSAccessibility.post(element:pill,notification:.announcementRequested,userInfo:[.announcement:toast.text])
+        let current=toast.flatMap{$0.until>Date() ? $0 : nil}
+        if let share=shareButton {
+            // Bordered buttons ignore contentTintColor for their image, so the status icon carries its own colour.
+            let base=NSImage.SymbolConfiguration(pointSize:11,weight:.semibold)
+            if let current {
+                let colour=current.ok ? statusGreen(share) : NSColor.systemOrange
+                share.image=NSImage(systemSymbolName:current.ok ? "checkmark" : "exclamationmark",accessibilityDescription:current.text)?
+                    .withSymbolConfiguration(base.applying(.init(paletteColors:[colour])))
+            } else {share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(base)}
+        }
+        guard let current,let surface=panel.contentView as? Surface,let detect=detectButton,let row=detect.superview else{return}
+        let label=NSTextField(labelWithString:current.text);label.font = .systemFont(ofSize:11,weight:.medium)
+        label.textColor=current.ok ? statusGreen(surface) : .systemOrange
+        let size=label.intrinsicContentSize,anchor=surface.convert(detect.bounds,from:detect)
+        // Only in the gap after the heading; with a long heading the button alone carries the feedback.
+        let heading=(snapshot?.dashboard?.showSummary==false ? "Harness Token 用量" : "Summary") as NSString
+        let headingRight=surface.convert(NSPoint(x:12,y:0),from:row).x+ceil(heading.size(withAttributes:[.font:NSFont.systemFont(ofSize:14,weight:.semibold)]).width)+6
+        let x=anchor.minX-6-ceil(size.width)
+        NSAccessibility.post(element:shareButton ?? surface,notification:.announcementRequested,userInfo:[.announcement:current.text])
+        guard x>=headingRight else{return}
+        label.frame=NSRect(x:x,y:anchor.midY-ceil(size.height)/2,width:ceil(size.width),height:ceil(size.height))
+        surface.addSubview(label);toastView=label
     }
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
