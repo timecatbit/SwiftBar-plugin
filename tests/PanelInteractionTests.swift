@@ -190,4 +190,12 @@ expect(crowded.allSatisfy{$0.count<=3} && crowded.flatMap{$0}.allSatisfy{$0.minX
 var legendData=grouped;legendData.providers=[("deepseek","DeepSeek Harness"),("codex","ChatGPT 本机用量"),("claude","Claude App")].map{var p=grouped.providers[0];p.id=$0.0;p.name=$0.1;p.summaryIncluded=true;return p}
 expect(DashboardView.legendLabels(legendData)==["总量","DeepSeek","ChatGPT","Claude"],"Legend names drop suffixes the cards already show")
 expect(!MenuLayout.aiming(from:NSPoint(x:330,y:480),to:NSPoint(x:332,y:479),flyout:openFlyout),"A tiny drift toward the flyout is not aiming")
+// The share picture is opaque, signed, and lists every source that has data.
+var shareSource=grouped;shareSource.providers[0].available=false
+let shareCard=ShareCard(shareSource,project:Project(name:"Token Monitor",url:"https://github.com/timecatbit/swiftbar-token-monitor"))
+expect(shareCard.dashboard.providers.allSatisfy{$0.available} && shareCard.dashboard.providers.count==shareSource.providers.filter{$0.available}.count,"Share card keeps every source with data, as the panel does")
+let picture=shareCard.png().flatMap{NSBitmapImageRep(data:$0)}
+expect(picture?.pixelsWide==Int(shareCard.bounds.width*2) && picture?.hasAlpha==true && picture.map{$0.colorAt(x:2,y:2)?.alphaComponent==1} == true,"Share picture is a 2x opaque PNG")
+let clip=shareCard.png().map{ShareCard.pasteboardItem($0)}
+expect(clip.map{Set($0.types)==Set([NSPasteboard.PasteboardType.png,.tiff])}==true,"Copied picture carries PNG and TIFF, not a file URL")
 print("Native interaction assertions: \(assertions) passed")

@@ -69,6 +69,7 @@ SERVICE_LOG = os.path.join(OCX_HOME, "service.log")
 RELEASES_URL = "https://github.com/lidge-jun/opencodex/releases/latest"
 KOMARI_BASE_URL = os.environ.get("KOMARI_BASE_URL", "").rstrip("/")
 VERSION = "5.12.0"
+PRODUCT = "Token Monitor"
 AUTHOR = "minicoke"
 REPOSITORY = "https://github.com/timecatbit/swiftbar-token-monitor"
 
@@ -139,7 +140,9 @@ def local_zone():
 
 def range_cache_name(key=None):
     settings = view_settings()
-    scope = [('collector','ccusage-v1')] + [(k, source_path(k)) for k in preferences.USAGE if k in settings['visible']]
+    # A new price table changes every estimate, so its snapshot commit is part of the cache key.
+    pricing = sources.pricing('model-pricing.json').get('source', {}).get('commit')
+    scope = [('collector','ccusage-v1'), ('pricing', pricing)] + [(k, source_path(k)) for k in preferences.USAGE if k in settings['visible']]
     if 'claude' in settings['visible']:scope.append(('claude-projects',[str(p) for p in claude_desktop.project_roots(HOME)]))
     fingerprint = hashlib.sha256(json.dumps(scope).encode()).hexdigest()[:12]
     return 'range_usage_' + (key or selected_range()) + '_' + fingerprint
@@ -2622,7 +2625,7 @@ def render(data):
         for provider in dashboard['providers']:
             overview.append(item(provider['name']+' · '+(fmt_tokens(provider['tokens'])+' Token' if provider['available'] else provider['status'])))
         return "\n".join([title(data),'---']+[native_menu_line(line) for line in overview+(['---'] if overview else [])+management_lines(data)+['---']+module_menu_lines()])
-    write_json_cache(cache_path("panel-view"), {"schema":1,"dashboard":dashboard,
+    write_json_cache(cache_path("panel-view"), {"schema":1,"project":{"name":PRODUCT,"url":REPOSITORY},"dashboard":dashboard,
         "entries":resource_panel_entries(data),"rangeOptions":range_options(),
         "moduleOptions":options,"appearance":view_settings()['appearance'],"preferences":presentation_settings(),
         "updateCount":update_attention_count(update_rows(data))})

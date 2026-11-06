@@ -11,6 +11,8 @@
 - 插件改名为 token-monitor（入口 `token-monitor.30s.sh`）。修复品牌图标被 SwiftBar 当成多个插件显示：图标改装在隐藏目录，升级时备份并删除旧入口与可见的 `assets/`；更新提醒记录移到 SwiftBarToken 目录，改名后不丢失。右键新增紧凑的“关于 token-monitor”子菜单（版本、作者 minicoke、GitHub 仓库链接），取代留白很多的 SwiftBar“关于插件”弹窗。
 - “刷新数据”移到 Summary 标题旁的按钮；右键去掉自建的“SwiftBar 管理”，与 SwiftBar 自带菜单不再重复，插件版本可在 SwiftBar“关于插件”查看；客户端卡片和图表下不再画分割线。
 - Summary 金额与图例之间的空白缩小 8pt；“部分图表数据不可用”改为图表右上角的小号淡色提示。
+- Summary 旁新增分享按钮：生成独立设计的 2x 分享卡片（渐变底上的不透明圆角卡片，跟随深浅色，不受桌面透过玻璃影响），包含范围与日期、API 等值估算、Token/请求/缓存命中、趋势图，以及每个工具的费用、占比、请求/缓存/输出/会话和全部模型明细，底部署名 Token Monitor 与 GitHub 链接；未计入 Summary 的来源单独标注，不含订阅、API 余额和 Key。点按钮选“复制图片”直接复制（面板显示“已复制图片，可直接粘贴”），或选“分享…”用系统分享菜单发送；系统分享菜单打开时点击它不再关闭面板。
+- WorkBuddy、DeepSeek Harness、Gemini CLI、OpenCode 未记录费用时，按所调用模型的官方价格估算（如 DeepSeek、GLM）。价格表 `lib/model-pricing.json` 与 Codex 价格表由同一脚本 `scripts/update_pricing.py` 从 ccusage 的 models.dev 快照生成，只取模型原厂的标价；`default-model` 这类非真实模型名保持未计价。
 - 订阅百分比统一为“已用 X%”：ChatGPT（本机与 OpenCodex）和 MiniMax 原来显示剩余（“可用”或不带说明的百分比），现在与 Claude 一样显示已用，并共用 70% 橙、90% 红的提示色；OpenCodex 账户列表同样改为已用。
 - Summary 的估算、Token、请求三列分散对齐（左、中、右），与图例一致。
 - 状态指示全部统一为应用更新的状态灯：Komari 服务器改为绿/橙/灰圆点，名称不再整行着色；模块“已配置/未配置”圆点同尺寸；Komari 主页行把在线数放到右侧，和其他行一致；OpenCodex 当前账户改用与外观设置相同的单选样式，不再用“✓”文字。

@@ -64,6 +64,19 @@ class SourceTests(unittest.TestCase):
     def test_explicit_request_delta_wins_over_inherited_cumulative_jump(self):
         self.write(self.root/'one.jsonl',[self.codex(1000,150,100),self.codex(9000,150,200)])
         self.assertEqual(self.read()['summary']['totalTokens'],300)
+    def test_other_vendor_models_use_the_shared_price_table(self):
+        price=sources.pricing('model-pricing.json')['models']['deepseek-v4.1-flash']
+        event={'model':'deepseek-v4.1-flash','input':1e6,'cached':1e6,'output':1e6,'writes':0}
+        expected=price['input']+price['cacheRead']+price['output']
+        self.assertAlmostEqual(sources.model_cost(event),expected)
+        # Vendor prefixes and capitals in harness logs resolve to the same first-party price.
+        self.assertAlmostEqual(sources.model_cost(dict(event,model='DeepSeek/DeepSeek-V4.1-Flash')),expected)
+        self.assertIsNotNone(sources.model_cost(dict(event,model='glm-5.3-flash')))
+        # A placeholder name is never guessed into a price.
+        self.assertIsNone(sources.model_cost(dict(event,model='default-model')))
+        # A cost the client logged itself still wins over the table.
+        logged=sources.aggregate([dict(event,timestamp=10,session='s',cost=0.5)],0,20,timezone.utc,price=sources.model_cost)
+        self.assertAlmostEqual(logged['summary']['estimatedCostUsd'],0.5)
     def test_codex_cost_follows_ccusage_tiers_aliases_and_fallbacks(self):
         def cost(model,inputs=100000,cached=50000,output=10000,tier=None,when=1793000000):
             return sources.codex_cost({'model':model,'input':inputs,'cached':cached,'output':output,'writes':0,'tier':tier,'timestamp':when})

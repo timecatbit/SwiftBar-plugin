@@ -17,7 +17,8 @@ struct ProviderUsage:Decodable {
     var sessions:Int;var unpriced:Int;var summaryIncluded:Bool?;var models:[ModelUsage];var history:[Double]
 }
 struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProviders:[String]?}
-struct Snapshot:Decodable {var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?;var preferences:PresentationPreferences?}
+struct Project:Decodable {var name:String;var url:String}
+struct Snapshot:Decodable {var project:Project?;var dashboard:Dashboard?;var entries:[Entry];var rangeOptions:[Entry]?;var updateCount:Int?;var moduleOptions:[Entry]?;var appearance:String?;var preferences:PresentationPreferences?}
 func dark(_ view:NSView)->Bool {view.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua}
 func background(_ view:NSView)->NSColor {dark(view) ? NSColor(calibratedWhite:0.115,alpha:1) : NSColor(calibratedWhite:0.992,alpha:1)}
 func accent(_ id:String,_ view:NSView)->NSColor {
@@ -136,6 +137,166 @@ final class DisclosureButton:NSButton {
     override func updateTrackingAreas(){super.updateTrackingAreas();if let area{removeTrackingArea(area)};area=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(area!)}
     override func mouseEntered(with event:NSEvent){hovered?(true)}
     override func mouseExited(with event:NSEvent){hovered?(false)}
+}
+// The share picture has its own layout: an opaque card on a soft gradient, never the panel's
+// glass, because what shows through the glass depends on each user's desktop. It covers the
+// usage that Summary counts; subscriptions, balances and keys never appear.
+final class ShareCard:FlippedView {
+    static let width:CGFloat=420,margin:CGFloat=20,inset:CGFloat=24,chartHeight:CGFloat=162,modelHeight:CGFloat=22
+    let dashboard:Dashboard,project:Project
+    private var rows:[ProviderUsage] {dashboard.providers}
+    // Totals, chart and the share bar use what Summary counts; other sources are listed after them.
+    private var counted:[ProviderUsage] {rows.filter{$0.summaryIncluded != false}}
+    static func blockHeight(_ p:ProviderUsage)->CGFloat {60+CGFloat(max(1,p.models.count))*modelHeight+16}
+    private var cardHeight:CGFloat {Self.inset+188+(dashboard.dates.count>1 ? Self.chartHeight : 0)+24+rows.reduce(0){$0+Self.blockHeight($1)}+Self.inset-20}
+    init(_ dashboard:Dashboard,project:Project){
+        // Every source with data, as on the panel: Summary's sources heaviest first, then the rest.
+        var shown=dashboard
+        shown.providers=dashboard.providers.filter{$0.available}.sorted{($0.summaryIncluded != false ? 1 : 0,$0.tokens)>($1.summaryIncluded != false ? 1 : 0,$1.tokens)}
+        self.dashboard=shown;self.project=project
+        super.init(frame:.zero)
+        frame=NSRect(x:0,y:0,width:Self.width,height:Self.margin+cardHeight+Self.margin+52)
+    }
+    required init?(coder:NSCoder){fatalError()}
+    static func title(_ d:Dashboard)->String {
+        ["today":"今日","24h":"近 24 小时","7d":"近 7 天","30d":"近 30 天","week":"本周","month":"本月","all":"累计"][d.rangeKey].map{$0+" AI 用量"} ?? d.rangeLabel+" AI 用量"
+    }
+    static func day(_ iso:String)->String {
+        let parts=iso.split(separator:"-").compactMap{Int($0)}
+        return parts.count==3 ? "\(parts[0]) 年 \(parts[1]) 月 \(parts[2]) 日" : iso
+    }
+    private func font(_ size:CGFloat,_ weight:NSFont.Weight,rounded:Bool=false)->NSFont {
+        let base=NSFont.systemFont(ofSize:size,weight:weight)
+        guard rounded,let descriptor=base.fontDescriptor.withDesign(.rounded) else{return base}
+        return NSFont(descriptor:descriptor,size:size) ?? base
+    }
+    private func draw(_ value:String,_ rect:NSRect,_ font:NSFont,_ color:NSColor,_ align:NSTextAlignment = .left){
+        let style=NSMutableParagraphStyle();style.alignment=align;style.lineBreakMode = .byTruncatingTail
+        (value as NSString).draw(in:rect,withAttributes:[.font:font,.foregroundColor:color,.paragraphStyle:style])
+    }
+    private var teal:NSColor {dark(self) ? NSColor(srgbRed:0.43,green:0.79,blue:0.75,alpha:1) : NSColor(srgbRed:0.15,green:0.47,blue:0.46,alpha:1)}
+    override func draw(_ dirtyRect:NSRect){
+        let isDark=dark(self)
+        let backdrop=NSGradient(starting:isDark ? NSColor(srgbRed:0.06,green:0.11,blue:0.11,alpha:1) : NSColor(srgbRed:0.90,green:0.96,blue:0.95,alpha:1),
+                                ending:isDark ? NSColor(srgbRed:0.10,green:0.08,blue:0.14,alpha:1) : NSColor(srgbRed:0.95,green:0.93,blue:0.98,alpha:1))
+        backdrop?.draw(in:bounds,angle:isDark ? -60 : 60)
+        let card=NSRect(x:Self.margin,y:Self.margin,width:bounds.width-Self.margin*2,height:cardHeight),shape=NSBezierPath(roundedRect:card,xRadius:22,yRadius:22)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow=NSShadow();shadow.shadowColor=NSColor.black.withAlphaComponent(isDark ? 0.35 : 0.08);shadow.shadowBlurRadius=24;shadow.shadowOffset=NSSize(width:0,height:-6);shadow.set()
+        (isDark ? NSColor(srgbRed:0.11,green:0.12,blue:0.13,alpha:1) : .white).setFill();shape.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        NSColor.labelColor.withAlphaComponent(isDark ? 0.10 : 0.06).setStroke();shape.lineWidth=1;shape.stroke()
+        let left=card.minX+Self.inset,width=card.width-Self.inset*2,right=left+width
+        var y=card.minY+Self.inset
+        // Header: what and when.
+        draw(Self.title(dashboard),NSRect(x:left,y:y,width:width*0.6,height:22),font(16,.semibold),.labelColor)
+        let day=Self.day(dashboard.date),dayFont=font(11,.medium),dayWidth=ceil((day as NSString).size(withAttributes:[.font:dayFont]).width)+18
+        let capsule=NSRect(x:right-dayWidth,y:y+1,width:dayWidth,height:20)
+        teal.withAlphaComponent(isDark ? 0.18 : 0.10).setFill();NSBezierPath(roundedRect:capsule,xRadius:10,yRadius:10).fill()
+        draw(day,capsule.insetBy(dx:9,dy:3),dayFont,teal,.center)
+        // Hero cost, then three tiles.
+        let counted=self.counted,costs=counted.compactMap{$0.cost},partial=counted.contains{$0.cost==nil || $0.unpriced>0}
+        y+=40;draw(partial ? "已知 API 等值估算" : "API 等值估算",NSRect(x:left,y:y,width:width,height:16),font(11,.medium),.secondaryLabelColor)
+        y+=16;draw(costs.isEmpty ? "—" : money(costs.reduce(0,+)),NSRect(x:left,y:y,width:width,height:50),font(40,.bold,rounded:true),.labelColor)
+        y+=62
+        let count=NumberFormatter();count.numberStyle = .decimal
+        // Cache hit rate weighted by each tool's tokens; tools that report none are left out.
+        let cached=counted.filter{$0.cache != nil},weight=cached.reduce(0){$0+$1.tokens}
+        let hit=weight>0 ? String(format:"%.1f%%",cached.reduce(0){$0+($1.cache ?? 0)*$1.tokens}/weight*100) : "—"
+        let tiles=[("Token",tokens(counted.reduce(0){$0+$1.tokens})),("请求",count.string(from:NSNumber(value:counted.reduce(0){$0+$1.requests})) ?? "0"),("缓存命中",hit)]
+        let tileWidth=(width-20)/3
+        for (i,(label,value)) in tiles.enumerated(){
+            let tile=NSRect(x:left+CGFloat(i)*(tileWidth+10),y:y,width:tileWidth,height:56)
+            teal.withAlphaComponent(isDark ? 0.10 : 0.06).setFill();NSBezierPath(roundedRect:tile,xRadius:12,yRadius:12).fill()
+            draw(label,NSRect(x:tile.minX+12,y:tile.minY+9,width:tile.width-24,height:14),font(10.5,.medium),.secondaryLabelColor)
+            draw(value,NSRect(x:tile.minX+12,y:tile.minY+25,width:tile.width-24,height:24),font(18,.semibold,rounded:true),.labelColor)
+        }
+        y+=70
+        // Chart: the total as a soft area, each tool as a thin line in its own colour.
+        let n=dashboard.dates.count
+        if n>1 {
+            let series=counted.map{p in (0..<n).map{i in i<p.history.count ? max(0,p.history[i]) : 0}}
+            // Same scale as the panel: a rounded ceiling with labelled half and full grid lines.
+            let observed=max((0..<n).map{i in series.reduce(0){$0+$1[i]}}.max() ?? 0,1),unit=pow(10,floor(log10(observed)))
+            let ceiling=ceil(observed*1.08/unit*2)/2*unit
+            let plot=NSRect(x:left,y:y+8,width:width,height:Self.chartHeight-46)
+            for f in [CGFloat(0),0.5,1]{
+                let yy=plot.maxY-f*plot.height
+                line(NSPoint(x:plot.minX,y:yy),NSPoint(x:plot.maxX,y:yy),color:NSColor.labelColor.withAlphaComponent(f==0 ? 0.12 : 0.05),width:f==0 ? 1 : 0.5)
+                if f>0{draw(axisTokens(ceiling*Double(f)),NSRect(x:left,y:yy-13,width:80,height:12),font(9,.medium),.tertiaryLabelColor)}
+            }
+            let positions=DashboardView.chartPositions(dashboard)
+            let paths=DashboardView.smoothCurves(series,positions:positions,plot:plot,ceiling:ceiling),total=paths.last!
+            let area=total.copy() as! NSBezierPath;area.line(to:NSPoint(x:plot.maxX,y:plot.maxY));area.line(to:NSPoint(x:plot.minX,y:plot.maxY));area.close()
+            NSGraphicsContext.saveGraphicsState();area.addClip()
+            NSGradient(starting:teal.withAlphaComponent(isDark ? 0.32 : 0.22),ending:teal.withAlphaComponent(0.0))?.draw(from:NSPoint(x:plot.midX,y:plot.minY),to:NSPoint(x:plot.midX,y:plot.maxY),options:[])
+            NSGraphicsContext.restoreGraphicsState()
+            for (i,curve) in paths.enumerated(){
+                let isTotal=i==paths.count-1
+                curve.lineWidth=isTotal ? 2.4 : 1.4;curve.lineCapStyle = .round;curve.lineJoinStyle = .round
+                (isTotal ? teal : accent(counted[i].id,self).withAlphaComponent(0.9)).setStroke();curve.stroke()
+            }
+            let labelFont=font(9.5,.medium),middle=positions.indices.dropFirst().dropLast().min{abs(positions[$0]-0.5)<abs(positions[$1]-0.5)}
+            for i in [0]+(middle.map{[$0]} ?? [])+[n-1]{
+                let x=plot.minX+CGFloat(positions[i])*plot.width,align:NSTextAlignment=i==0 ? .left : (i==n-1 ? .right : .center)
+                draw(dashboard.dates[i],NSRect(x:i==0 ? x : (i==n-1 ? x-80 : x-40),y:plot.maxY+7,width:80,height:13),labelFont,.tertiaryLabelColor,align)
+            }
+            y+=Self.chartHeight
+        }
+        // Share of tokens by tool, then each tool with its stats and every model, as on the panel.
+        let sum=max(counted.reduce(0){$0+$1.tokens},1),bar=NSRect(x:left,y:y,width:width,height:8)
+        NSGraphicsContext.saveGraphicsState();NSBezierPath(roundedRect:bar,xRadius:4,yRadius:4).addClip()
+        NSColor.labelColor.withAlphaComponent(0.06).setFill();bar.fill()
+        var x=bar.minX
+        for p in counted{let w=bar.width*CGFloat(p.tokens/sum);accent(p.id,self).setFill();NSRect(x:x,y:bar.minY,width:max(0,w-1.5),height:bar.height).fill();x+=w}
+        NSGraphicsContext.restoreGraphicsState()
+        y+=24
+        for (i,p) in rows.enumerated(){
+            let c=accent(p.id,self),inSummary=p.summaryIncluded != false
+            if i>0{line(NSPoint(x:left,y:y-10),NSPoint(x:right,y:y-10),color:NSColor.labelColor.withAlphaComponent(0.07),width:1)}
+            c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+6,width:9,height:9)).fill()
+            let nameFont=font(13.5,.semibold),nameWidth=min(width*0.5,ceil((p.name as NSString).size(withAttributes:[.font:nameFont]).width))
+            draw(p.name,NSRect(x:left+18,y:y+1,width:nameWidth,height:18),nameFont,.labelColor)
+            if !inSummary {
+                let tag="未计入 Summary",tagFont=font(9.5,.medium),tagWidth=ceil((tag as NSString).size(withAttributes:[.font:tagFont]).width)+12
+                let capsule=NSRect(x:left+26+nameWidth,y:y+2,width:tagWidth,height:16)
+                NSColor.labelColor.withAlphaComponent(0.07).setFill();NSBezierPath(roundedRect:capsule,xRadius:8,yRadius:8).fill()
+                draw(tag,capsule.insetBy(dx:6,dy:2),tagFont,.secondaryLabelColor,.center)
+            }
+            draw(money(p.cost),NSRect(x:right-130,y:y,width:130,height:20),font(15,.semibold,rounded:true),.labelColor,.right)
+            draw(tokens(p.tokens)+" Token"+(inSummary ? " · 占 "+share(p.tokens/sum) : ""),NSRect(x:left+18,y:y+21,width:width-18,height:15),font(11.5,.medium),.secondaryLabelColor)
+            draw(DashboardView.stats(p),NSRect(x:left+18,y:y+38,width:width-18,height:15),font(10.5,.regular),.secondaryLabelColor)
+            var my=y+60
+            if p.models.isEmpty{draw("此时段暂无模型调用",NSRect(x:left+18,y:my,width:width-18,height:15),font(11,.regular),.secondaryLabelColor)}
+            for m in p.models{
+                draw(modelName(m.name),NSRect(x:left+18,y:my,width:width-150,height:15),font(11.5,.regular),.labelColor)
+                draw(tokens(m.tokens),NSRect(x:right-130,y:my,width:80,height:15),font(11.5,.medium,rounded:true),.labelColor,.right)
+                draw(share(m.share),NSRect(x:right-46,y:my,width:46,height:15),font(11,.regular),.secondaryLabelColor,.right)
+                let track=NSRect(x:left+18,y:my+16,width:width-18,height:2.5)
+                NSColor.labelColor.withAlphaComponent(0.06).setFill();NSBezierPath(roundedRect:track,xRadius:1.25,yRadius:1.25).fill()
+                c.withAlphaComponent(0.85).setFill();NSBezierPath(roundedRect:NSRect(x:track.minX,y:track.minY,width:max(2.5,track.width*CGFloat(min(1,m.share))),height:track.height),xRadius:1.25,yRadius:1.25).fill()
+                my+=Self.modelHeight
+            }
+            y+=Self.blockHeight(p)
+        }
+        // Signature under the card.
+        let footer=card.maxY+16
+        draw(project.name,NSRect(x:0,y:footer,width:bounds.width,height:18),font(13,.semibold),.labelColor,.center)
+        draw(project.url,NSRect(x:0,y:footer+19,width:bounds.width,height:15),font(10.5,.regular),.secondaryLabelColor,.center)
+    }
+    // PNG for apps that take it, TIFF for older ones; no file URL, so chat apps paste a picture.
+    static func pasteboardItem(_ png:Data)->NSPasteboardItem {
+        let item=NSPasteboardItem();item.setData(png,forType:.png)
+        if let tiff=NSBitmapImageRep(data:png)?.tiffRepresentation{item.setData(tiff,forType:.tiff)}
+        return item
+    }
+    // Rendered at 2x so the picture stays sharp on Retina screens and in chat apps.
+    func png()->Data? {
+        guard let rep=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:Int(bounds.width*2),pixelsHigh:Int(bounds.height*2),bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0) else{return nil}
+        rep.size=bounds.size
+        (appearance ?? NSAppearance.currentDrawing()).performAsCurrentDrawingAppearance{cacheDisplay(in:bounds,to:rep)}
+        return rep.representation(using:.png,properties:[:])
+    }
 }
 final class DashboardView:FlippedView {
     var data:Dashboard;var toggleProvider:((String,Bool)->Void)?;private var hoveredProvider:String?
@@ -269,6 +430,51 @@ final class DashboardView:FlippedView {
             }
         }
     }
+    static func chartPositions(_ d:Dashboard)->[Double] {
+        let n=d.dates.count
+        if let values=d.chartPositions,values.count==n,values.allSatisfy({$0.isFinite}),zip(values,values.dropFirst()).allSatisfy({$0<$1}) {return values}
+        return (0..<n).map{n>1 ? Double($0)/Double(n-1) : 0.5}
+    }
+    // Smoothed curves for each series followed by their total. Slopes and limiters are shared,
+    // so the smoothed total equals the sum of the provider curves at every point, including
+    // between days, and no line overshoots its observations. Needs at least two points.
+    static func smoothCurves(_ series:[[Double]],positions:[Double],plot:NSRect,ceiling:Double)->[NSBezierPath] {
+        let n=positions.count
+        let totals=(0..<n).map{i in series.reduce(0){$0+$1[i]}}
+        let intervals=(0..<n-1).map{positions[$0+1]-positions[$0]}
+        func slopes(_ values:[Double])->[Double]{
+            let d=(0..<n-1).map{(values[$0+1]-values[$0])/intervals[$0]}
+            var result=[Double](repeating:0,count:n)
+            result[0]=d[0];result[n-1]=d[n-2]
+            if n>2{for i in 1..<n-1{result[i]=(d[i-1]+d[i])/3}}
+            return result
+        }
+        let shapeSeries=series+[totals]
+        var tangents=shapeSeries.map{slopes($0)}
+        for i in 0..<n {
+            var factor=1.0
+            for (j,values) in shapeSeries.enumerated(){
+                let t=tangents[j][i]
+                for k in [i-1,i] where k>=0 && k<n-1 {
+                    let d=(values[k+1]-values[k])/intervals[k]
+                    if d==0 || t*d<0{factor=0}else if abs(t)>0{factor=min(factor,abs(3*d/t))}
+                }
+            }
+            for j in tangents.indices{tangents[j][i]*=factor}
+        }
+        for i in 0..<n-1 {
+            var factor=1.0
+            for (j,values) in shapeSeries.enumerated(){let delta=values[i+1]-values[i];if delta != 0 {let a=tangents[j][i]*intervals[i]/delta,b=tangents[j][i+1]*intervals[i]/delta,s=a*a+b*b;if s>9{factor=min(factor,3/sqrt(s))}}}
+            for j in tangents.indices{tangents[j][i]*=factor;tangents[j][i+1]*=factor}
+        }
+        let scale=plot.height/CGFloat(ceiling)
+        return zip(shapeSeries,tangents).map{values,slopes in
+            let points=values.enumerated().map{NSPoint(x:plot.minX+CGFloat(positions[$0.offset])*plot.width,y:plot.maxY-CGFloat($0.element)*scale)}
+            let curve=NSBezierPath();curve.move(to:points[0])
+            for i in 0..<n-1{let dt=CGFloat(intervals[i]),dx=plot.width*dt;curve.curve(to:points[i+1],controlPoint1:NSPoint(x:points[i].x+dx/3,y:points[i].y-CGFloat(slopes[i])*dt*scale/3),controlPoint2:NSPoint(x:points[i+1].x-dx/3,y:points[i+1].y+CGFloat(slopes[i+1])*dt*scale/3))}
+            return curve
+        }
+    }
     private func drawSummaryChart(left:CGFloat,right:CGFloat){
         let width=right-left,n=data.dates.count
         guard n>0 else{return}
@@ -305,53 +511,14 @@ final class DashboardView:FlippedView {
             let y=plot.maxY-CGFloat(totals[0]/ceiling)*plot.height;totalColor.setFill();NSBezierPath(ovalIn:NSRect(x:plot.midX-3,y:y-3,width:6,height:6)).fill()
             text(data.dates[0],x:plot.midX-30,y:204,w:60,size:8.5,color:.secondaryLabelColor,align:.center);return
         }
-        let positions: [Double]
-        if let values=data.chartPositions,values.count==n,values.allSatisfy({$0.isFinite}),zip(values,values.dropFirst()).allSatisfy({$0<$1}) {positions=values}
-        else{positions=(0..<n).map{Double($0)/Double(n-1)}}
-        let intervals=(0..<n-1).map{positions[$0+1]-positions[$0]}
-        // Linear slopes are shared by all series: the smoothed total equals
-        // the sum of the two provider curves at every point, including between days.
-        func slopes(_ values:[Double])->[Double]{
-            let d=(0..<n-1).map{(values[$0+1]-values[$0])/intervals[$0]}
-            var result=[Double](repeating:0,count:n)
-            result[0]=d[0];result[n-1]=d[n-2]
-            if n>2{for i in 1..<n-1{result[i]=(d[i-1]+d[i])/3}}
-            return result
-        }
-        let shapeSeries=series+[totals]
-        var tangents=shapeSeries.map{slopes($0)}
-        // Apply one common limiter per day, preserving additivity while
-        // preventing either provider line from overshooting its observations.
-        for i in 0..<n {
-            var factor=1.0
-            for (j,values) in shapeSeries.enumerated(){
-                let t=tangents[j][i]
-                for k in [i-1,i] where k>=0 && k<n-1 {
-                    let d=(values[k+1]-values[k])/intervals[k]
-                    if d==0 || t*d<0{factor=0}else if abs(t)>0{factor=min(factor,abs(3*d/t))}
-                }
-            }
-            for j in tangents.indices{tangents[j][i]*=factor}
-        }
-        for i in 0..<n-1 {
-            var factor=1.0
-            for (j,values) in shapeSeries.enumerated(){let delta=values[i+1]-values[i];if delta != 0 {let a=tangents[j][i]*intervals[i]/delta,b=tangents[j][i+1]*intervals[i]/delta,s=a*a+b*b;if s>9{factor=min(factor,3/sqrt(s))}}}
-            for j in tangents.indices{tangents[j][i]*=factor;tangents[j][i+1]*=factor}
-        }
-        let totalTangents=tangents.last!
-        func path(_ values:[Double],_ slopes:[Double])->NSBezierPath {
-            let scale=plot.height/CGFloat(ceiling)
-            let points=values.enumerated().map{NSPoint(x:plot.minX+CGFloat(positions[$0.offset])*plot.width,y:plot.maxY-CGFloat($0.element)*scale)}
-            let curve=NSBezierPath();curve.move(to:points[0])
-            for i in 0..<n-1{let dt=CGFloat(intervals[i]),dx=plot.width*dt;curve.curve(to:points[i+1],controlPoint1:NSPoint(x:points[i].x+dx/3,y:points[i].y-CGFloat(slopes[i])*dt*scale/3),controlPoint2:NSPoint(x:points[i+1].x-dx/3,y:points[i+1].y+CGFloat(slopes[i+1])*dt*scale/3))}
-            return curve
-        }
-        let totalPath=path(totals,totalTangents)
+        let positions=Self.chartPositions(data)
+        let paths=Self.smoothCurves(series,positions:positions,plot:plot,ceiling:ceiling),totalPath=paths.last!
         let area=totalPath.copy() as! NSBezierPath;area.line(to:NSPoint(x:plot.maxX,y:plot.maxY));area.line(to:NSPoint(x:plot.minX,y:plot.maxY));area.close()
         NSGraphicsContext.saveGraphicsState();area.addClip();NSGradient(starting:totalColor.withAlphaComponent(dark(self) ? 0.10 : 0.07),ending:totalColor.withAlphaComponent(0.005))?.draw(from:NSPoint(x:plot.midX,y:plot.minY),to:NSPoint(x:plot.midX,y:plot.maxY),options:[]);NSGraphicsContext.restoreGraphicsState()
-        let curves=summaryProviders.enumerated().map{(series[$0.offset],tangents[$0.offset],accent($0.element.id,self),CGFloat(1.45))}+[(totals,totalTangents,totalColor,CGFloat(2.0))]
-        for (values,slopes,color,weight) in curves{
-            let curve=path(values,slopes);curve.lineWidth=weight;curve.lineCapStyle = .round;curve.lineJoinStyle = .round;color.setStroke();curve.stroke()
+        for (i,curve) in paths.enumerated(){
+            let total=i==paths.count-1
+            curve.lineWidth=total ? 2.0 : 1.45;curve.lineCapStyle = .round;curve.lineJoinStyle = .round
+            (total ? totalColor : accent(summaryProviders[i].id,self)).setStroke();curve.stroke()
         }
         let middle=(1..<n-1).filter{positions[$0]>=0.25 && positions[$0]<=0.75}.min{abs(positions[$0]-0.5)<abs(positions[$1]-0.5)}
         let labelIndices=[0]+(middle.map{[$0]} ?? [])+[n-1]
@@ -644,9 +811,9 @@ final class HoverIntent {
     func cancel(){task?.cancel();task=nil;target=nil}
 }
 
-final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
+final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePickerDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-    private var rangePicker:NSPopUpButton?;private var rangeMenuOpen=false;private var managerOnly=false
+    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
@@ -675,7 +842,8 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private func installPointerMonitors(){
         guard monitors.isEmpty else{return}
         if let monitor=NSEvent.addGlobalMonitorForEvents(matching:[.leftMouseDown,.rightMouseDown],handler:{[weak self] event in
-            guard let self else{return}
+            // The system share sheet draws in another process, so its clicks arrive here as outside clicks.
+            guard let self,!self.anchoredMenuOpen else{return}
             // SwiftBar routes right-click and Option-click to its native menu.
             // Only an ordinary left-click on the star retains the panel toggle.
             if event.type == .rightMouseDown || event.modifierFlags.contains(.option) || !self.anchorRect.contains(NSEvent.mouseLocation){self.hide()}
@@ -705,7 +873,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     func applicationWillTerminate(_ notification:Notification){publishVisibility(false);observer.stop();removePointerMonitors();fallbackTimer?.invalidate()}
     @objc private func accessibilityChanged(){if panel.isVisible{reload(force:true)}}
     private func showModuleMenu(_ event:NSEvent,in view:NSView){
-        rangePicker?.menu?.cancelTracking();rangeMenuOpen=false;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)
+        rangePicker?.menu?.cancelTracking();anchoredMenuOpen=false;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)
         managerOnly=true;scrollOffset=0;layout()
     }
     @objc private func finishModules(){hide()}
@@ -730,7 +898,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     private func updatePresentation(){snapshot=interaction.displayed();layout()}
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
-        guard !rangeMenuOpen else{return}
+        guard !anchoredMenuOpen else{return}
         let moving = !flyouts.isEmpty && ProcessInfo.processInfo.systemUptime-(trail.last?.time ?? 0)<0.3
         if NSEvent.pressedMouseButtons & 1 != 0 || moving {
             reloadTask?.cancel();let task=DispatchWorkItem{[weak self] in self?.reload(force:force)};reloadTask=task
@@ -751,7 +919,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         };return y
     }
     private func layout(){
-        guard !rangeMenuOpen,let snapshot else{return};if panel.isVisible,let old=(panel.contentView as? Surface)?.content.subviews.first as? NSScrollView {scrollOffset=old.contentView.bounds.origin.y};let opened=flyouts.map{$0.key};closeFlyouts(from:0);rows=[]
+        guard !anchoredMenuOpen,let snapshot else{return};if panel.isVisible,let old=(panel.contentView as? Surface)?.content.subviews.first as? NSScrollView {scrollOffset=old.contentView.bounds.origin.y};let opened=flyouts.map{$0.key};closeFlyouts(from:0);rows=[]
         let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!,width:CGFloat=managerOnly ? 280 : 360,inner=width-16
         let entries=managerOnly ? snapshot.moduleOptions ?? [] : snapshot.entries
         let top:CGFloat=managerOnly ? 49 : (snapshot.dashboard.map{DashboardView.height($0)+8} ?? 36)
@@ -787,10 +955,15 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
             refresh.contentTintColor = .labelColor;refresh.toolTip="刷新数据";refresh.setAccessibilityLabel("刷新数据")
             refresh.target=self;refresh.action=#selector(refreshData);refresh.isEnabled=interaction.active != ["refresh"]
             content.addSubview(refresh)
+            let share=NSButton(frame:NSRect(x:inner-177,y:7.5,width:28,height:25))
+            share.bezelStyle = .rounded;share.controlSize = .small;share.title=""
+            share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));share.imagePosition = .imageOnly
+            share.contentTintColor = .labelColor;share.toolTip="分享用量图";share.setAccessibilityLabel("分享用量图")
+            share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share)
         }
         scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
-        panel.setFrame(NSRect(x:x,y:screen.visibleFrame.maxY-height-4,width:width,height:height),display:true)
+        panel.setFrame(NSRect(x:x,y:screen.visibleFrame.maxY-height-4,width:width,height:height),display:true);placeToast()
         for (depth,key) in opened.enumerated(){guard rows.indices.contains(depth),let row=rows[depth][key] else{break};openFlyout(row.entry,row:row,depth:depth,checkSource:false)}
         DispatchQueue.main.async{[weak self] in self?.checkPointer()}
     }
@@ -806,7 +979,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         return MenuLayout.configurationHover(row.entry,x:row.convert(window.convertPoint(fromScreen:NSEvent.mouseLocation),from:nil).x)
     }
     private func hover(_ entry:Entry,row:Row,depth:Int){
-        guard !rangeMenuOpen,pointerHits(row) else{return}
+        guard !anchoredMenuOpen,pointerHits(row) else{return}
         closeTask?.cancel()
         // A left-opening flyout is reached through the checkbox column.
         // Suppress new hover requests here, but retain the already open panel.
@@ -862,7 +1035,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
         flyouts.removeSubrange(depth...);if rows.count>depth+1{rows.removeSubrange((depth+1)...)}
     }
     private func checkPointer(){
-        guard panel.isVisible,!rangeMenuOpen else{return}
+        guard panel.isVisible,!anchoredMenuOpen else{return}
         let p=NSEvent.mouseLocation,top=topPanel(at:NSEvent.mouseLocation);recordPointer(p)
         let hit=rows.indices.reversed().lazy.compactMap{depth in self.rows[depth].values.first(where:{$0.window === top && self.rowRect($0).contains(p)}).map{(depth:depth,row:$0)}}.first
         // The highlight follows the pointer at once, unless it is crossing rows on its way into the open flyout.
@@ -915,9 +1088,64 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate {
     }
     @objc private func rangeTrackingBegan(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuWillOpen(menu)}}
     @objc private func rangeTrackingEnded(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuDidClose(menu)}}
-    func menuWillOpen(_ menu:NSMenu){rangeMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
-    func menuDidClose(_ menu:NSMenu){rangeMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
+    func menuWillOpen(_ menu:NSMenu){anchoredMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
+    func menuDidClose(_ menu:NSMenu){anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func refreshData(){performAction(["refresh"])}
+    // The picture covers Summary and the Harness cards only; subscriptions, balances and keys stay private.
+    private func sharePicture()->Data? {
+        guard let dashboard=snapshot?.dashboard else{return nil}
+        let card=ShareCard(dashboard,project:snapshot?.project ?? Project(name:"Token Monitor",url:"https://github.com/timecatbit/swiftbar-token-monitor"))
+        card.appearance=panel.effectiveAppearance
+        return card.png()
+    }
+    // Copy lives in our own menu: the system share sheet runs in another process, and its clicks
+    // used to look like clicks outside the panel, closing it before the copy ran.
+    @objc private func shareDashboard(_ sender:NSButton){
+        let menu=NSMenu();menu.autoenablesItems=false;menu.delegate=self
+        for (title,symbol,action) in [("复制图片","doc.on.doc",#selector(copySharePicture)),("分享…","square.and.arrow.up",#selector(openSharePicker(_:)))]{
+            let item=NSMenuItem(title:title,action:action,keyEquivalent:"");item.target=self;item.representedObject=sender
+            item.image=NSImage(systemSymbolName:symbol,accessibilityDescription:nil);menu.addItem(item)
+        }
+        menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height+4),in:sender)
+    }
+    @objc private func copySharePicture(){
+        guard let data=sharePicture() else{NSSound.beep();return}
+        NSPasteboard.general.clearContents()
+        showToast(NSPasteboard.general.writeObjects([ShareCard.pasteboardItem(data)]) ? "已复制图片，可直接粘贴" : "复制失败，请重试")
+    }
+    @objc private func openSharePicker(_ item:NSMenuItem){
+        guard let sender=item.representedObject as? NSButton,sender.window != nil,let data=sharePicture(),let dashboard=snapshot?.dashboard else{NSSound.beep();return}
+        let url=FileManager.default.temporaryDirectory.appendingPathComponent("Token Monitor "+dashboard.date+".png")
+        guard (try? data.write(to:url,options:.atomic)) != nil else{NSSound.beep();return}
+        let picker=NSSharingServicePicker(items:[url]);picker.delegate=self
+        anchoredMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)
+        picker.show(relativeTo:sender.bounds,of:sender,preferredEdge:.minY)
+    }
+    func sharingServicePicker(_ picker:NSSharingServicePicker,didChoose service:NSSharingService?){
+        anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}
+    }
+    // A short confirmation on the panel surface; a rebuild re-places it until it expires.
+    private func showToast(_ text:String){
+        toast=(text,Date().addingTimeInterval(1.8));placeToast()
+        DispatchQueue.main.asyncAfter(deadline:.now()+1.85){[weak self] in
+            guard let self,let toast=self.toast,toast.until<=Date() else{return}
+            self.toast=nil;self.toastView?.removeFromSuperview();self.toastView=nil
+        }
+    }
+    private func placeToast(){
+        toastView?.removeFromSuperview();toastView=nil
+        guard let toast,toast.until>Date(),let surface=panel.contentView as? Surface else{return}
+        let label=NSTextField(labelWithString:toast.text);label.font = .systemFont(ofSize:12,weight:.medium);label.textColor = .labelColor
+        let icon=NSImageView(image:NSImage(systemSymbolName:"checkmark.circle.fill",accessibilityDescription:nil) ?? NSImage());icon.contentTintColor=statusGreen(surface)
+        let size=label.intrinsicContentSize,width=size.width+48
+        let pill=FlippedView(frame:NSRect(x:(surface.bounds.width-width)/2,y:42,width:width,height:28));pill.wantsLayer=true
+        pill.layer?.cornerRadius=14;pill.layer?.borderWidth=0.5
+        surface.effectiveAppearance.performAsCurrentDrawingAppearance{pill.layer?.backgroundColor=background(surface).cgColor;pill.layer?.borderColor=NSColor.separatorColor.cgColor}
+        icon.frame=NSRect(x:12,y:7,width:14,height:14);label.frame=NSRect(x:32,y:(28-size.height)/2,width:size.width,height:size.height)
+        pill.addSubview(icon);pill.addSubview(label);pill.setAccessibilityElement(true);pill.setAccessibilityRole(.staticText);pill.setAccessibilityLabel(toast.text)
+        surface.addSubview(pill);toastView=pill
+        NSAccessibility.post(element:pill,notification:.announcementRequested,userInfo:[.announcement:toast.text])
+    }
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
     private func abortAction(){
         actionTimeout?.cancel();pendingAction=nil;pendingSince=nil;updateFallback();interaction.active=nil;interaction.queued=[]

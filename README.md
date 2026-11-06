@@ -10,7 +10,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 
 ## 主页与模块
 
-左键星星打开主页。Summary 保留在最上方，下方依次为 Harness 用量、订阅、API、其他四组，组之间只用分隔线，不加标题；未启用的类别不占位。模块管理面板仍按这四类显示标题。Summary 标题旁的刷新按钮立即刷新全部数据。右键星星提供“主页模块…”、“自动检测”和“关于 token-monitor”（版本、作者、GitHub 仓库），其余为 SwiftBar 自带菜单（插件目录、刷新所有插件等），不重复主页的操作。
+左键星星打开主页。Summary 保留在最上方，下方依次为 Harness 用量、订阅、API、其他四组，组之间只用分隔线，不加标题；未启用的类别不占位。模块管理面板仍按这四类显示标题。Summary 标题旁的刷新按钮立即刷新全部数据；旁边的分享按钮生成一张分享卡片：范围与日期、API 等值估算、Token/请求/缓存命中、趋势图，以及每个工具的费用、占比、请求/缓存/输出/会话和全部模型明细（未计入 Summary 的来源单独标注；不含订阅、API 余额和 Key），用不透明背景导出，不受桌面透过玻璃的影响，底部署名 Token Monitor 和 GitHub 链接，点按钮可“复制图片”（复制后面板上有提示，可直接粘贴到聊天软件），或“分享…”用系统分享菜单发送。右键星星提供“主页模块…”、“自动检测”和“关于 token-monitor”（版本、作者、GitHub 仓库），其余为 SwiftBar 自带菜单（插件目录、刷新所有插件等），不重复主页的操作。
 
 “主页模块…”会打开 280pt 宽的紧凑面板：修改自动保存，支持快速连续点击，点击“完成”或面板外部才关闭。也可以直接在主页内右键进入模块管理。悬停模块名称配置数据来源；“外观与设置”紧接顶部的“允许折叠”，之后才是模块分类列表。
 
@@ -22,10 +22,10 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | OpenCodex | 本机或自定义管理接口的 Token、请求、费用、模型分布；附代理管理 |
 | Claude | Claude 桌面 App 登记的可读取会话用量；排除未登记的独立 CLI 会话，未知价格显示未计价 |
 | ChatGPT 本机用量 | Codex 普通/归档会话，支持 `.jsonl` 和 `.jsonl.zst`；优先单次用量，兼容仅累计计数，不重复加缓存或 reasoning；按 ccusage 价格表估算 API 等值费用，含单次请求长上下文分档与 fast/flex 服务等级倍率 |
-| OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用 |
-| DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志 |
-| WorkBuddy | 当前与旧版 `projects` JSONL；按响应 ID 去重，缓存与 reasoning 不重复计数，Credit 不视作美元 |
-| Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token |
+| OpenCode | 只读 `opencode.db` 中的 assistant 用量与已记录费用；未记录费用时按价格表估算 |
+| DeepSeek Harness | 用户指定的会话目录；支持 v2–v4 JSONL 和 Zstandard 压缩日志；按价格表估算 API 等值费用 |
+| WorkBuddy | 当前与旧版 `projects` JSONL；按响应 ID 去重，缓存与 reasoning 不重复计数，Credit 不视作美元；按价格表估算 API 等值费用（如 DeepSeek、GLM 模型） |
+| Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token；按价格表估算 API 等值费用 |
 | DeepSeek API | 官方 `/user/balance`；可独立配置 API key 文件，也可复用 OpenCodex 已配置的官方 DeepSeek 凭据 |
 | ChatGPT 订阅 | 勾选并配置了 OpenCodex 时显示其管理的 ChatGPT 账户额度，否则读取本机 ChatGPT 登录的编程工具额度；不代表网页聊天全部限额 |
 | Claude 订阅 | 可复用 Claude Code 登录主动查询最新订阅用量，无需 Cookie 或模型调用；也可只读本机快照。显示用量、重置时间及同一响应中的额外用量（本月已用/上限，返回时含余额） |
@@ -137,7 +137,8 @@ Claude 用量索引只保存规范化计数与 128 位哈希 ID；只追加新�
 
 ## 统计口径与隐私
 
-- 费用是已知价格的 API 等值估算，或客户端记录的费用，不是订阅账单。没有价格的数据会保留 Token 并标记未计价。
+- 费用是已知价格的 API 等值估算，或客户端记录的费用，不是订阅账单。没有价格的数据会保留 Token 并标记未计价（如 WorkBuddy 的 `default-model` 不是真实模型名，不会被猜价）。
+- 价格表来自 ccusage 的 models.dev 价格快照（美元/百万 Token）：`lib/codex-pricing.json` 收录 OpenAI 模型及 Codex 规则，`lib/model-pricing.json` 收录 DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 的官方模型名，转售商前缀的价格不采用。维护者在每次发布前运行 `python3 scripts/update_pricing.py <ccusage 检出目录>` 更新两张表，当前快照为 ccusage `30b653f7`（2026-11-06）。
 - Claude 缓存写入区分 5 分钟/1 小时时长，存在明细时以明细为准。有效 `costUSD` 优先作为客户端记录费用，缺失时再按已知价格估算；未知价格不伪造零费用。`advisor_message` 按自身模型单独计入，普通迭代不重复相加。
 - 响应优先按 message/request ID 去重；缺少 request ID 时限制到会话和时间，真实响应 ID 跨流式内容块合并。侧链重放保留父响应，独立侧链回答正常统计。文件替换、删减、压缩或归档迁移会更新索引，避免残留旧统计。去重先于范围过滤，切换日期范围不重复解析日志。
 - 同时显示 OpenCodex 和 ChatGPT 本机用量时，OpenCodex 有可用数据则作为 Summary 的统计来源；ChatGPT 保留独立明细，避免同一调用跨代理和客户端重复相加。关闭 OpenCodex 后，ChatGPT 会计入 Summary。
