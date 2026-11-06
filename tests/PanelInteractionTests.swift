@@ -198,4 +198,5 @@ let picture=shareCard.png().flatMap{NSBitmapImageRep(data:$0)}
 expect(picture?.pixelsWide==Int(shareCard.bounds.width*2) && picture?.hasAlpha==true && picture.map{$0.colorAt(x:2,y:2)?.alphaComponent==1} == true,"Share picture is a 2x opaque PNG")
 let clip=shareCard.png().map{ShareCard.pasteboardItem($0)}
 expect(clip.map{Set($0.types)==Set([NSPasteboard.PasteboardType.png,.tiff])}==true,"Copied picture carries PNG and TIFF, not a file URL")
+expect(PanelInteraction.keepsPanelOpen(["retry-claude-usage"]),"Retrying Claude usage keeps the panel open")
 print("Native interaction assertions: \(assertions) passed")

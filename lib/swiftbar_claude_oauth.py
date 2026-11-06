@@ -111,8 +111,18 @@ def query_usage(token):
     except (UsageError,ValueError,TypeError):raise OAuthError('format','用量格式尚未支持') from None
 
 
-def renew_with_claude():
-    """Let the CLI's startup auth check rotate its own token. No input is sent."""
+RENEW_SECONDS=30
+
+
+def renewed(before):
+    try:credential=credentials()
+    except OAuthError:return False
+    return credential['owner']!=before and credential['expires']>time.time()+30
+
+
+def renew_with_claude(before=None):
+    """Let the CLI's startup auth check rotate its own token. No input is sent. Recent CLI builds
+    take well over 8 seconds to get there, so wait up to 30 and stop as soon as the login changes."""
     binary=shutil.which('claude')
     if not binary:raise OAuthError('expired','登录已过期，请安装并登录 Claude Code')
     with tempfile.TemporaryDirectory(prefix='swiftbar-claude-auth-') as directory:
@@ -123,11 +133,14 @@ def renew_with_claude():
             process=subprocess.Popen([binary,'--strict-mcp-config','--tools','','--settings',json.dumps(settings)],
                 stdin=slave,stdout=slave,stderr=slave,cwd=directory,start_new_session=True,
                 env=dict(os.environ,TERM='xterm-256color',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',DISABLE_AUTOUPDATER='1'))
-            os.close(slave);slave=None;deadline=time.monotonic()+8
+            os.close(slave);slave=None;deadline=time.monotonic()+RENEW_SECONDS;check=time.monotonic()+3
             while process.poll() is None and time.monotonic()<deadline:
                 if select.select([master],[],[],.2)[0]:
                     try:os.read(master,65536)  # Discard CLI screen content; never save it.
                     except OSError:break
+                if before and time.monotonic()>=check:
+                    check+=2
+                    if renewed(before):break
         finally:
             if slave is not None:os.close(slave)
             if process and process.poll() is None:
@@ -158,7 +171,8 @@ def fetch(state,consent=False,force=False,requested_at=0):
         # Revoked keychain permission must not produce repeated background prompts.
         if cached.get('paused') and not force:
             return unavailable(cached['error']),(0,cached['error'],None)
-        if now<cached.get('retryAt',0):
+        # An explicit retry skips our own backoff, but a server rate limit always holds.
+        if now<cached.get('retryAt',0) and (not force or cached.get('limited')):
             return cached.get('payload') or unavailable(cached.get('error','稍后重试')),(0,cached.get('error','稍后重试'),None)
         owner=None
         try:
@@ -170,7 +184,7 @@ def fetch(state,consent=False,force=False,requested_at=0):
             if credential['expires']<=now+30:
                 if now-cached.get('lastRenewAt',0)<300:raise OAuthError('expired','登录仍未续期，请在 Claude Code 检查登录')
                 cached.update(lastRenewAt=now,checkedAt=now);write(path,cached)
-                renew_with_claude();credential=credentials();owner=credential['owner']
+                renew_with_claude(owner);credential=credentials();owner=credential['owner']
                 if credential['expires']<=time.time()+30:raise OAuthError('expired','登录仍未续期，请在 Claude Code 检查登录')
                 cached.pop('payload',None)
             payload=cached.get('payload')
@@ -180,7 +194,7 @@ def fetch(state,consent=False,force=False,requested_at=0):
             except OAuthError as error:
                 if error.code!='expired' or now-cached.get('lastRenewAt',0)<300:raise
                 cached.update(lastRenewAt=now,checkedAt=now);write(path,cached)
-                renew_with_claude();credential=credentials();owner=credential['owner']
+                renew_with_claude(owner);credential=credentials();owner=credential['owner']
                 cached.pop('payload',None)
                 if credential['expires']<=time.time():raise error
                 payload=query_usage(credential['token'])
@@ -193,7 +207,7 @@ def fetch(state,consent=False,force=False,requested_at=0):
             paused=error.code in ('keychain','missing','scope','credential','profile')
             write(path,{'schema':1,'owner':owner,'payload':payload,'checkedAt':now,
                 'lastRenewAt':cached.get('lastRenewAt',0),'error':str(error),'paused':paused,
-                'renewFailedOwner':owner if error.code=='expired' else None,
+                'renewFailedOwner':owner if error.code=='expired' else None,'limited':error.code=='limited',
                 'retryAt':0 if paused else time.time()+error.retry})
             return payload or unavailable(str(error)),(0,str(error),None)
         except (OSError,subprocess.SubprocessError):

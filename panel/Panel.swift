@@ -653,24 +653,26 @@ final class Row:NSButton {
         let top=(bounds.height-blockHeight)/2
         if let state=entry.statusLight {drawStatusLight(state,centre:NSPoint(x:19,y:top+titleHeight/2),in:self)}
         MenuLayout.draw(entry.label,in:NSRect(x:left,y:top,width:labelWidth,height:titleHeight),font:font,color:color)
+        // With a detail line below, the value sits on the title line so the two never overlap.
+        let line=entry.detail == nil ? bounds.midY : top+titleHeight/2
         if let value=entry.value {
             let valueWidth=MenuLayout.valueWidth(entry)
-            let valueRect=NSRect(x:bounds.width-trailing-valueWidth,y:bounds.midY-10,width:valueWidth,height:20)
+            let valueRect=NSRect(x:bounds.width-trailing-valueWidth,y:line-10,width:valueWidth,height:20)
             let textHeight=MenuLayout.height(value,font:MenuLayout.valueFont,width:valueWidth)
             if entry.attention==true {
                 NSColor.controlAccentColor.withAlphaComponent(dark(self) ? 0.22 : 0.10).setFill()
                 NSBezierPath(roundedRect:valueRect,xRadius:7,yRadius:7).fill()
-                MenuLayout.draw(value,in:NSRect(x:valueRect.minX+8,y:bounds.midY-textHeight/2,width:valueRect.width-16,height:textHeight),font:MenuLayout.valueFont,color:dark(self) ? accent("opencodex",self) : .controlAccentColor,alignment:.center)
+                MenuLayout.draw(value,in:NSRect(x:valueRect.minX+8,y:line-textHeight/2,width:valueRect.width-16,height:textHeight),font:MenuLayout.valueFont,color:dark(self) ? accent("opencodex",self) : .controlAccentColor,alignment:.center)
             }else if let configured=MenuLayout.configured(value){
-                drawStatusLight(configured ? "ok" : "unknown",centre:NSPoint(x:valueRect.minX+3.5,y:bounds.midY),in:self)
-                MenuLayout.draw(value,in:NSRect(x:valueRect.minX+12,y:bounds.midY-textHeight/2,width:valueRect.width-12,height:textHeight),font:MenuLayout.valueFont,color:.secondaryLabelColor,alignment:.right)
+                drawStatusLight(configured ? "ok" : "unknown",centre:NSPoint(x:valueRect.minX+3.5,y:line),in:self)
+                MenuLayout.draw(value,in:NSRect(x:valueRect.minX+12,y:line-textHeight/2,width:valueRect.width-12,height:textHeight),font:MenuLayout.valueFont,color:.secondaryLabelColor,alignment:.right)
             }else{
-                MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:bounds.midY-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:usageColor(entry.usageLevel) ?? (entry.actionable ? .labelColor : .secondaryLabelColor),alignment:.right)
+                MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:line-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:usageColor(entry.usageLevel) ?? (entry.actionable ? .labelColor : .secondaryLabelColor),alignment:.right)
             }
         }
         if let detail=entry.detail {MenuLayout.draw(detail,in:NSRect(x:left,y:top+titleHeight+3,width:bounds.width-left-trailing,height:detailHeight),font:MenuLayout.detailFont,color:.secondaryLabelColor)}
 
-        if !entry.children.isEmpty{let p=NSBezierPath();p.move(to:NSPoint(x:bounds.width-19,y:bounds.midY-4));p.line(to:NSPoint(x:bounds.width-15,y:bounds.midY));p.line(to:NSPoint(x:bounds.width-19,y:bounds.midY+4));p.lineWidth=1.2;p.lineJoinStyle = .round;p.lineCapStyle = .round;NSColor.labelColor.setStroke();p.stroke()}
+        if !entry.children.isEmpty{let p=NSBezierPath();p.move(to:NSPoint(x:bounds.width-19,y:line-4));p.line(to:NSPoint(x:bounds.width-15,y:line));p.line(to:NSPoint(x:bounds.width-19,y:line+4));p.lineWidth=1.2;p.lineJoinStyle = .round;p.lineCapStyle = .round;NSColor.labelColor.setStroke();p.stroke()}
     }
 }
 struct Flyout {var panel:Panel;var key:String;weak var row:Row?}
@@ -688,13 +690,13 @@ struct PanelInteraction {
     }
     // Actions without a dialog keep the panel open so their result appears in place.
     static func keepsPanelOpen(_ action:[String])->Bool {
-        ["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-subscription","set-range","test-api-key"].contains(action.first ?? "") || isPreference(action)
+        ["refresh-view","refresh-source","refresh","refresh-monitor","check-app-updates","set-subscription","set-range","test-api-key","retry-claude-usage"].contains(action.first ?? "") || isPreference(action)
     }
     // While an action runs, only the row that started it says so.
     static func runningLabel(_ entry:Entry,active:[String]?)->String? {
         guard let active,let name=entry.action?.first else{return nil}
         if name=="test-api-key"{return entry.action==active ? "正在测试…" : nil}
-        return ["refresh","refresh-monitor","check-app-updates","set-range"].contains(name) ? "正在刷新…" : nil
+        return ["refresh","refresh-monitor","check-app-updates","set-range","retry-claude-usage"].contains(name) ? "正在刷新…" : nil
     }
     mutating func submit(_ action:[String])->Submission {
         guard !action.isEmpty else{return .ignored}

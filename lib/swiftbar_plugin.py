@@ -69,7 +69,7 @@ CONFIG_FILE = os.path.join(OCX_HOME, "config.json")
 SERVICE_LOG = os.path.join(OCX_HOME, "service.log")
 RELEASES_URL = "https://github.com/lidge-jun/opencodex/releases/latest"
 KOMARI_BASE_URL = os.environ.get("KOMARI_BASE_URL", "").rstrip("/")
-VERSION = "5.12.0"
+VERSION = "5.12.1"
 PRODUCT = "Token Monitor"
 AUTHOR = "minicoke"
 REPOSITORY = "https://github.com/timecatbit/swiftbar-token-monitor"
@@ -1458,7 +1458,10 @@ def claude_subscription_load():
     # Code OAuth is independent of browser cookies and does not invoke a model.
     if view_settings()['claudeOAuthUsage']:
         requested=read_cache('resource-checks').get('claude-subscription',0)
-        payload,error=claude_oauth.fetch(STATE_DIR,consent=True,requested_at=requested)
+        # 立即刷新用量 is an explicit retry: renew once even after a failed renewal for this login.
+        retry=read_cache('claude-retry').get('requestedAt',0)
+        payload,error=claude_oauth.fetch(STATE_DIR,consent=True,requested_at=max(requested,retry),force=bool(retry))
+        if retry:write_json_cache(cache_path('claude-retry'),{'schema':1})
         if error:payload=dict(payload,fetchError=error[1])
         # Publish errors as their own state; don't reuse a different App account.
         return payload,None
@@ -1508,20 +1511,22 @@ def claude_subscription_lines(data):
                 # The service often returns xx:59:59.999 for an xx:00 reset.
                 reset='重置于 '+(at+timedelta(seconds=30)).strftime('%m/%d %H:%M')
             except ValueError:pass
-        if stale or failed:reset=(reset+'\n' if reset else '')+('刷新失败，保留最近一次成功的数据' if failed else '数据待更新')
         rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=reset,level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
     extra=payload.get('extraUsage')
     if isinstance(extra,dict) and extra.get('enabled'):
         symbol='$' if extra.get('currency','USD')=='USD' else extra['currency']+' '
         money=lambda value:symbol+'%.2f'%value
         rows.append(item('额外用量 · 本月',badge=money(extra['used'])+(' / '+money(extra['limit']) if extra.get('limit') else ''),level=1,
-                         paneldetail=('剩余 '+money(max(0,extra['limit']-extra['used'])) if extra.get('limit') else '未设置每月上限')+('\n刷新失败，保留最近一次成功的数据' if failed else '\n数据待更新' if stale else '')))
+                         paneldetail='剩余 '+money(max(0,extra['limit']-extra['used'])) if extra.get('limit') else '未设置每月上限'))
         if isinstance(extra.get('balance'),(int,float)):rows.append(item('额外用量余额',badge=money(extra['balance']),level=1))
     elif isinstance(extra,dict):rows.append(item('额外用量',badge='未开启',level=1,color=MUTED,size=10))
-    if windows:rows.append(item('更新时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
-    if failed:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
+    # Failures and stale data are explained once here, like every other source, not on each row.
+    age=freshness({'_fetchedAt':payload['updatedAt']}) if windows else ''
+    if read_cache('claude-retry').get('requestedAt'):rows.append(item('更新时间',badge='正在刷新',level=1,color=MUTED,size=10))
+    elif failed:rows.append(item('更新时间',badge='刷新失败',paneldetail=str(error[1])+('\n保留最近一次成功的数据 · '+age if windows else ''),level=1,color=WARN,size=10))
+    elif windows:rows.append(item('更新时间',badge=age,paneldetail='数据待更新' if stale else None,level=1,color=MUTED,size=10))
     if view_settings()['claudeOAuthUsage']:
-        rows.append(item('立即刷新用量',level=1,sfimage='arrow.clockwise',**act('refresh-source','claude-subscription')))
+        rows.append(item('立即刷新用量',level=1,sfimage='arrow.clockwise',**act('retry-claude-usage')))
         if failed:rows.append(item('重新授权读取登录…',level=1,**act('set-claude-oauth','true')))
     else:
         rows.append(item('启用 Claude Code 登录查询…',level=1,sfimage='arrow.triangle.2.circlepath',paneldetail='主动获取订阅用量，不读取 Cookie',**act('set-claude-oauth','true')))
@@ -2942,9 +2947,13 @@ def run_action(name, extra):
         if value=='true':
             if not view_settings()['claudeOAuthUsage'] and not confirm('使用 Claude Code 登录查询用量？','读取 Claude Code 现有登录，仅向 api.anthropic.com 查询订阅用量。无需 Cookie 或模型调用。登录过期时可启动 Code 自检续期，不发送消息。\n凭据只在内存；不写入插件配置或日志。macOS 可能询问钥匙串权限。',accept='启用'):return
             preferences.update(STATE_DIR,'claude-oauth','true')
-            claude_oauth.fetch(STATE_DIR,consent=True,force=True)
+            # Renewal can take half a minute, so the background worker does it, as a retry.
+            write_json_cache(cache_path('claude-retry'),{'schema':1,'requestedAt':time.time()})
         else:
             preferences.update(STATE_DIR,'claude-oauth','false');claude_oauth.clear(STATE_DIR)
+        invalidate_caches(['claude_subscription']);schedule_background_refresh()
+    elif name == 'retry-claude-usage':
+        write_json_cache(cache_path('claude-retry'),{'schema':1,'requestedAt':time.time()})
         invalidate_caches(['claude_subscription']);schedule_background_refresh()
     elif name == 'set-claude-live':
         value=extra[0] if len(extra)==1 else ''

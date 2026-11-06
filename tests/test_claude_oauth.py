@@ -36,6 +36,14 @@ class OAuthTests(unittest.TestCase):
    _,error=oauth.fetch(self.root,True);oauth.fetch(self.root,True,force=True)
    with patch.object(oauth.time,'time',return_value=self.now+600):oauth.fetch(self.root,True)
   self.assertIsNotNone(error);renew.assert_called_once();query.assert_not_called()
+ def test_explicit_retry_renews_again_despite_backoff_and_failed_renewal(self):
+  # Background refreshes keep pushing the backoff forward; a click must still try once more.
+  with patch.object(oauth,'credentials',return_value=dict(self.credential,expires=self.now-1)),patch.object(oauth,'renew_with_claude') as renew,patch.object(oauth,'query_usage'):
+   oauth.fetch(self.root,True)
+   with patch.object(oauth.time,'time',return_value=self.now+120):oauth.fetch(self.root,True)
+   self.assertEqual(renew.call_count,1)
+   with patch.object(oauth.time,'time',return_value=self.now+400):_,error=oauth.fetch(self.root,True,force=True)
+  self.assertEqual(renew.call_count,2);self.assertIsNotNone(error)
  def test_401_gets_one_cli_renewal_not_a_login_or_model_request(self):
   with patch.object(oauth,'credentials',return_value=self.credential),patch.object(oauth,'renew_with_claude') as renew,patch.object(oauth,'query_usage',side_effect=[oauth.OAuthError('expired','expired'),self.payload]) as query:
    _,error=oauth.fetch(self.root,True)
@@ -82,6 +90,17 @@ class OAuthTests(unittest.TestCase):
   with patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':''}),patch.object(oauth,'keychain_data',return_value=json.dumps({'claudeAiOauth':{'accessToken':'private-token-fixture','expiresAt':(self.now+60)*1000,'scopes':[]}}).encode()),self.assertRaises(oauth.OAuthError) as caught:
    oauth.credentials()
   self.assertEqual(caught.exception.code,'scope')
+ def test_renewal_waits_for_slow_cli_and_stops_once_login_changes(self):
+  # Claude Code 2.1.3xx needs well over 8 seconds to rotate its token at startup.
+  self.assertGreaterEqual(oauth.RENEW_SECONDS,25)
+  process=Mock();process.poll.return_value=None;process.pid=4242
+  clock=iter(range(0,100))
+  fresh=dict(self.credential,owner='new-owner')
+  with patch.object(oauth.shutil,'which',return_value='/test/claude'),patch.object(oauth.subprocess,'Popen',return_value=process),\
+       patch.object(oauth.select,'select',return_value=([],[],[])),patch.object(oauth.time,'monotonic',side_effect=lambda:next(clock)),\
+       patch.object(oauth,'credentials',side_effect=[dict(self.credential),fresh]) as read,patch.object(oauth.os,'killpg') as stop:
+   oauth.renew_with_claude(self.credential['owner'])
+  self.assertEqual(read.call_count,2);stop.assert_called()
  def test_cli_startup_sends_no_input_and_disables_hooks_and_tools(self):
   process=Mock();process.poll.return_value=0
   with patch.object(oauth.shutil,'which',return_value='/test/claude'),patch.object(oauth.subprocess,'Popen',return_value=process) as spawn,patch.object(oauth.os,'write') as write_input:

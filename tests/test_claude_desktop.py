@@ -102,6 +102,28 @@ class DesktopTests(unittest.TestCase):
   self.assertIn('panelusagelevel=warning',lines);self.assertIn('panelusagelevel=critical',lines)
   self.assertEqual([self.m.usage_level(v) for v in (0,69,70,89,90,100)],['normal','normal','warning','warning','critical','critical'])
   self.assertIsNone(self.m.usage_level(99,stale=True))
+ def test_refresh_button_is_an_explicit_retry_but_opening_the_flyout_is_not(self):
+  preferences.update(self.m.STATE_DIR,'claude-oauth','true')
+  answer=({'source':'claude-oauth','windows':[],'state':'x','stale':True},None)
+  with patch.object(self.m.claude_oauth,'fetch',return_value=answer) as fetch,patch.object(self.m,'schedule_background_refresh'):
+   self.m.claude_subscription_load();self.assertFalse(fetch.call_args.kwargs['force'])
+   self.m.run_action('retry-claude-usage',[])
+   self.assertIn('正在刷新','\n'.join(self.m.claude_subscription_lines({'claude_subscription':{'source':'claude-oauth','windows':[]}})))
+   self.m.claude_subscription_load();self.assertTrue(fetch.call_args.kwargs['force'])
+   self.m.claude_subscription_load();self.assertFalse(fetch.call_args.kwargs['force'])
+  rows='\n'.join(self.m.claude_subscription_lines({'claude_subscription':{'source':'claude-oauth','windows':[]}}))
+  self.assertIn('param3=retry-claude-usage',rows)
+ def test_refresh_failure_is_explained_once_not_on_every_row(self):
+  limits={'limits':[{'kind':'weekly','percent':10,'resets_at':'2026-11-12T13:59:59Z'},{'percent':5,'scope':{'model':{'display_name':'Fable'}}}]}
+  payload=dict(live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':2000,'used_credits':0})),source='claude-oauth')
+  error=(0,'登录续期未完成，请在 Claude Code 检查登录',None)
+  rows=self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':payload,'claude_subscription_error':error}))[0]['children']
+  details='\n'.join(r.get('detail') or '' for r in rows if r['label']!='更新时间')
+  self.assertNotIn('刷新失败',details)
+  status=[r for r in rows if r['label']=='更新时间']
+  self.assertEqual(len(status),1);self.assertEqual(status[0]['value'],'刷新失败')
+  self.assertIn('登录续期未完成',status[0]['detail']);self.assertIn('保留最近一次成功的数据',status[0]['detail'])
+  self.assertFalse(any(r['label'].startswith('登录续期') for r in rows))
  def test_automatic_refresh_never_reads_cookie_even_when_permission_exists(self):
   preferences.update(self.m.STATE_DIR,'claude-live','true')
   with patch.object(live,'live_subscription') as network:
