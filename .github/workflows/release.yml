@@ -48,8 +48,10 @@ jobs:
           test -x "$scratch/plugins/token-monitor.30s.sh"
           codesign --verify --deep --strict "$scratch/plugins/.opencodex-panel/OpenCodexPanel.app"
           ls "$scratch/plugins/.opencodex-panel/python/"*/curl_cffi > /dev/null
-          if grep -rqF -e "$GITHUB_WORKSPACE" -e "$scratch/unpacked" "$scratch/plugins"; then
-            echo 'The installed plugin refers to the package or source folder.'; exit 1
+          if matches=$(grep -rlF -e "$GITHUB_WORKSPACE" -e "$scratch/unpacked" "$scratch/plugins"); then
+            echo 'The installed plugin refers to the package or source folder:'
+            for file in $matches; do echo "$file"; grep -aoF -e "$GITHUB_WORKSPACE" -e "$scratch/unpacked" "$file" | sort -u | head -3; done
+            exit 1
           fi
       - uses: actions/upload-artifact@v4
         with:
