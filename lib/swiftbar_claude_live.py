@@ -80,8 +80,8 @@ def desktop_session(root):
 
 
 def request_json(client,session,resource):
-    """Only these two read-only endpoints may receive the in-memory session."""
-    if resource not in ('usage','prepaid/credits'):raise UsageError('用量接口路径异常')
+    """Only the read-only usage endpoint may receive the in-memory session."""
+    if resource!='usage':raise UsageError('用量接口路径异常')
     if not UUID.fullmatch(session.get('lastActiveOrg','')):raise UsageError('Claude 组织格式异常')
     raw=bytearray();too_large=False
     def receive(chunk):
@@ -109,24 +109,7 @@ def request_json(client,session,resource):
     return data
 
 
-def parse_credits(data):
-    """Use the prepaid balance only; spend caps and rounded balance_credits aren't balances."""
-    if not isinstance(data,dict):return None
-    balance=data.get('balance')
-    currency=data.get('currency')
-    if not isinstance(balance,dict):return None
-    money=balance.get('money')
-    value=money if isinstance(money,dict) else balance.get('credits')
-    if not isinstance(value,dict):return None
-    currency=value.get('currency',currency)
-    minor=value.get('amount_minor');exponent=value.get('exponent')
-    if not isinstance(currency,str) or not re.fullmatch('[A-Z]{3}',currency):return None
-    if type(minor) is not int or not 0<=minor<=10**15:return None
-    if type(exponent) is not int or not 0<=exponent<=6:return None
-    return {'amount':minor/(10**exponent),'currency':currency,'decimals':exponent}
-
-
-def parse_usage(data,now=None,credits=None,usage_error=None,credits_error=None):
+def parse_usage(data,now=None):
     if not isinstance(data,dict):raise UsageError('用量格式尚未支持')
     windows=[];seen=set()
     def add(label,percent,reset):
@@ -151,26 +134,15 @@ def parse_usage(data,now=None,credits=None,usage_error=None,credits_error=None):
         for key,label in [('five_hour','5 小时'),('seven_day','本周'),('seven_day_opus','Opus 本周'),('seven_day_sonnet','Sonnet 本周')]:
             row=data.get(key)
             if isinstance(row,dict):add(label,row.get('utilization'),row.get('resets_at'))
-    balance=parse_credits(credits)
-    if not windows and not balance:raise UsageError(usage_error or '尚未返回可识别的订阅用量')
-    result={'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,
-            'state':'实时用量' if windows else '用量暂不可用','source':'live'}
-    if balance is not None:result['creditBalance']=balance
-    if not windows:result['usageError']=usage_error or '尚未返回可识别的订阅用量'
-    if credits_error:result['creditsError']=credits_error
-    elif balance is None:result['creditsError']='额度接口未提供可识别的余额'
-    return result
+    if not windows:raise UsageError('尚未返回可识别的订阅用量')
+    return {'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,'state':'在线快照','source':'live'}
 
 
 def live_subscription(root,consent=False):
     if consent is not True:return None,(0,'尚未授权读取 Claude 登录',None)
     try:
         with transport_client() as client:
-            session=desktop_session(root);responses={};errors={}
-            for resource in ('usage','prepaid/credits'):
-                try:responses[resource]=request_json(client,session,resource)
-                except UsageError as error:errors[resource]=str(error)
-            return parse_usage(responses.get('usage') or {},credits=responses.get('prepaid/credits'),
-                usage_error=errors.get('usage'),credits_error=errors.get('prepaid/credits')),None
+            session=desktop_session(root)
+            return parse_usage(request_json(client,session,'usage')),None
     except UsageError as error:return None,(0,str(error),None)
     except Exception:return None,(0,'Claude 用量读取失败，稍后重试',None)

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
 from swiftbar_config import migrate_config
 from install_transport import prepare as prepare_transport
+import swiftbar_claude_local as claude_local
 
 def copy(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +72,8 @@ def main():
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     copy(transport,destination/relative_transport)
     migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
+    state=Path.home()/'Library/Application Support/SwiftBarToken'
+    if claude_local.enabled(state):claude_local.install(state)
     # Publish the script last; other plugins and runtime state are preserved.
     destination.mkdir(parents=True, exist_ok=True)
     temporary = destination / '.opencodex-install.tmp'

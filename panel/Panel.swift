@@ -4,7 +4,7 @@ import Darwin
 
 struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
-    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
+    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var usageLevel:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
     var actionable:Bool { !children.isEmpty || href != nil || action != nil }
     var isModule:Bool {action?.first=="set-module"}
     var key:String {if isModule,let action{return action.prefix(2).joined(separator:"\u{001F}")}
@@ -30,6 +30,9 @@ func accent(_ id:String,_ view:NSView)->NSColor {
     return dark(view) ? NSColor(srgbRed:0.55,green:0.71,blue:0.94,alpha:1) : NSColor(srgbRed:0.32,green:0.51,blue:0.78,alpha:1)
 }
 func statusGreen(_ view:NSView)->NSColor {dark(view) ? NSColor(srgbRed:0.49,green:0.79,blue:0.61,alpha:1) : NSColor(srgbRed:0.18,green:0.49,blue:0.31,alpha:1)}
+func usageColor(_ level:String?)->NSColor? {
+    switch level {case "normal":return .labelColor;case "warning":return .systemOrange;case "critical":return .systemRed;default:return nil}
+}
 func share(_ ratio:Double)->String {let value=ratio*100;return String(format:(value>0 && value<1)||(value>99 && value<100) ? "%.1f%%" : "%.0f%%",value)}
 func tokens(_ value:Double)->String {
     if value>=1e9{return String(format:"%.2fB",value/1e9)}
@@ -366,7 +369,7 @@ enum MenuLayout {
     }
     static func draw(_ value:String,in rect:NSRect,font:NSFont,color:NSColor,alignment:NSTextAlignment = .left){
         let style=NSMutableParagraphStyle();style.alignment=alignment;style.lineBreakMode = .byWordWrapping
-        (value as NSString).draw(in:rect,withAttributes:[.font:font,.foregroundColor:color,.paragraphStyle:style])
+        (value as NSString).draw(with:rect,options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:font,.foregroundColor:color,.paragraphStyle:style],context:nil)
     }
 }
 
@@ -418,7 +421,7 @@ final class Row:NSButton {
             } else {glyph.draw(in:NSRect(x:12,y:(bounds.height-14)/2,width:14,height:14))}
         }
         let trailing=MenuLayout.trailing(entry),font=MenuLayout.labelFont(entry)
-        let color:NSColor=entry.action?.first=="stop" || entry.label.hasPrefix("○") ? .systemRed : (entry.label.hasPrefix("●") ? statusGreen(self) : (entry.actionable ? .labelColor : .secondaryLabelColor))
+        let color:NSColor=entry.action?.first=="stop" || entry.label.hasPrefix("○") ? .systemRed : (entry.label.hasPrefix("●") ? statusGreen(self) : (entry.actionable || entry.usageLevel != nil ? .labelColor : .secondaryLabelColor))
         let labelWidth=MenuLayout.labelWidth(entry,width:bounds.width,left:left)
         let titleHeight=MenuLayout.height(entry.label,font:font,width:labelWidth)
         let detailHeight=entry.detail.map{MenuLayout.height($0,font:MenuLayout.detailFont,width:bounds.width-left-trailing)} ?? 0
@@ -439,7 +442,7 @@ final class Row:NSButton {
                 else{NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()}
                 MenuLayout.draw(value,in:NSRect(x:valueRect.minX+12,y:bounds.midY-textHeight/2,width:valueRect.width-12,height:textHeight),font:MenuLayout.valueFont,color:.secondaryLabelColor,alignment:.right)
             }else{
-                MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:bounds.midY-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:entry.actionable ? .labelColor : .secondaryLabelColor,alignment:.right)
+                MenuLayout.draw(value,in:NSRect(x:valueRect.minX,y:bounds.midY-textHeight/2,width:valueRect.width,height:textHeight),font:MenuLayout.valueFont,color:usageColor(entry.usageLevel) ?? (entry.actionable ? .labelColor : .secondaryLabelColor),alignment:.right)
             }
         }
         if let detail=entry.detail {MenuLayout.draw(detail,in:NSRect(x:left,y:top+titleHeight+3,width:bounds.width-left-trailing,height:detailHeight),font:MenuLayout.detailFont,color:.secondaryLabelColor)}

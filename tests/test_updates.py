@@ -167,11 +167,17 @@ class UpdateTests(unittest.TestCase):
   cases=[('claude-code','2.1.308 (Claude Code)','2.1.310','claude.ai/claude-code-releases/latest'),('codex-cli','codex-cli 0.164.0','0.166.0','registry.npmjs.org/@openai/codex/latest')]
   for key,current,latest,url in cases:
    body=latest.encode() if key=='claude-code' else json.dumps({'version':latest}).encode()
-   with patch.object(self.m.shutil,'which',return_value='/test/bin/tool'),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout=current)),patch.object(self.m,'release_body',return_value=body) as release:
+   with patch.object(self.m.shutil,'which',return_value='/test/bin/tool'),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout=current)),patch.object(self.m,'release_body',return_value=body) as release,patch.object(self.m.update_channels,'codex_channel',return_value={'channel':'npm','channelId':'npm','releaseURL':'https://registry.npmjs.org/@openai/codex/latest'}):
     row=self.m.app_update_probe(key)
    self.assertTrue(row['available']);self.assertEqual(row['latest'],latest);self.assertIn(url,release.call_args.args[0])
   with patch.object(self.m.shutil,'which',return_value=None),patch.object(self.m,'release_body') as release:
    self.assertEqual(self.m.app_update_probe('codex-cli')['status'],'未安装');release.assert_not_called()
+ def test_brew_current_version_never_uses_npm_ahead_of_its_channel(self):
+  channel={'channel':'Homebrew Cask','channelId':'brew-cask','releaseURL':'https://formulae.brew.sh/api/cask/codex.json'}
+  with patch.object(self.m.shutil,'which',return_value='/test/bin/codex'),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout='codex-cli 0.166.0')),patch.object(self.m.update_channels,'codex_channel',return_value=channel),patch.object(self.m,'release_body',return_value=b'{"version":"0.166.0"}') as release:
+   row=self.m.app_update_probe('codex-cli')
+  release.assert_called_once_with(channel['releaseURL'])
+  self.assertEqual(row['channel'],'Homebrew Cask');self.assertFalse(row['available']);self.assertEqual(row['latest'],'0.166.0')
  def test_cli_update_runs_the_requested_command_with_safe_quoting(self):
   self.select('claude','codex')
   for key,command in [('claude-code','claude'),('codex-cli','codex')]:

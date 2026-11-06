@@ -125,4 +125,8 @@ expect(selectedEntry.children.first?.action==["choose-client-home","chatgpt"],"O
 expect(selectedEntry.value=="已配置","Selecting does not change configuration state")
 expect(selectedEntry.key==mergedEntry.key,"Open configuration retains its anchor after the checkbox changes")
 expect(MenuLayout.rowHeight(mergedEntry,width:264,left:36)==27,"Status and checkmark fit on a single compact row")
+expect(usageColor("normal")==NSColor.labelColor,"Normal usage adapts to light and dark appearance")
+expect(usageColor("warning")==NSColor.systemOrange,"High usage uses system orange")
+expect(usageColor("critical")==NSColor.systemRed,"Critical usage uses system red")
+expect(usageColor(nil)==nil,"Stale or missing usage keeps its neutral state")
 print("Native interaction assertions: \(assertions) passed")

@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.8.1**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.9.0**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -28,7 +28,7 @@ SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的
 | Gemini CLI | 本机 JSON / JSONL 会话用量；兼容迁移与重放记录，包含思考 Token |
 | DeepSeek API 余额 | 官方 `/user/balance`；可独立配置 API key 文件，也可复用 OpenCodex 已配置的官方 DeepSeek 凭据 |
 | ChatGPT 订阅 | 本机 ChatGPT 登录的编程工具额度，或 OpenCodex 管理的 ChatGPT 账户额度；支持选择来源，不代表网页聊天全部限额 |
-| Claude 订阅 | 默认读取 App 本机快照并标记过期；明确授权后使用 App 现有登录查询官方用量，显示周期、模型限额及重置时间 |
+| Claude 订阅 | 优先读取 App 快照或已启用的 Code 本机回传；只显示用量与重置时间，过期明确标记；在线查询需手动触发 |
 | Gemini / Grok / Kimi 订阅 | 独立模块、手动配置标记与官网入口；尚未接入自动额度查询，不读取浏览器登录 |
 | Grok API 余额 | xAI 官方 Management API 的团队预付余额，需管理密钥和 Team ID；不是 SuperGrok 订阅额度 |
 | MiniMax 订阅 | 官方 Token Plan / M Plan 查询接口；显示滚动和本周剩余百分比 |
@@ -139,8 +139,11 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update`、`codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。优先直接在 iTerm 新标签或 Terminal 新窗口执行，显示真实命令、更新器输出、前后版本和最终结果，完成后保留窗口。系统不允许自动控制终端时才降级为独立 `.command` 文件，结果仍保留。
 - CLI 更新日志仅保存在本机 `~/Library/Application Support/SwiftBarToken/logs/updates/`，每个 CLI 保留最近 20 次，文件权限为 600；“应用更新”中可打开已勾选客户端最近的日志。退出码非零明确显示失败；命令成功但版本没变时显示“检查完成，版本未变化”，不误报升级成功。其他桌面客户端仍只提示和打开官方入口。
 - Claude Harness 默认读取 `~/Library/Application Support/Claude` 的会话登记，再读取对应的共享用量记录；只统计 App 登记的可读取会话，并不声称覆盖所有 Chat/Cowork 调用。旧版指定的 CLI 日志目录不会被误用为 App 目录。
-- Claude 订阅默认不读取钥匙串。通过其模块设置或订阅侧栏的“启用实时用量…”确认后，才从本机 Claude Safe Storage 与 App Cookie 文件读取会话，固定向 `https://claude.ai/api/organizations/{组织}/usage` 和同组织的 `/prepaid/credits` 发出只读请求。分别显示周期/模型已用百分比、当地重置时间和用量额度余额；余额使用接口的精确单位，不使用消费上限或取整后的额度字段推算。
-- Claude 实时查询不调用模型、不购买额度、不修改自动充值。仅发送必要的 Claude 会话 Cookie，不跟随重定向，TLS 验证保持开启。凭据仅在内存中使用，缓存只存解析后的用量、余额和状态，关闭后停止读取并废弃实时缓存。用量与余额其中一个接口失败时保留另一个成功结果，明确标记缺失数据；旧数据有更新时间和失败标记。这些是客户端使用的内部接口，服务端变更、网络验证或登录过期可能导致查询失败；插件提供明确状态和官方入口。
+- Claude 订阅只显示已用百分比与重置时间，不查询或展示额度余额。有效用量低于 70% 使用正常文字色（浅色为黑、深色为浅色），70–89% 为系统橙色，90% 起为系统红色；旧数据不套用当前用量的警示颜色。
+- 平时刷新及打开侧栏只读取本机：比较 Claude App 历史快照与已启用的 Claude Code 本机回传，使用新鲜来源，明确标出来源和更新时间；超过 10 分钟或已过重置时间的回传标记待更新，不将旧值当当前用量。
+- 在 Claude 订阅侧栏启用“本机用量回传…”会配置官方状态栏回调，仅写入 Claude 的 `settings.json` 中 `statusLine` 一项，原状态栏备份并继续执行，关闭后恢复；用户后来自行替换的状态栏不会被覆盖。桥接脚本存于插件的用户应用支持目录，独立于仓库路径。只保存百分比、重置时间与采样时间，不保存完整输入、对话、身份或凭据；回调按事件运行并节流，不自行调用模型或联网。客户端产生响应后才可能提供订阅数据，尚无回传时显示等待更新。
+- “在线查询一次…”仅在用户主动点击并授权时，从 Claude App 现有登录读取会话，向 `https://claude.ai/api/organizations/{组织}/usage` 发出一次只读查询；后台刷新绝不自动读取 Cookie 或钥匙串，即使之前已有授权。凭据仅在内存，缓存只有解析后的用量和状态，不跟随重定向，TLS 验证开启。服务端验证或登录过期可能导致失败；用户可清除授权并使用官网入口。
+- Codex CLI 的“最新版本”跟随实际安装渠道：官方 Homebrew Cask / Formula 使用对应 Homebrew 元数据，npm 安装使用 npm 版本。不拿 npm 发布抢先提示 Homebrew 用户更新；未知或自定义安装渠道明确显示待确认。执行仍为 `codex update`，终端保留完整日志和前后版本。
 - DeepSeek 余额刷新期间保留主页金额，不追加“上次”；刷新进度、成功更新时间与失败状态放在余额侧栏。失败时明确说明正在保留最近余额。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 
@@ -152,7 +155,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 
 ccusage 为 MIT 许可，版权声明及完整许可证保存在 [lib/CCUSAGE_LICENSE](lib/CCUSAGE_LICENSE)，安装时一并复制。运行插件不需要安装 ccusage、Node 或 Rust；读取压缩日志仍需要 `zstd` 或具备 Zstandard 支持的 Node.js。
 
-这些本机日志规则提供 Token 和费用统计，不提供账号订阅的实时用量百分比或余额。Claude App 的账户用量仍使用独立的授权查询入口；不会从 API 等值费用推算订阅额度。
+这些本机日志规则提供 Token 和费用统计，不提供账号订阅的实时百分比。订阅用量另读 App 快照或官方 Code 状态栏回传；手动在线查询独立授权，不从 API 等值费用推算额度。
 
 ### ccusage 的数据范围与客户端归属
 
@@ -162,9 +165,9 @@ ccusage 为 MIT 许可，版权声明及完整许可证保存在 [lib/CCUSAGE_LI
 | --- | --- | --- |
 | Claude Token 与费用 | 本机日志中的 input/output/cache、响应 ID、已记录费用或价格估算；无需 Cookie 或账户授权 | 默认只纳入 Claude App 登记的可读取会话，沿用去重与增量索引；不把独立 CLI 会话伪装成 App 用量 |
 | ChatGPT 编程用量 | Codex 格式的本机日志；不读取普通 ChatGPT 对话用量 | 明确标记为编程会话，支持桌面/CLI 产生的兼容记录，并处理与 OpenCodex 的重复统计 |
-| Claude 订阅百分比、额度余额 | 本机 Token 统计不提供这两项；`blocks --token-limit` 使用手动上限或历史最高量 | 使用独立的、明确授权的官方账户查询，不从 Token 或 API 等值费用推算 |
+| Claude 订阅百分比 | 本机 Token 统计不提供；`blocks --token-limit` 使用手动上限或历史最高量 | 优先 App 快照或 Code 官方状态栏回传；可手动授权查询，仅用真实百分比，不查询余额 |
 
-Claude Code 日志可以作为 **Token 统计**的替代来源，但不能填补官网订阅余额。另一条官方途径是 [Claude Code 状态栏输入](https://code.claude.com/docs/en/statusline#rate-limit-usage)：客户端在首次 API 响应后可传递 `rate_limits.five_hour` / `seven_day` 的百分比与重置时间。插件若接入这种本机回调，不必自行读取 Cookie，但必须设置回调、保留已有状态栏行为、明确 CLI 来源与时间；该数据并不保证包含 Fable 分项或额度余额。当前版本没有自动改写 Claude Code 设置，也没有把它静默混入 Claude App 的账户数据。
+Claude Code 日志提供 **Token 统计**；[Claude Code 官方状态栏输入](https://code.claude.com/docs/en/statusline#rate-limit-usage)另可在客户端首次 API 响应后传递 `rate_limits.five_hour` / `seven_day` 的百分比与重置时间。本插件已支持用户启用这种本机回传，不必自行读取 Cookie。Code 回传明确标注来源，不与 App 快照的各项拼接，不保证包含 Fable 分项；使用不同账号登录 App 与 Code 时，应以来源所标客户端的账号为准。
 
 ## 开发维护
 
