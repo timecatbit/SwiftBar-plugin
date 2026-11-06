@@ -21,6 +21,12 @@ class PanelTests(unittest.TestCase):
   self.request(['copy-token'])
   with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_not_called()
   self.assertEqual(self.receipt()['status'],'rejected')
+ def test_header_auto_detect_button_is_always_allowed(self):
+  # The snapshot here has no module options; the Summary header button still works.
+  self.request(['detect-modules'])
+  with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_called_once_with('detect-modules',[])
+  self.request(['detect-modules','everything'])
+  with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_not_called()
  def test_expired_action_cannot_run(self):
   self.request(['refresh'],age=120)
   with patch.object(self.m,'run_action') as run:self.m.consume_panel_action();run.assert_not_called()

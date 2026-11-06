@@ -962,6 +962,20 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));share.imagePosition = .imageOnly
             share.contentTintColor = .labelColor;share.toolTip="分享用量图";share.setAccessibilityLabel("分享用量图")
             share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share)
+            // Auto-detect carries its name, not just an icon, so people know what it does. It only
+            // shrinks to the icon when a long heading leaves no room; it always asks before changing anything.
+            let detectTitle="自动检测",detectFont=NSFont.systemFont(ofSize:11)
+            let heading=(dashboard.showSummary==false ? "Harness Token 用量" : "Summary") as NSString
+            let headingRight=12+ceil(heading.size(withAttributes:[.font:NSFont.systemFont(ofSize:14,weight:.semibold)]).width)+6
+            let labelled=ceil((detectTitle as NSString).size(withAttributes:[.font:detectFont]).width)+32
+            let detectWidth=inner-181-labelled>=headingRight ? labelled : 28
+            let detect=NSButton(frame:NSRect(x:inner-181-detectWidth,y:7.5,width:detectWidth,height:25))
+            detect.bezelStyle = .rounded;detect.controlSize = .small;detect.font=detectFont
+            detect.image=NSImage(systemSymbolName:"sparkle.magnifyingglass",accessibilityDescription:detectTitle)?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold))
+            detect.title=detectWidth==28 ? "" : detectTitle;detect.imagePosition=detectWidth==28 ? .imageOnly : .imageLeading
+            detect.contentTintColor = .labelColor;detect.setAccessibilityLabel(detectTitle)
+            detect.toolTip="自动检测：按本机已安装的工具重新选择主页模块。先列出将启用和取消的模块，确认后才生效。"
+            detect.target=self;detect.action=#selector(detectModules);content.addSubview(detect)
         }
         scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
         let x=min(max(anchor.x-22,screen.visibleFrame.minX+4),screen.visibleFrame.maxX-width-4)
@@ -1093,6 +1107,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     func menuWillOpen(_ menu:NSMenu){anchoredMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
     func menuDidClose(_ menu:NSMenu){anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     @objc private func refreshData(){performAction(["refresh"])}
+    @objc private func detectModules(){performAction(["detect-modules"])}
     // The picture covers Summary and the Harness cards only; subscriptions, balances and keys stay private.
     private func sharePicture()->Data? {
         guard let dashboard=snapshot?.dashboard else{return nil}

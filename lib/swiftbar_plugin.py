@@ -3142,7 +3142,8 @@ def consume_panel_action():
         # Only an action already present in the rendered menu can be requested.
         snapshot=read_cache("panel-view")
         nodes = list(snapshot.get("entries") or [])+list(snapshot.get("rangeOptions") or [])+list(snapshot.get("moduleOptions") or [])
-        allowed = [["refresh-view"], ["refresh"]]
+        # Header buttons beside Summary are always present, so their actions are always allowed.
+        allowed = [["refresh-view"], ["refresh"], ["detect-modules"]]
         dashboard=snapshot.get('dashboard') or {}
         if dashboard.get('allowCollapse'):
             allowed.extend([['set-expanded',p['id'],value] for p in dashboard.get('providers',[]) if p.get('id') in preferences.USAGE for value in ('true','false')])
