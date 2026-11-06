@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.10.0</xbar.version>
+# <xbar.version>5.10.1</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -1269,8 +1269,14 @@ def notify_app_updates(rows):
 def update_attention_count(rows):
     return sum(bool(r.get('needsAttention') if r.get('automatic') else r.get('available')) for r in rows)
 
+def update_indicator(row):
+    if row.get('needsAttention') or '失败' in row.get('status',''):return 'issue'
+    if row.get('available'):return 'available'
+    if row.get('status','').endswith('已是最新'):return 'current'
+    return 'unknown'
+
 def app_update_lines(data):
-    rows=update_rows(data);count=update_attention_count(rows)
+    rows=sorted(update_rows(data),key=lambda row:not row.get('available'));count=update_attention_count(rows)
     running=any(r['id']=='opencodex' for r in rows) and auto_update_state().get('status')=='running'
     status=('%d 项待更新'%count) if count else ('自动更新中' if running else None)
     lines=[item('应用更新',badge=status,panelattention=bool(count),sfimage='arrow.down.circle')]
@@ -1282,8 +1288,8 @@ def app_update_lines(data):
         if row.get('channel'):detail+=' · '+row['channel']
         if row.get('available') and row['id'] in ('claude-code','codex-cli'):
             detail+='\n点击运行 '+('claude update' if row['id']=='claude-code' else 'codex update')
-            lines.append(item(label,level=1,paneldetail=detail,**act('update-cli',row['id'])))
-        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail))
+            lines.append(item(label,level=1,paneldetail=detail,panelupdatestate=update_indicator(row),**act('update-cli',row['id'])))
+        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail,panelupdatestate=update_indicator(row)))
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
     if terminal_jobs.latest_log(STATE_DIR,[r['id'] for r in rows]):
@@ -1981,7 +1987,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.10.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.10.1',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2645,6 +2651,7 @@ def panel_entries(lines):
             if attrs.get("panelsection")=="true":entry["section"]=True
             if attrs.get("panelattention")=="true":entry["attention"]=True
             if attrs.get('panelusagelevel') in ('normal','warning','critical'):entry['usageLevel']=attrs['panelusagelevel']
+            if attrs.get('panelupdatestate') in ('available','current','issue','unknown'):entry['updateState']=attrs['panelupdatestate']
             if attrs.get("badge"):
                 entry["value"] = attrs["badge"]
             if attrs.get("paneldetail"):

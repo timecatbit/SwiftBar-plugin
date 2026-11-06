@@ -37,6 +37,17 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}),patch.object(self.m,'release_body',side_effect=TimeoutError):
    row=self.m.app_update_probe('claude')
   self.assertFalse(row['available']);self.assertIn('失败',row['status'])
+ def test_update_menu_prioritizes_new_versions_and_preserves_actions(self):
+  rows=[{'id':key,'name':name,'status':status,'available':available,'href':'https://example.test/'+key,'current':'1.0','latest':'2.0'} for key,name,status,available in [
+   ('opencodex','OpenCodex','自动更新已开启 · 已是最新',False),
+   ('claude','Claude','有新版本',True),('claude-code','Claude Code','有新版本',True),
+   ('codex-cli','Codex','检查失败，稍后重试',False),('chatgpt','ChatGPT','等待检查',False)]]
+  with patch.object(self.m,'update_rows',return_value=rows),patch.object(self.m.terminal_jobs,'latest_log',return_value=None):
+   entries=self.m.panel_entries(self.m.app_update_lines({}))[0]['children'][:5]
+  self.assertEqual([e['label'].split(' · ')[0] for e in entries],['Claude','Claude Code','OpenCodex','Codex','ChatGPT'])
+  self.assertEqual([e['updateState'] for e in entries],['available','available','current','issue','unknown'])
+  self.assertEqual(entries[1]['action'],['update-cli','claude-code'])
+  self.assertEqual(entries[0]['href'],'https://example.test/claude')
  def test_claude_checks_the_desktop_app_and_official_desktop_feed(self):
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}) as info,patch.object(self.m,'release_body',return_value=b'{"currentRelease":"4.16336.0"}') as release,patch.object(self.m.subprocess,'run') as command:
    row=self.m.app_update_probe('claude')

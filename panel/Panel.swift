@@ -4,7 +4,7 @@ import Darwin
 
 struct Entry: Decodable {
     var label:String;var separator:Bool?;var image:String?;var template:Bool?;var symbol:String?
-    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var usageLevel:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
+    var section:Bool?;var attention:Bool?;var checked:Bool?;var detail:String?;var value:String?;var usageLevel:String?;var updateState:String?;var href:String?;var action:[String]?;var onOpenAction:[String]?;var children:[Entry]
     var actionable:Bool { !children.isEmpty || href != nil || action != nil }
     var isModule:Bool {action?.first=="set-module"}
     var key:String {if isModule,let action{return action.prefix(2).joined(separator:"\u{001F}")}
@@ -322,7 +322,7 @@ enum MenuLayout {
         e.isModule && !e.children.isEmpty && x>=width-32 && x<=width
     }
     static func configurationHover(_ e:Entry,x:CGFloat)->Bool { !e.isModule || x>=36 }
-    static func hasIcon(_ e:Entry)->Bool {e.image != nil || e.symbol != nil || e.checked != nil}
+    static func hasIcon(_ e:Entry)->Bool {e.image != nil || e.symbol != nil || e.checked != nil || e.updateState != nil}
     static func column(_ entries:[Entry])->CGFloat {entries.contains(where:hasIcon) ? 36 : 12}
     static func labelFont(_ e:Entry)->NSFont {.systemFont(ofSize:e.section==true ? 10.5 : (e.actionable ? 12 : 10.5),weight:e.section==true ? .medium : .regular)}
     static let valueFont=NSFont.monospacedDigitSystemFont(ofSize:11,weight:.regular)
@@ -427,6 +427,15 @@ final class Row:NSButton {
         let detailHeight=entry.detail.map{MenuLayout.height($0,font:MenuLayout.detailFont,width:bounds.width-left-trailing)} ?? 0
         let blockHeight=titleHeight+(entry.detail == nil ? 0 : detailHeight+3)
         let top=(bounds.height-blockHeight)/2
+        if let state=entry.updateState {
+            let dot=NSBezierPath(ovalIn:NSRect(x:15.5,y:top+titleHeight/2-3.5,width:7,height:7))
+            switch state {
+            case "available":NSColor.controlAccentColor.setFill();dot.fill()
+            case "current":statusGreen(self).setFill();dot.fill()
+            case "issue":NSColor.systemOrange.setFill();dot.fill()
+            default:NSColor.secondaryLabelColor.setStroke();dot.lineWidth=1;dot.stroke()
+            }
+        }
         MenuLayout.draw(entry.label,in:NSRect(x:left,y:top,width:labelWidth,height:titleHeight),font:font,color:color)
         if let value=entry.value {
             let valueWidth=MenuLayout.valueWidth(entry)
