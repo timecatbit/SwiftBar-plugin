@@ -33,10 +33,10 @@ def release_notes(number):
     if not changes:
         raise SystemExit('CHANGELOG.md has no section for ' + number)
     name = 'token-monitor-' + number
-    install = ('在终端运行即可安装，无需 git 或 Xcode Command Line Tools：\n\n```sh\ncd ~/Downloads\n'
+    install = ('先装好 SwiftBar，再在终端运行：\n\n```sh\ncd ~/Downloads\n'
                'curl -fLO %s/releases/download/v%s/%s.zip\nditto -x -k %s.zip .\npython3 %s/install.py\n```\n\n'
-               '用浏览器下载时，第一次打开面板需在“系统设置 → 隐私与安全性”点击“仍要打开”，详见 README 的“安装与更新”。\n\n'
-               % (REPOSITORY, number, name, name, name))
+               '已安装旧版的，在主页“Harness 更新”下方点“更新到 %s”即可。\n\n'
+               % (REPOSITORY, number, name, name, name, number))
     return install + changes.group(1).strip() + '\n'
 
 

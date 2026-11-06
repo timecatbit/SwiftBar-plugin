@@ -50,6 +50,7 @@
 - 动作通过 `panel-action.json` → SwiftBar 刷新 → 白名单执行 → 回执传递。不要从原生面板直接运行插件脚本，以免触发 Documents/TCC 访问问题。
 - 保存回执携带不含目录/凭据的显示偏好及版本号，旧数据刷新不能覆盖已保存的选择；连续点击按顺序应用，后台检查期间不能静默丢弃用户动作。
 - 菜单展开期间不得重建范围下拉控件。只在跟踪结束后更新布局。
+- CHANGELOG 每个版本只写用户能感知的关键变化，一条一句、最多约 8 条；它就是 GitHub Release 的说明，实现细节留在提交记录里。
 - 发布前另用较新的 Python（如 Homebrew 的 3.14）再跑一遍 `scripts/check.py`：GitHub 发布机用最新 Python，3.11 起关闭连接不再重置未读完的 SQLite 游标，出错路径必须显式关闭游标或回滚。
 - 使用 `python3 scripts/check.py` 验证，它同时扫描 `lib/`、`scripts/` 中未被引用的函数与导入。改动 Swift 代码时运行 `scripts/build.py`。
 - 插件主体在 `lib/swiftbar_plugin.py`，`token-monitor.30s.sh`（SwiftBar 中名为 token-monitor，元数据作者 minicoke、GitHub 指向本仓库）只加载配置并启动；不要把 Python 重新内嵌进入口脚本。菜单渲染只读缓存，网络请求与日志索引放在后台进程；一次渲染内的偏好与本机元数据使用同一份快照。
