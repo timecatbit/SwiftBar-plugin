@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.7.0</xbar.version>
+# <xbar.version>5.8.0</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -33,6 +33,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
     printf '%s\n' 'opencodex' '---' '需要 Python 3 才能读取 opencodex 状态。' '重新检查 | refresh=true'
     exit 0
 fi
+if [ "${1:-}" = "--python-path" ]; then printf '%s\n' "$PYTHON_BIN"; exit 0; fi
 
 exec "$PYTHON_BIN" - "$@" <<'PY'
 """
@@ -233,7 +234,7 @@ def connection_fingerprint(name):
                 stat=os.stat(binary);parts.extend([os.path.realpath(binary),stat.st_ino,stat.st_mtime_ns,stat.st_size])
             except (OSError,TypeError):parts.append('unavailable')
     if name=='claude_subscription':
-        parts.extend([source_path('claude'),view_settings()['claudeLiveUsage']])
+        parts.extend([source_path('claude'),view_settings()['claudeLiveUsage'],'live-v2'])
         for filename in ('plan-usage-history.json','config.json'):
             try:
                 stat=os.stat(os.path.join(source_path('claude'),filename));parts.extend([stat.st_mtime_ns,stat.st_size])
@@ -1320,17 +1321,29 @@ def claude_subscription_lines(data):
     stale=payload.get('stale',True) or time.time()-payload.get('updatedAt',0)>(600 if live else 1800)
     value=' · '.join(w['label']+' %g%%'%w['used'] for w in windows[:2]) if windows and not stale else payload.get('state','暂无本机用量快照')
     if windows and stale:value='用量待更新' if live else '快照待更新'
-    if error:value='刷新失败' if windows else '暂不可用'
+    failed=bool(error and error[1]!='正在后台读取')
+    if failed:value='刷新失败' if windows else '暂不可用'
     rows=[item('Claude 订阅',badge=value,sfimage='person.crop.circle'),
           item('来源 · Claude 官方实时查询' if live else '来源 · Claude App 本机快照',level=1,color=MUTED,size=10)]
     for w in windows:
         reset=None
         if w.get('resetsAt'):
-            try:reset='重置于 '+datetime.fromisoformat(w['resetsAt'].replace('Z','+00:00')).astimezone(local_zone()).strftime('%m/%d %H:%M')
+            try:
+                at=datetime.fromisoformat(w['resetsAt'].replace('Z','+00:00')).astimezone(local_zone())
+                # The service often returns xx:59:59.999 for an xx:00 reset.
+                reset='重置于 '+(at+timedelta(seconds=30)).strftime('%m/%d %H:%M')
             except ValueError:pass
+        if stale or failed:reset=(reset+'\n' if reset else '')+'上次成功数据，等待更新'
         rows.append(item(w['label'],badge='%g%% 已用'%w['used'],paneldetail=reset,level=1))
-    if windows:rows.append(item('更新时间' if live else '快照时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
-    if error:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
+    if payload.get('usageError'):rows.append(item(payload['usageError'],level=1,color=WARN,size=10))
+    balance=payload.get('creditBalance')
+    if isinstance(balance,dict):
+        currency=balance['currency'];symbol={'USD':'$','CNY':'¥','EUR':'€','GBP':'£'}.get(currency,currency+' ')
+        amount=symbol+format(balance['amount'],',.'+str(max(2,balance['decimals']))+'f')
+        rows.append(item('用量额度余额',badge=amount,paneldetail='上次成功数据，等待更新' if stale or failed else '独立于订阅用量 · '+currency,level=1))
+    elif live:rows.append(item('用量额度余额',badge='暂不可用',paneldetail=payload.get('creditsError'),level=1,color=MUTED))
+    if windows or balance:rows.append(item('更新时间' if live else '快照时间',badge=freshness({'_fetchedAt':payload['updatedAt']}),level=1,color=MUTED,size=10))
+    if failed:rows.append(item(str(error[1]),level=1,color=WARN,size=10))
     if not live:rows.append(item('旧快照不代表当前用量' if stale else '本机快照不含重置时间及额度余额',level=1,color=MUTED,size=10))
     if not view_settings()['claudeLiveUsage']:rows.append(item('启用实时用量…',level=1,sfimage='arrow.triangle.2.circlepath',**act('set-claude-live','true')))
     rows.extend([item('打开 Claude',level=1,sfimage='macwindow',**act('open-claude')),
@@ -1920,7 +1933,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.7.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.8.0',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2070,8 +2083,8 @@ def service_connection_entry(key):
         return {'label':service.label,'value':'已配置' if configured else '未配置','symbol':'person.crop.circle','children':[
             {'label':'来源 · Claude App 登录' if view_settings()['claudeLiveUsage'] else '来源 · Claude App 本机用量快照','children':[]},
             {'label':'关闭实时查询' if view_settings()['claudeLiveUsage'] else '启用实时用量…','action':['set-claude-live','false' if view_settings()['claudeLiveUsage'] else 'true'],'children':[]},
-            location_entry('快照文件',[os.path.join(source_path('claude'),'plan-usage-history.json')]),
-            {'label':'过期快照明确标记，不推算订阅额度','children':[]},
+            location_entry('读取目录',[source_path('claude')]) if view_settings()['claudeLiveUsage'] else location_entry('快照文件',[os.path.join(source_path('claude'),'plan-usage-history.json')]),
+            {'label':'只读查询官方用量与余额；凭据仅在内存' if view_settings()['claudeLiveUsage'] else '过期快照明确标记，不推算订阅额度','children':[]},
             {'label':'选择 Claude 数据目录…','action':['choose-source','claude'],'children':[]},
             {'label':'打开 Claude','action':['open-claude'],'children':[]},
             {'label':'打开订阅用量','href':service.url,'children':[]}]}
@@ -2907,7 +2920,7 @@ def run_action(name, extra):
         value=extra[0] if len(extra)==1 else ''
         if value not in ('true','false'):raise ValueError('invalid Claude usage preference')
         if value=='true' and not view_settings()['claudeLiveUsage']:
-            detail='允许插件从本机钥匙串与 Claude App 的 Cookie 文件读取现有登录会话，用于定期查询订阅用量。\n会话凭据仅在内存中使用，只发送到 https://claude.ai；不写入插件配置、日志或 GitHub。不会发送消息、调用模型或购买额度。\n可在此处随时关闭。macOS 可能另行询问钥匙串权限。'
+            detail='允许插件从本机钥匙串与 Claude App 的 Cookie 文件读取现有登录会话，用于定期查询订阅用量和用量额度余额。\n会话凭据仅在内存中使用，只发送到 https://claude.ai；不写入插件配置、日志或 GitHub。不会发送消息、调用模型、购买额度或修改自动充值。\n可在此处随时关闭。macOS 可能另行询问钥匙串权限。'
             if not confirm('启用 Claude 实时用量？',detail,accept='允许读取'):return
         preferences.update(STATE_DIR,'claude-live',value)
         invalidate_caches(['claude_subscription']);schedule_background_refresh()

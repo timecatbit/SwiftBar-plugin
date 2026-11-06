@@ -12,6 +12,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
 from swiftbar_config import migrate_config
+from install_transport import prepare as prepare_transport
 
 def copy(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -41,9 +42,15 @@ def main():
         parser.error('--config must name an existing file.')
     if not args.skip_build:
         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'build.py')], check=True)
+    # Ask the shell entry point so OCX_PYTHON and its PATH match the running plugin.
+    python = subprocess.run(['/bin/bash',str(ROOT/'opencodex.30s.sh'),'--python-path'],
+                            capture_output=True,text=True,check=True).stdout.strip()
+    if not Path(python).is_file():parser.error('The plugin Python interpreter is unavailable.')
+    transport = prepare_transport(ROOT,python)
     relative_app = Path('.opencodex-panel/OpenCodexPanel.app')
     local_config = Path('.opencodex-panel/config.local.sh')
-    paths = [Path('opencodex.30s.sh'), relative_app, Path('assets/deepseek-logo.svg'), local_config, Path('.opencodex-panel/lib')]
+    relative_transport=Path('.opencodex-panel/python')/transport.name
+    paths = [Path('opencodex.30s.sh'), relative_app, Path('assets/deepseek-logo.svg'), local_config, Path('.opencodex-panel/lib'),relative_transport]
     previous = [p for p in paths if (destination / p).exists()]
     if previous:
         stamp = datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
@@ -62,6 +69,7 @@ def main():
     copy(ROOT / 'assets/deepseek-logo.svg', destination / 'assets/deepseek-logo.svg')
     shutil.copytree(ROOT / 'lib', destination / '.opencodex-panel/lib', dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    copy(transport,destination/relative_transport)
     migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
     # Publish the script last; other plugins and runtime state are preserved.
     destination.mkdir(parents=True, exist_ok=True)

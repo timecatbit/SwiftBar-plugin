@@ -7,28 +7,41 @@ import ctypes
 import hashlib
 import json
 import math
+import platform
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
+import sys
+import sysconfig
 import time
-import urllib.error
-import urllib.request
-from urllib.parse import urlsplit
 
 ORIGIN='https://claude.ai'
 UUID=re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',re.I)
+COOKIE_NAMES=('sessionKey','sessionKeyV3','sessionKeyLC','sessionKeyV3LC','lastActiveOrg','routingHint','cf_clearance','__cf_bm')
+MAX_RESPONSE=1024*1024
 
 
 class UsageError(Exception):
     pass
 
 
-class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self,req,fp,code,msg,headers,newurl):
-        target=urlsplit(newurl)
-        if target.scheme!='https' or target.netloc!='claude.ai':raise UsageError('用量接口跳转异常')
-        return super().redirect_request(req,fp,code,msg,headers,newurl)
+def transport_tag():
+    return sys.implementation.cache_tag+'-'+sysconfig.get_platform()+'-'+platform.machine()
+
+
+def transport_client():
+    # Installer packages wheels for the interpreter used by the plugin, separately
+    # from source files. No pip/network work occurs during a menu refresh.
+    root=Path(__file__).resolve().parent.parent
+    vendor=root/'python'/transport_tag()
+    if not vendor.is_dir():vendor=root/'build/python'/transport_tag()
+    if vendor.is_dir() and str(vendor) not in sys.path:sys.path.insert(0,str(vendor))
+    try:
+        from curl_cffi import requests
+        return requests.Session(impersonate='chrome',allow_redirects=False,verify=True)
+    except (ImportError,OSError):
+        raise UsageError('实时查询组件不可用，请重新运行插件安装脚本') from None
 
 
 def desktop_session(root):
@@ -46,7 +59,7 @@ def desktop_session(root):
     try:
         version=conn.execute("SELECT value FROM meta WHERE key='version'").fetchone()
         bound=bool(version and int(version[0])>=24)
-        rows=conn.execute("SELECT name,host_key,encrypted_value,value FROM cookies WHERE host_key IN ('.claude.ai','claude.ai') AND name IN ('sessionKey','lastActiveOrg')").fetchall()
+        rows=conn.execute("SELECT name,host_key,encrypted_value,value FROM cookies WHERE host_key IN ('.claude.ai','claude.ai') AND name IN ("+','.join('?' for _ in COOKIE_NAMES)+")",COOKIE_NAMES).fetchall()
     finally:conn.close()
     values={}
     for name,host,raw,plain in rows:
@@ -61,24 +74,59 @@ def desktop_session(root):
                 clear=clear[32:]
             plain=clear.decode('utf-8')
         if plain and not any(c in plain for c in '\r\n;'):values[name]=plain
-    if not values.get('sessionKey') or not UUID.fullmatch(values.get('lastActiveOrg','')):
+    if not (values.get('sessionKey') or values.get('sessionKeyV3')) or not UUID.fullmatch(values.get('lastActiveOrg','')):
         raise UsageError('请先在 Claude App 登录')
     return values
 
 
-def request_usage(session):
+def request_json(client,session,resource):
+    """Only these two read-only endpoints may receive the in-memory session."""
+    if resource not in ('usage','prepaid/credits'):raise UsageError('用量接口路径异常')
     if not UUID.fullmatch(session.get('lastActiveOrg','')):raise UsageError('Claude 组织格式异常')
-    request=urllib.request.Request(ORIGIN+'/api/organizations/'+session['lastActiveOrg']+'/usage',
-        headers={'Accept':'application/json','User-Agent':'Mozilla/5.0',
-                 'Cookie':'; '.join(k+'='+session[k] for k in ('sessionKey','lastActiveOrg'))})
-    opener=urllib.request.build_opener(SameOriginRedirect())
-    with opener.open(request,timeout=12) as response:
-        raw=response.read(1024*1024+1)
-    if len(raw)>1024*1024:raise UsageError('用量响应过大')
-    return json.loads(raw)
+    raw=bytearray();too_large=False
+    def receive(chunk):
+        nonlocal too_large
+        if len(raw)+len(chunk)>MAX_RESPONSE:
+            too_large=True
+            return 0xFFFFFFFF  # CURL_WRITEFUNC_ERROR, without logging response data.
+        raw.extend(chunk);return len(chunk)
+    try:
+        response=client.get(ORIGIN+'/api/organizations/'+session['lastActiveOrg']+'/'+resource,
+            cookies={k:session[k] for k in COOKIE_NAMES if session.get(k)},
+            headers={'Accept':'application/json','Origin':ORIGIN,'Referer':ORIGIN+'/settings/usage'},
+            allow_redirects=False,timeout=12,content_callback=receive)
+    except Exception:
+        raise UsageError('用量响应过大' if too_large else 'Claude 连接失败，稍后重试') from None
+    if too_large:raise UsageError('用量响应过大')
+    if 300<=response.status_code<400:raise UsageError('Claude 登录发生跳转，请在 App 中重新登录')
+    if response.headers.get('cf-mitigated')=='challenge':raise UsageError('Claude 网站需要浏览器验证，请打开 App 后重试')
+    if response.status_code in (401,403):raise UsageError('Claude 登录需要更新，请在 App 中重新登录')
+    if response.status_code!=200:raise UsageError('Claude 用量服务暂不可用')
+    if 'application/json' not in response.headers.get('content-type',''):raise UsageError('Claude 返回了非用量页面')
+    try:data=json.loads(raw)
+    except (ValueError,UnicodeError):raise UsageError('用量格式尚未支持') from None
+    if not isinstance(data,dict):raise UsageError('用量格式尚未支持')
+    return data
 
 
-def parse_usage(data,now=None):
+def parse_credits(data):
+    """Use the prepaid balance only; spend caps and rounded balance_credits aren't balances."""
+    if not isinstance(data,dict):return None
+    balance=data.get('balance')
+    currency=data.get('currency')
+    if not isinstance(balance,dict):return None
+    money=balance.get('money')
+    value=money if isinstance(money,dict) else balance.get('credits')
+    if not isinstance(value,dict):return None
+    currency=value.get('currency',currency)
+    minor=value.get('amount_minor');exponent=value.get('exponent')
+    if not isinstance(currency,str) or not re.fullmatch('[A-Z]{3}',currency):return None
+    if type(minor) is not int or not 0<=minor<=10**15:return None
+    if type(exponent) is not int or not 0<=exponent<=6:return None
+    return {'amount':minor/(10**exponent),'currency':currency,'decimals':exponent}
+
+
+def parse_usage(data,now=None,credits=None,usage_error=None,credits_error=None):
     if not isinstance(data,dict):raise UsageError('用量格式尚未支持')
     windows=[];seen=set()
     def add(label,percent,reset):
@@ -103,14 +151,26 @@ def parse_usage(data,now=None):
         for key,label in [('five_hour','5 小时'),('seven_day','本周'),('seven_day_opus','Opus 本周'),('seven_day_sonnet','Sonnet 本周')]:
             row=data.get(key)
             if isinstance(row,dict):add(label,row.get('utilization'),row.get('resets_at'))
-    if not windows:raise UsageError('尚未返回可识别的订阅用量')
-    return {'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,'state':'实时用量','source':'live'}
+    balance=parse_credits(credits)
+    if not windows and not balance:raise UsageError(usage_error or '尚未返回可识别的订阅用量')
+    result={'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,
+            'state':'实时用量' if windows else '用量暂不可用','source':'live'}
+    if balance is not None:result['creditBalance']=balance
+    if not windows:result['usageError']=usage_error or '尚未返回可识别的订阅用量'
+    if credits_error:result['creditsError']=credits_error
+    elif balance is None:result['creditsError']='额度接口未提供可识别的余额'
+    return result
 
 
 def live_subscription(root,consent=False):
     if consent is not True:return None,(0,'尚未授权读取 Claude 登录',None)
-    try:return parse_usage(request_usage(desktop_session(root))),None
+    try:
+        with transport_client() as client:
+            session=desktop_session(root);responses={};errors={}
+            for resource in ('usage','prepaid/credits'):
+                try:responses[resource]=request_json(client,session,resource)
+                except UsageError as error:errors[resource]=str(error)
+            return parse_usage(responses.get('usage') or {},credits=responses.get('prepaid/credits'),
+                usage_error=errors.get('usage'),credits_error=errors.get('prepaid/credits')),None
     except UsageError as error:return None,(0,str(error),None)
-    except urllib.error.HTTPError as error:
-        return None,(0,'Claude 登录需要更新' if error.code in (401,403) else 'Claude 用量服务暂不可用',None)
     except Exception:return None,(0,'Claude 用量读取失败，稍后重试',None)

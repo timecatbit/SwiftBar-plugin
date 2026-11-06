@@ -1,0 +1,6 @@
+# Installed privately with the plugin, never into global Python site-packages.
+# curl_cffi 0.13 supports Python 3.9 and browser-compatible TLS on macOS.
+curl_cffi==0.13.0
+cffi==2.0.0
+pycparser==2.23
+certifi==2026.10.23

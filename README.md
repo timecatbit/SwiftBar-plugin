@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.7.0**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.8.0**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -69,6 +69,8 @@ python3 scripts/install.py --plugin-dir '/你的/SwiftBar插件目录'
 
 脚本会编译、签名、备份并复制运行所需文件，首次安装自动选择模块，然后刷新 SwiftBar。**安装后可移动或删除源码仓库，插件不依赖仓库路径。** 没有写死用户名或个人 Documents 目录。
 
+安装会从 PyPI 下载固定版本的 `curl_cffi` 及依赖，放在插件自己的 `.opencodex-panel/python/` 中，不修改系统 Python 包；后续安装复用已验证的构建缓存。该组件用于 Claude 官方网站兼容的 HTTPS 连接，菜单刷新不会运行 pip。需要 Python 自带的 pip 和首次安装时的网络连接；更换 `OCX_PYTHON` 或 Python 主/次版本后重新运行安装脚本。
+
 SwiftBar 只执行一个入口，但完整的原生界面需要配套运行文件：
 
 ```text
@@ -136,7 +138,8 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 应用更新跟随 Harness 勾选：**Claude → Claude 桌面 App + Claude Code**，**ChatGPT → ChatGPT 桌面客户端 + Codex CLI**，**OpenCodex → OpenCodex + ChatGPT + Codex CLI**。已配置 OpenCodex 时，即使其模块隐藏，也联动检查 ChatGPT 和 Codex CLI；不改变主页勾选，重复来源只检查一次。订阅/API 勾选不触发应用更新，移出范围立即移除条目和更新数量。
 - Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update` 和 `codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。其他桌面客户端仍只提示和打开官方入口。
 - Claude Harness 默认读取 `~/Library/Application Support/Claude` 的会话登记，再读取对应的共享用量记录；只统计 App 登记的可读取会话，并不声称覆盖所有 Chat/Cowork 调用。旧版指定的 CLI 日志目录不会被误用为 App 目录。
-- Claude 订阅默认不读取钥匙串。通过其模块设置或订阅侧栏的“启用实时用量…”确认后，才从本机 Claude Safe Storage 与 App Cookie 文件读取会话，固定向 `https://claude.ai/api/organizations/{组织}/usage` 发出只读请求；不调用模型、不购买额度。凭据仅在内存中使用，缓存只存解析后的用量，关闭后停止读取并废弃实时缓存。此为桌面 App 使用的内部接口，服务端变更或登录过期可能导致读取失败；届时明确显示状态并提供官方入口。没有得到可验证的额度余额字段时，不推算余额。
+- Claude 订阅默认不读取钥匙串。通过其模块设置或订阅侧栏的“启用实时用量…”确认后，才从本机 Claude Safe Storage 与 App Cookie 文件读取会话，固定向 `https://claude.ai/api/organizations/{组织}/usage` 和同组织的 `/prepaid/credits` 发出只读请求。分别显示周期/模型已用百分比、当地重置时间和用量额度余额；余额使用接口的精确单位，不使用消费上限或取整后的额度字段推算。
+- Claude 实时查询不调用模型、不购买额度、不修改自动充值。仅发送必要的 Claude 会话 Cookie，不跟随重定向，TLS 验证保持开启。凭据仅在内存中使用，缓存只存解析后的用量、余额和状态，关闭后停止读取并废弃实时缓存。用量与余额其中一个接口失败时保留另一个成功结果，明确标记缺失数据；旧数据有更新时间和失败标记。这些是客户端使用的内部接口，服务端变更、网络验证或登录过期可能导致查询失败；插件提供明确状态和官方入口。
 - DeepSeek 余额刷新期间保留主页金额，不追加“上次”；刷新进度、成功更新时间与失败状态放在余额侧栏。失败时明确说明正在保留最近余额。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 

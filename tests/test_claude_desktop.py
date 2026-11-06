@@ -93,6 +93,12 @@ class DesktopTests(unittest.TestCase):
   with patch.object(self.m,'local_zone',return_value=ZoneInfo('Asia/Taipei')):
    lines='\n'.join(self.m.claude_subscription_lines({'claude_subscription':payload}))
   self.assertIn('88%',lines);self.assertIn('Fable',lines);self.assertIn('22:00',lines);self.assertNotIn('$0',lines)
+ def test_live_balance_is_separate_and_reset_rounds_to_displayed_minute(self):
+  payload=live.parse_usage({'limits':[{'kind':'weekly','percent':0,'resets_at':'2026-11-12T13:59:59.644073Z'}]},credits={'currency':'USD','balance':{'credits':{'amount_minor':1534,'exponent':2}}})
+  with patch.object(self.m,'local_zone',return_value=ZoneInfo('Asia/Taipei')):
+   lines='\n'.join(self.m.claude_subscription_lines({'claude_subscription':payload}))
+  self.assertIn('22:00',lines);self.assertIn('$15.34',lines);self.assertIn('用量额度余额',lines)
+  self.assertIn('0% 已用',lines);self.assertNotIn('刷新失败',lines)
 
 class LiveSchemaTests(unittest.TestCase):
  def test_missing_cookie_store_does_not_open_keychain(self):
@@ -107,21 +113,54 @@ class LiveSchemaTests(unittest.TestCase):
   for row in ({'percent':True},{'percent':float('nan')},{'percent':-1},{'percent':110},{'percent':88,'resets_at':{}}):
    with self.assertRaises(live.UsageError):live.parse_usage({'limits':[row]})
   self.assertEqual(live.parse_usage({'limits':[{'percent':50,'scope':42}]})['windows'][0]['used'],50)
- def test_cross_origin_redirect_is_blocked_and_no_error_secrets_exposed(self):
-  redirect=live.SameOriginRedirect()
-  for url in ('http://claude.ai/a','https://example.com/a','https://claude.ai.example.com/a'):
-   with self.assertRaises(live.UsageError):redirect.redirect_request(None,None,302,'',{},url)
-  with patch.object(live,'desktop_session',side_effect=RuntimeError('secret-value')):
+ def test_no_error_secrets_exposed(self):
+  with patch.object(live,'transport_client'),patch.object(live,'desktop_session',side_effect=RuntimeError('secret-value')):
    _,error=live.live_subscription('/unused',True)
   self.assertNotIn('secret-value',str(error))
- def test_request_only_uses_official_organization_endpoint(self):
-  response=Mock();response.read.return_value=b'{"seven_day":{"utilization":88}}'
-  context=Mock();context.__enter__=Mock(return_value=response);context.__exit__=Mock(return_value=False)
-  opener=Mock();opener.open.return_value=context
-  with patch.object(live.urllib.request,'build_opener',return_value=opener):
-   live.request_usage({'sessionKey':'test-not-real','lastActiveOrg':ORG})
-  request=opener.open.call_args.args[0]
-  self.assertEqual(request.full_url,'https://claude.ai/api/organizations/'+ORG+'/usage')
-  self.assertEqual(request.get_method(),'GET')
+ def client(self,status=200,headers=None,body=b'{"seven_day":{"utilization":88}}'):
+  client=Mock()
+  def get(*args,**kwargs):
+   kwargs['content_callback'](body)
+   return types.SimpleNamespace(status_code=status,headers=headers or {'content-type':'application/json'})
+  client.get.side_effect=get;return client
+ def test_request_only_uses_two_official_endpoints_and_cookie_allowlist(self):
+  client=self.client();session={'sessionKeyV3':'test-not-real','lastActiveOrg':ORG,'trackingCookie':'never-send'}
+  for resource in ('usage','prepaid/credits'):
+   live.request_json(client,session,resource)
+   args,kwargs=client.get.call_args
+   self.assertEqual(args[0],'https://claude.ai/api/organizations/'+ORG+'/'+resource)
+   self.assertFalse(kwargs['allow_redirects']);self.assertNotIn('trackingCookie',kwargs['cookies'])
+   self.assertEqual(kwargs['cookies']['sessionKeyV3'],'test-not-real')
+  for resource in ('https://example.com','../billing','prepaid/commits','usage?x=1'):
+   with self.assertRaises(live.UsageError):live.request_json(client,session,resource)
+ def test_redirect_challenge_login_network_and_oversize_have_safe_errors(self):
+  session={'lastActiveOrg':ORG}
+  cases=[(self.client(302,{'location':'https://example.com/secret'}),'跳转'),
+         (self.client(403,{'cf-mitigated':'challenge'}),'浏览器验证'),
+         (self.client(401),'重新登录'),(self.client(200,{'content-type':'text/html'}),'非用量页面'),
+         (self.client(body=b'x'*(live.MAX_RESPONSE+1)),'过大')]
+  for client,expected in cases:
+   with self.assertRaisesRegex(live.UsageError,expected):live.request_json(client,session,'usage')
+  client=Mock();client.get.side_effect=RuntimeError('secret-cookie-value')
+  with self.assertRaisesRegex(live.UsageError,'连接失败'):live.request_json(client,session,'usage')
+ def test_credit_balance_uses_exact_units_not_limit_or_rounded_credits(self):
+  data={'currency':'USD','balance':{'money':None,'credits':{'amount_minor':1534,'exponent':2}},'balance_credits':15}
+  self.assertEqual(live.parse_credits(data),{'amount':15.34,'currency':'USD','decimals':2})
+  self.assertIsNone(live.parse_credits({'extra_usage':{'monthly_limit':2000,'used_credits':0},'spend':{'limit':2000}}))
+  for minor,exponent in [(True,2),(-1,2),(float('nan'),2),(1534,True),(1534,100)]:
+   data['balance']['credits']={'amount_minor':minor,'exponent':exponent};self.assertIsNone(live.parse_credits(data))
+ def test_partial_failure_preserves_the_other_result_without_credentials(self):
+  credits={'currency':'USD','balance':{'credits':{'amount_minor':0,'exponent':2}},'account_uuid':'never-cache'}
+  result=live.parse_usage({},credits=credits,usage_error='用量服务暂不可用')
+  self.assertEqual(result['creditBalance']['amount'],0);self.assertEqual(result['windows'],[])
+  self.assertIn('usageError',result);self.assertNotIn('never-cache',json.dumps(result))
+  result=live.parse_usage({'seven_day':{'utilization':88}},credits_error='余额服务暂不可用')
+  self.assertEqual(result['windows'][0]['used'],88);self.assertNotIn('creditBalance',result)
+  self.assertIn('creditsError',result)
+ def test_live_reads_once_and_can_keep_balance_if_usage_fails(self):
+  manager=Mock();manager.__enter__=Mock(return_value=Mock());manager.__exit__=Mock(return_value=False)
+  with patch.object(live,'transport_client',return_value=manager),patch.object(live,'desktop_session',return_value={'lastActiveOrg':ORG}) as session,patch.object(live,'request_json',side_effect=[live.UsageError('用量暂不可用'),{'currency':'USD','balance':{'credits':{'amount_minor':1534,'exponent':2}}}]):
+   data,error=live.live_subscription('/unused',True)
+  session.assert_called_once();self.assertIsNone(error);self.assertEqual(data['creditBalance']['amount'],15.34)
 
 if __name__=='__main__':unittest.main()
