@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -75,6 +76,7 @@ REPOSITORY = "https://github.com/timecatbit/swiftbar-token-monitor"
 # The repository regenerates its price tables daily from ccusage; plugins fetch the committed copies.
 PRICING_URL = "https://raw.githubusercontent.com/timecatbit/swiftbar-token-monitor/main/lib/"
 PRICING_TABLES = ("codex-pricing.json", "model-pricing.json")
+RELEASES_API = "https://api.github.com/repos/timecatbit/swiftbar-token-monitor/releases/latest"
 
 
 # Runtime files are installed alongside this script; the source checkout is never needed.
@@ -161,7 +163,7 @@ UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
 # OpenCodex management endpoints are polled in the background; the health check gates the rest.
 OPENCODEX_ENDPOINTS = {"healthz": ("/healthz", False), "ready": ("/readyz", False), "quota": ("/api/codex-auth/quota", True),
                        "accounts": ("/api/codex-auth/accounts", True), "active": ("/api/codex-auth/active", True)}
-EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "claude-api": 1800, "claude_subscription":60}
+EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "self_update": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "claude-api": 1800, "claude_subscription":60}
 # Provider accounts read with the user's own key: Grok/Kimi balances, the MiniMax plan and Claude API spend.
 ACCOUNT_SOURCES = ('grok', 'minimax', 'kimi-api', 'claude-api')
 # APIs whose named extra keys are queried one by one, each in its own cache.
@@ -1230,7 +1232,7 @@ def update_rows(data):
 def send_update_notification(rows):
     body='；'.join(row['name']+' '+row['latest'] for row in rows)
     url='swiftbar://notify?'+urllib.parse.urlencode({'plugin':os.path.basename(PLUGIN),'title':'应用有新版本',
-         'body':body,'subtitle':'打开星星 → 应用更新查看','silent':'true',
+         'body':body,'subtitle':'打开星星 → Harness 更新查看','silent':'true',
          'href':'swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))})
     try:return subprocess.run(['/usr/bin/open','-g',url],capture_output=True,timeout=5).returncode==0
     except (OSError,subprocess.TimeoutExpired):return False
@@ -1270,11 +1272,146 @@ def update_indicator(row):
     if row.get('status','').endswith('已是最新'):return 'ok'
     return 'unknown'
 
+def version_tuple(text):
+    match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)',str(text or '').strip())
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def self_update_load():
+    """This plugin's latest GitHub release: a plain GET with no identifiers. No release, a draft
+    or a pre-release means there is nothing to offer."""
+    req=urllib.request.Request(RELEASES_API,headers={'User-Agent':'TokenMonitor/'+VERSION,'Accept':'application/vnd.github+json'})
+    try:
+        with urllib.request.urlopen(req,timeout=8) as response:body=response.read(1024*1024+1)
+    except urllib.error.HTTPError as error:
+        return ({'latest':None},None) if error.code==404 else (None,(error.code,'检查失败',None))
+    except (OSError,ValueError):return None,(0,'检查失败',None)
+    try:release=json.loads(body.decode('utf-8')) if len(body)<=1024*1024 else None
+    except ValueError:release=None
+    if not isinstance(release,dict):return None,(0,'发布信息无法读取',None)
+    latest=version_tuple(release.get('tag_name'))
+    if not latest or release.get('draft') or release.get('prerelease'):return {'latest':None},None
+    page=str(release.get('html_url') or '')
+    if not page.startswith(REPOSITORY+'/releases/'):page=REPOSITORY+'/releases'
+    assets=[{'name':str(a.get('name') or ''),'url':str(a.get('browser_download_url') or ''),'digest':str(a.get('digest') or ''),'size':a.get('size')}
+            for a in release.get('assets') or [] if isinstance(a,dict)]
+    return {'latest':'.'.join(map(str,latest)),'page':page,'assets':assets},None
+
+
+def plugin_update(data):
+    release=data.get('self_update') or {};latest=version_tuple(release.get('latest'))
+    return release if latest and latest>version_tuple(VERSION) else None
+
+
+def self_update_state():
+    try:
+        with open(os.path.join(STATE_DIR,'self-update.json'),encoding='utf-8') as handle:state=json.load(handle)
+    except (OSError,ValueError):return {}
+    if not isinstance(state,dict) or not isinstance(state.get('at'),(int,float)):return {}
+    # A run that never reported back within 15 minutes is treated as over.
+    if state.get('status')=='running' and time.time()-state['at']>900:return {}
+    return state
+
+
+def set_self_update_state(**values):
+    write_json_cache(os.path.join(STATE_DIR,'self-update.json'),dict(values,at=time.time()))
+
+
+def self_update_lines(data):
+    """A homepage row under Harness 更新, present only while a newer Token Monitor release exists."""
+    release=plugin_update(data);state=self_update_state()
+    if not release:return []
+    latest=release['latest'];running=state.get('status')=='running' and state.get('version')==latest
+    failed=state.get('status')=='failed' and state.get('version')==latest
+    badge='正在更新' if running else '更新失败' if failed else '可更新 '+latest
+    rows=[item(PRODUCT,badge=badge,panelattention=not failed,sfimage='sparkles'),
+          item('当前 '+VERSION+' → 最新 '+latest,level=1,color=MUTED,size=11)]
+    if running:rows.append(item('正在下载并安装，完成后自动刷新',level=1,color=MUTED,size=11))
+    else:
+        if failed:rows.append(item(str(state.get('reason') or '更新失败'),level=1,paneldetail='日志：'+os.path.join(STATE_DIR,'logs','self-update.log'),panelstatus='issue'))
+        rows.append(item(('重试更新到 ' if failed else '更新到 ')+latest+'…',level=1,sfimage='arrow.down.circle',**act('update-self')))
+    rows.append(item('查看更新内容',level=1,href=release['page'],sfimage='arrow.up.right'))
+    return rows
+
+
+class SelfUpdateError(Exception):
+    pass
+
+
+def download(url,limit):
+    req=urllib.request.Request(url,headers={'User-Agent':'TokenMonitor/'+VERSION})
+    with urllib.request.urlopen(req,timeout=30) as response:body=response.read(limit+1)
+    if len(body)>limit:raise SelfUpdateError('安装包大小异常')
+    return body
+
+
+def install_release(version,log):
+    """Download one release from this repository only, check its published SHA-256, unpack it
+    privately and run the installer it ships with. Backups and user settings are the installer's job."""
+    release=plugin_update({'self_update':read_cache('self_update').get('payload') or {}})
+    if not release or release['latest']!=version:
+        fresh,_=self_update_load();release=plugin_update({'self_update':fresh or {}})
+    if not release or release['latest']!=version:raise SelfUpdateError('找不到版本 '+version+' 的发布')
+    name='token-monitor-%s.zip'%version;expected=REPOSITORY+'/releases/download/v%s/%s'%(version,name)
+    assets={a['name']:a for a in release['assets']}
+    if assets.get(name,{}).get('url')!=expected:raise SelfUpdateError('发布中没有安装包')
+    digest=assets[name].get('digest') or ''
+    if digest.startswith('sha256:'):digest=digest[7:]
+    else:
+        if assets.get(name+'.sha256',{}).get('url')!=expected+'.sha256':raise SelfUpdateError('发布中没有校验值')
+        digest=(download(expected+'.sha256',4096).decode('utf-8','replace').split() or [''])[0]
+    if not re.fullmatch(r'[0-9a-f]{64}',digest):raise SelfUpdateError('校验值格式错误')
+    archive=download(expected,50*1024*1024)
+    if hashlib.sha256(archive).hexdigest()!=digest:raise SelfUpdateError('安装包校验失败')
+    folder=tempfile.mkdtemp(prefix='token-monitor-update-')
+    try:
+        path=os.path.join(folder,name)
+        with open(path,'wb') as handle:handle.write(archive)
+        root='token-monitor-%s/'%version
+        with zipfile.ZipFile(path) as bundle:
+            if any(not n.startswith(root) or '..' in n.split('/') for n in bundle.namelist()):
+                raise SelfUpdateError('安装包结构异常')
+        # ditto keeps the panel's executable bits, which zipfile would drop.
+        subprocess.run(['/usr/bin/ditto','-x','-k',path,folder],check=True,capture_output=True,timeout=120)
+        result=subprocess.run([sys.executable,os.path.join(folder,root,'install.py'),'--plugin-dir',PLUGIN_DIR,'--no-refresh'],
+                              stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=600)
+        os.makedirs(os.path.dirname(log),mode=0o700,exist_ok=True)
+        with open(os.open(log,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600),'w') as handle:
+            handle.write('Token Monitor %s → %s\nexit %d\n\n%s\n%s'%(VERSION,version,result.returncode,result.stdout,result.stderr))
+        if result.returncode:raise SelfUpdateError('安装程序退出码 %d'%result.returncode)
+    except (OSError,zipfile.BadZipFile,subprocess.SubprocessError) as error:
+        raise SelfUpdateError('安装失败：'+type(error).__name__) from None
+    finally:
+        shutil.rmtree(folder,ignore_errors=True)
+
+
+def self_update_worker(version):
+    """Detached from the menu run: one update at a time, then reload the panel and SwiftBar."""
+    os.makedirs(STATE_DIR,mode=0o700,exist_ok=True)
+    with open(os.path.join(STATE_DIR,'self-update.lock'),'a') as lock:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:return 0
+        set_self_update_state(status='running',version=version)
+        try:
+            install_release(version,os.path.join(STATE_DIR,'logs','self-update.log'))
+        except (SelfUpdateError,OSError,ValueError) as error:
+            set_self_update_state(status='failed',version=version,reason=str(error) or '更新失败')
+            notify('更新失败：'+(str(error) or '未知原因'),'详情见 SwiftBarToken/logs/self-update.log')
+        else:
+            set_self_update_state(status='done',version=version);invalidate_caches(['self_update'])
+            # The running panel is the old build; it reopens from the new one on the next click.
+            subprocess.run(['osascript','-e','if application id "cc.opencodex.swiftbar.panel" is running then tell application id "cc.opencodex.swiftbar.panel" to quit'],
+                           capture_output=True,timeout=8,check=False)
+            notify('已更新到 '+version)
+        refresh_swiftbar()
+    return 0
+
+
 def app_update_lines(data):
     rows=sorted(update_rows(data),key=lambda row:not row.get('available'));count=update_attention_count(rows)
     running=any(r['id']=='opencodex' for r in rows) and auto_update_state().get('status')=='running'
     status=('%d 项待更新'%count) if count else ('自动更新中' if running else None)
-    lines=[item('应用更新',badge=status,panelattention=bool(count),sfimage='arrow.down.circle')]
+    lines=[item('Harness 更新',badge=status,panelattention=bool(count),sfimage='arrow.down.circle')]
     if not rows:lines.append(item('尚未勾选 Harness',level=1,color=MUTED,size=11))
     for row in rows:
         label=row['name']+' · '+row['status'].replace('自动更新已开启 · ','')
@@ -1510,6 +1647,7 @@ def external_loaders():
     if module_enabled('deepseek') and default_ready('deepseek'):loaders['provider_quotas']=provider_quotas_cached
     if module_enabled('komari') and KOMARI_BASE_URL:loaders['komari']=komari_snapshot
     if module_enabled('updates') and live_app_update_ids():loaders['app_updates']=app_updates_cached
+    if os.environ.get('OCX_SELF_UPDATES')!='0':loaders['self_update']=lambda:cached_fetch('self_update',self_update_load,EXTERNAL_TTLS['self_update'])
     if module_enabled('claude-subscription'):loaders['claude_subscription']=lambda:cached_fetch('claude_subscription',claude_subscription_load,60)
     if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ACCOUNT_SOURCES:
@@ -1892,7 +2030,7 @@ def unfiltered_management_lines(data):
             if error:status+=' · 读取失败' if payload else ' · 待同步'
             elif payload.get('_stale'):status+=' · 正在更新'
             children.append(item(label,badge=status,color=MUTED,size=11))
-    lines.extend(nest(children));lines.extend(komari_lines(data));lines.extend(app_update_lines(data));lines.append('---')
+    lines.extend(nest(children));lines.extend(komari_lines(data));lines.extend(app_update_lines(data));lines.extend(self_update_lines(data));lines.append('---')
     lines.append(item('刷新数据',sfimage='arrow.clockwise',**act('refresh')))
     return lines
 
@@ -1904,7 +2042,7 @@ def management_lines(data):
             if result and result[-1]!='---':result.append(row)
             continue
         if not row.startswith('--'):
-            key=next((key for prefix,key in [('OpenCodex 管理','opencodex'),('Komari 监控','komari'),('应用更新','updates')] if row.startswith(prefix)),None)
+            key=next((key for prefix,key in [('OpenCodex 管理','opencodex'),('Komari 监控','komari'),('Harness 更新','updates')] if row.startswith(prefix)),None)
             keep=key is None or module_enabled(key)
         if keep:result.append(row)
     while result and result[-1]=='---':result.pop()
@@ -2622,7 +2760,7 @@ def resource_panel_entries(data):
     for entry in entries:
         if entry.get('separator'):continue
         label=entry['label'];service=services.get(label)
-        source=service.key if service else 'komari' if label.startswith('Komari 监控') else 'updates' if label=='应用更新' else None
+        source=service.key if service else 'komari' if label.startswith('Komari 监控') else 'updates' if label=='Harness 更新' else None
         if source in RESOURCE_CACHES and entry.get('children'):entry['onOpenAction']=['refresh-source',source]
         # Refresh sits beside Summary; SwiftBar's own submenu covers its housekeeping.
         if label=='刷新数据':continue
@@ -2678,13 +2816,13 @@ def as_expr(text):
 def confirm(message, detail="", accept="确定"):
     body = message if not detail else message + "\n\n" + detail
     script = ("display dialog " + as_expr(body)
-              + ' with title "OpenCodex" buttons {"取消", '+as_literal(accept)+'} default button "取消" with icon caution')
+              + ' with title '+as_literal(PRODUCT)+' buttons {"取消", '+as_literal(accept)+'} default button "取消" with icon caution')
     result = applescript(script)
     return result.returncode == 0 and accept in (result.stdout or "")
 
 
 def notify(message, subtitle=""):
-    script = "display notification " + as_literal(message) + ' with title "opencodex"'
+    script = "display notification " + as_literal(message) + ' with title ' + as_literal(PRODUCT)
     if subtitle:
         script += " subtitle " + as_literal(subtitle)
     applescript(script)
@@ -2870,8 +3008,16 @@ def run_action(name, extra):
     elif name == "refresh":
         invalidate_caches([range_cache_name()] + list(EXTERNAL_TTLS))
         schedule_background_refresh()
+    elif name == "update-self":
+        release=plugin_update({'self_update':read_cache('self_update').get('payload') or {}})
+        if not release:notify('Token Monitor 已是最新版本 '+VERSION);return 0
+        if self_update_state().get('status')=='running':return 0
+        if confirm('更新 Token Monitor 到 '+release['latest']+'？','当前版本 '+VERSION+'。将从 GitHub 下载该版本的安装包，校验 SHA-256 后安装；原文件先备份，设置、Key 和统计记录都会保留。',accept='更新'):
+            set_self_update_state(status='running',version=release['latest'])
+            subprocess.Popen(['/bin/bash',PLUGIN,'--self-update',release['latest']],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,start_new_session=True,close_fds=True)
     elif name == "check-app-updates":
-        invalidate_caches(["app_updates", "badge"])
+        invalidate_caches(["app_updates", "badge", "self_update"])
         schedule_background_refresh()
     elif name == "refresh-monitor":
         invalidate_caches(["komari"])
@@ -3035,6 +3181,8 @@ def main():
         return 0
     if argv and argv[0] == "--background-refresh":
         return background_refresh()
+    if argv and argv[0] == "--self-update":
+        return self_update_worker(argv[1] if len(argv) > 1 else "")
     if argv and argv[0] == "--action":
         action_name = argv[1] if len(argv) > 1 else ""
         write_json_cache(cache_path("last-action"), {"action": action_name, "receivedAt": time.time()})

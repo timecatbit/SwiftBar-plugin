@@ -17,7 +17,7 @@ MODULES = (
     ('gemini', 'Gemini CLI', 'Harness'),
 ) + tuple((s.key, s.label, s.category) for s in catalog.SERVICES) + (
     ('komari', 'Komari 监控', '其他'),
-    ('updates', '应用更新', '其他'),
+    ('updates', 'Harness 更新', '其他'),
 )
 DEFAULT_VISIBLE = ['summary', 'opencodex', 'claude', 'deepseek', 'chatgpt', 'komari', 'updates']
 KNOWN = {row[0] for row in MODULES}

@@ -63,7 +63,7 @@ class AutomaticUpdateTests(unittest.TestCase):
    self.m.auto_update_opencodex()
   self.assertEqual(self.posts(),[])
  def test_native_colors_follow_system_even_for_submenus(self):
-  value=self.m.native_menu_line('应用更新 | color="#111,#ddd" sfcolor=blue badge="3 项待更新" panelattention=true')
+  value=self.m.native_menu_line('Harness 更新 | color="#111,#ddd" sfcolor=blue badge="3 项待更新" panelattention=true')
   self.assertNotIn('color=',value);self.assertNotIn('panelattention',value);self.assertIn('badge=',value)
 
  def test_deselected_opencodex_does_not_start_or_check_update(self):

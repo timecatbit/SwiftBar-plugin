@@ -59,7 +59,7 @@ class PanelTests(unittest.TestCase):
   with patch.object(self.m,'deepseek_logo_image',return_value=None):
    entries=self.m.panel_entries(self.m.management_lines(data))
   by_name={e['label']:e for e in entries if not e.get('separator')}
-  self.assertEqual(list(by_name),['ChatGPT 订阅','DeepSeek API','OpenCodex 管理','Komari 监控','应用更新','刷新数据'])
+  self.assertEqual(list(by_name),['ChatGPT 订阅','DeepSeek API','OpenCodex 管理','Komari 监控','Harness 更新','刷新数据'])
   oc_actions=[e['action'][0] for e in by_name['OpenCodex 管理']['children'] if e.get('action')]
   self.assertIn('account-use',oc_actions);self.assertIn('stop',oc_actions)
   self.assertFalse(any(e.get('children') for e in by_name['OpenCodex 管理']['children']))

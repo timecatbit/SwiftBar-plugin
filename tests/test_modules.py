@@ -55,7 +55,7 @@ class ModuleTests(unittest.TestCase):
     def test_hide_resource_and_management_branches(self):
         for key in ('opencodex','codex-quota','deepseek','komari','updates'):self.toggle(key,False)
         lines='\n'.join(self.m.management_lines({}))
-        for text in ('OpenCodex 管理','DeepSeek API','ChatGPT 订阅','Komari 监控','应用更新'):self.assertNotIn(text,lines)
+        for text in ('OpenCodex 管理','DeepSeek API','ChatGPT 订阅','Komari 监控','Harness 更新'):self.assertNotIn(text,lines)
         self.assertIn('刷新数据',lines)
     def test_usage_selection_changes_chart_and_cache_scope(self):
         old=self.m.range_cache_name()

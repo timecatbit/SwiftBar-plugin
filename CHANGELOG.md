@@ -2,6 +2,11 @@
 
 ## 5.12.0
 
+- 插件可以自己更新：GitHub 有新版本时，主页“Harness 更新”下方出现“Token Monitor · 可更新”一行，确认后自动下载、校验 SHA-256、备份并安装，完成后刷新；没有新版本时不显示。`OCX_SELF_UPDATES=0` 可关闭检查。
+- “应用更新”改名为“Harness 更新”；通知和确认框标题改为 Token Monitor。
+- README 精简为功能、安装、更新、使用、隐私和致谢，换上新的运行截图。
+- 新增预编译发布包：GitHub Release 附带 `token-monitor-5.12.0.zip`（Apple 芯片与 Intel 通用面板），下载解压后运行其中的 `install.py` 即可安装，无需 git 或 Xcode Command Line Tools；从源码安装仍可用，两种方式都保留备份与本机设置。
+
 - 每个 API 支持多把命名 Key：侧栏“添加 Key…”起名并输入 Key，每把单独保存、单独查询；主页按币种合计余额或本月已用，侧栏逐把显示，可测试、重命名、删除。原有单个连接作为“默认”Key 保留。
 - 主页去掉“订阅用量 / API / 其他”和“Harness Token 用量”标题，改为分隔线；去掉“费用为已知 API 等值估算”说明。
 - 订阅与 API 行换成各家品牌图标（ChatGPT、Claude、Gemini、Grok、MiniMax、Kimi，DeepSeek 原有）。

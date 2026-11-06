@@ -1,6 +1,6 @@
 import json,os,tempfile,time,types,unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 SOURCE=Path(__file__).resolve().parents[1]/'token-monitor.30s.sh'
 CODE=(SOURCE.parent/'lib/swiftbar_plugin.py').read_text()
 class UpdateTests(unittest.TestCase):
@@ -37,6 +37,67 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}),patch.object(self.m,'release_body',side_effect=TimeoutError):
    row=self.m.app_update_probe('claude')
   self.assertFalse(row['available']);self.assertIn('失败',row['status'])
+ def test_plugin_release_row_appears_only_when_newer(self):
+  import urllib.error
+  def release(body=None,code=None):
+   def answer(req,timeout):
+    self.assertEqual(req.full_url,self.m.RELEASES_API)
+    if code:raise urllib.error.HTTPError(req.full_url,code,'x',{},None)
+    response=MagicMock();response.read.return_value=json.dumps(body).encode();response.__enter__.return_value=response;return response
+   with patch.object(self.m.urllib.request,'urlopen',side_effect=answer):return self.m.self_update_load()[0]
+  self.assertEqual(release(code=404),{'latest':None})
+  newer=release({'tag_name':'v99.0.0','html_url':self.m.REPOSITORY+'/releases/tag/v99.0.0','assets':[]})
+  self.assertEqual(newer['latest'],'99.0.0')
+  self.assertEqual(release({'tag_name':'v99.0.0','draft':True}),{'latest':None})
+  self.assertEqual(release({'tag_name':'v99.0.0','html_url':'https://evil.test/x'})['page'],self.m.REPOSITORY+'/releases')
+  self.assertEqual(self.m.self_update_lines({'self_update':{'latest':self.m.VERSION}}),[])
+  self.assertEqual(self.m.self_update_lines({}),[])
+  # Under Harness 更新 on the homepage, with the new version and a link to its notes.
+  with patch.object(self.m,'update_rows',return_value=[]),patch.object(self.m.terminal_jobs,'latest_log',return_value=None):
+   entries=self.m.resource_panel_entries({'self_update':newer})
+  labels=[e['label'] for e in entries if not e.get('separator')]
+  self.assertEqual(labels[labels.index('Harness 更新')+1],'Token Monitor')
+  row=next(e for e in entries if e['label']=='Token Monitor')
+  self.assertEqual(row['value'],'可更新 99.0.0');self.assertTrue(row['attention'])
+  self.assertTrue(any(c.get('href')==newer['page'] for c in row['children']))
+  with patch.dict(os.environ,{'OCX_SELF_UPDATES':'0'}):self.assertNotIn('self_update',self.m.external_loaders())
+ def test_self_update_verifies_the_archive_and_runs_its_installer(self):
+  import hashlib,io,zipfile
+  root=Path(self.tmp.name);marker=root/'installed.json'
+  def bundle(entries):
+   data=io.BytesIO()
+   with zipfile.ZipFile(data,'w') as z:
+    for name,text in entries.items():z.writestr(name,text)
+   return data.getvalue()
+  good=bundle({'token-monitor-99.0.0/install.py':'import json,sys;open(%r,"w").write(json.dumps(sys.argv[1:]))'%str(marker)})
+  def release(archive,digest=None):
+   url=self.m.REPOSITORY+'/releases/download/v99.0.0/token-monitor-99.0.0.zip'
+   payload={'latest':'99.0.0','page':self.m.REPOSITORY+'/releases','assets':[{'name':'token-monitor-99.0.0.zip','url':url,'digest':'sha256:'+(digest or hashlib.sha256(archive).hexdigest())}]}
+   self.m.write_json_cache(self.m.cache_path('self_update'),{'schema':1,'payload':payload,'fetchedAt':time.time()})
+  log=str(root/'logs'/'self-update.log')
+  release(good)
+  with patch.object(self.m,'download',return_value=good):self.m.install_release('99.0.0',log)
+  self.assertEqual(json.loads(marker.read_text()),['--plugin-dir',self.m.PLUGIN_DIR,'--no-refresh'])
+  self.assertEqual(oct(Path(log).stat().st_mode&0o777),'0o600')
+  # A wrong checksum or a path outside the release folder stops before anything runs.
+  marker.unlink();release(good,digest='0'*64)
+  with patch.object(self.m,'download',return_value=good),self.assertRaises(self.m.SelfUpdateError):self.m.install_release('99.0.0',log)
+  evil=bundle({'token-monitor-99.0.0/../../escape.py':'x'});release(evil)
+  with patch.object(self.m,'download',return_value=evil),self.assertRaises(self.m.SelfUpdateError):self.m.install_release('99.0.0',log)
+  self.assertFalse(marker.exists())
+  # Only this repository's release URL is accepted.
+  payload=self.m.read_cache('self_update')['payload'];payload['assets'][0]['url']='https://evil.test/token-monitor-99.0.0.zip'
+  self.m.write_json_cache(self.m.cache_path('self_update'),{'schema':1,'payload':payload,'fetchedAt':time.time()})
+  with patch.object(self.m,'download',side_effect=AssertionError('downloaded')),self.assertRaises(self.m.SelfUpdateError):self.m.install_release('99.0.0',log)
+ def test_self_update_row_offers_update_then_shows_progress(self):
+  data={'self_update':{'latest':'99.0.0','page':self.m.REPOSITORY+'/releases','assets':[]}}
+  self.assertTrue(any('param3=update-self' in line for line in self.m.self_update_lines(data)))
+  self.m.set_self_update_state(status='running',version='99.0.0')
+  rows='\n'.join(self.m.self_update_lines(data))
+  self.assertIn('正在更新',rows);self.assertNotIn('update-self',rows)
+  self.m.set_self_update_state(status='failed',version='99.0.0',reason='安装包校验失败')
+  rows='\n'.join(self.m.self_update_lines(data))
+  self.assertIn('安装包校验失败',rows);self.assertIn('重试更新到 99.0.0',rows)
  def test_update_menu_prioritizes_new_versions_and_preserves_actions(self):
   rows=[{'id':key,'name':name,'status':status,'available':available,'href':'https://example.test/'+key,'current':'1.0','latest':'2.0'} for key,name,status,available in [
    ('opencodex','OpenCodex','自动更新已开启 · 已是最新',False),
