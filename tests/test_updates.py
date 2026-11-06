@@ -178,8 +178,10 @@ class UpdateTests(unittest.TestCase):
    binary='/Applications/Tools With Spaces/'+command
    with patch.object(self.m.shutil,'which',return_value=binary),patch.object(self.m.subprocess,'run',return_value=types.SimpleNamespace(stdout='  update Update the CLI')),patch.object(self.m,'terminal') as terminal:
     self.m.run_action('update-cli',[key])
-   self.assertTrue(terminal.call_args.args[0].startswith("'"+binary+"' update\n"))
+   self.assertIn("'"+binary+"' update 2>&1",terminal.call_args.args[0])
    self.assertIn('swiftbar://refreshplugin?',terminal.call_args.args[0])
+   self.assertIn('token_update_status=${PIPESTATUS[0]}',terminal.call_args.args[0])
+   self.assertIn('更新成功',terminal.call_args.args[0]);self.assertIn('更新失败',terminal.call_args.args[0])
  def test_cli_update_refuses_unselected_or_unsupported_command(self):
   self.select('claude')
   with patch.object(self.m,'terminal') as terminal:

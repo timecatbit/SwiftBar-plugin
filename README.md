@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.8.0**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.8.1**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -136,7 +136,8 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 本机日志只索引用量元数据，不保存对话正文；数据库只读，增量索引和设置仅当前用户可读。余额和订阅额度不加入费用汇总。
 - ChatGPT 额度通过客户端已有的 ChatGPT 登录查询，不自动登录、不调用模型；API-key-only 登录不能提供该订阅额度。此模块不声称覆盖 ChatGPT 网页所有聊天限额。
 - 应用更新跟随 Harness 勾选：**Claude → Claude 桌面 App + Claude Code**，**ChatGPT → ChatGPT 桌面客户端 + Codex CLI**，**OpenCodex → OpenCodex + ChatGPT + Codex CLI**。已配置 OpenCodex 时，即使其模块隐藏，也联动检查 ChatGPT 和 Codex CLI；不改变主页勾选，重复来源只检查一次。订阅/API 勾选不触发应用更新，移出范围立即移除条目和更新数量。
-- Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update` 和 `codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。其他桌面客户端仍只提示和打开官方入口。
+- Claude Code 和 Codex CLI 有更新时，点击条目在终端分别运行 `claude update`、`codex update`；先确认本机版本支持命令，未安装不会自动安装，更新后自动刷新。优先直接在 iTerm 新标签或 Terminal 新窗口执行，显示真实命令、更新器输出、前后版本和最终结果，完成后保留窗口。系统不允许自动控制终端时才降级为独立 `.command` 文件，结果仍保留。
+- CLI 更新日志仅保存在本机 `~/Library/Application Support/SwiftBarToken/logs/updates/`，每个 CLI 保留最近 20 次，文件权限为 600；“应用更新”中可打开已勾选客户端最近的日志。退出码非零明确显示失败；命令成功但版本没变时显示“检查完成，版本未变化”，不误报升级成功。其他桌面客户端仍只提示和打开官方入口。
 - Claude Harness 默认读取 `~/Library/Application Support/Claude` 的会话登记，再读取对应的共享用量记录；只统计 App 登记的可读取会话，并不声称覆盖所有 Chat/Cowork 调用。旧版指定的 CLI 日志目录不会被误用为 App 目录。
 - Claude 订阅默认不读取钥匙串。通过其模块设置或订阅侧栏的“启用实时用量…”确认后，才从本机 Claude Safe Storage 与 App Cookie 文件读取会话，固定向 `https://claude.ai/api/organizations/{组织}/usage` 和同组织的 `/prepaid/credits` 发出只读请求。分别显示周期/模型已用百分比、当地重置时间和用量额度余额；余额使用接口的精确单位，不使用消费上限或取整后的额度字段推算。
 - Claude 实时查询不调用模型、不购买额度、不修改自动充值。仅发送必要的 Claude 会话 Cookie，不跟随重定向，TLS 验证保持开启。凭据仅在内存中使用，缓存只存解析后的用量、余额和状态，关闭后停止读取并废弃实时缓存。用量与余额其中一个接口失败时保留另一个成功结果，明确标记缺失数据；旧数据有更新时间和失败标记。这些是客户端使用的内部接口，服务端变更、网络验证或登录过期可能导致查询失败；插件提供明确状态和官方入口。
@@ -152,6 +153,18 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 ccusage 为 MIT 许可，版权声明及完整许可证保存在 [lib/CCUSAGE_LICENSE](lib/CCUSAGE_LICENSE)，安装时一并复制。运行插件不需要安装 ccusage、Node 或 Rust；读取压缩日志仍需要 `zstd` 或具备 Zstandard 支持的 Node.js。
 
 这些本机日志规则提供 Token 和费用统计，不提供账号订阅的实时用量百分比或余额。Claude App 的账户用量仍使用独立的授权查询入口；不会从 API 等值费用推算订阅额度。
+
+### ccusage 的数据范围与客户端归属
+
+复核版本 `615bd802`：ccusage 的 [Claude 适配器](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/rust/adapters/claude/src/paths.rs)发现 `~/.claude/projects`、XDG Claude 目录和 `CLAUDE_CONFIG_DIR` 下的日志；[Codex 适配器](https://github.com/ccusage/ccusage/blob/615bd802bc5c50246b84e98406f20ab048e27cf6/docs/guide/codex/index.md)读取 `CODEX_HOME` 中的活动/归档记录。它以数据目录、日志格式与用量字段识别来源，不要求对应 App 或 CLI 仍然安装，也不把 Claude App、Claude Code、ChatGPT 普通聊天分别识别成账户账单来源。桌面编程客户端若写入相同格式和目录，其记录也可能被纳入。
+
+| 数据 | ccusage 的方式 | 本插件的处理 |
+| --- | --- | --- |
+| Claude Token 与费用 | 本机日志中的 input/output/cache、响应 ID、已记录费用或价格估算；无需 Cookie 或账户授权 | 默认只纳入 Claude App 登记的可读取会话，沿用去重与增量索引；不把独立 CLI 会话伪装成 App 用量 |
+| ChatGPT 编程用量 | Codex 格式的本机日志；不读取普通 ChatGPT 对话用量 | 明确标记为编程会话，支持桌面/CLI 产生的兼容记录，并处理与 OpenCodex 的重复统计 |
+| Claude 订阅百分比、额度余额 | 本机 Token 统计不提供这两项；`blocks --token-limit` 使用手动上限或历史最高量 | 使用独立的、明确授权的官方账户查询，不从 Token 或 API 等值费用推算 |
+
+Claude Code 日志可以作为 **Token 统计**的替代来源，但不能填补官网订阅余额。另一条官方途径是 [Claude Code 状态栏输入](https://code.claude.com/docs/en/statusline#rate-limit-usage)：客户端在首次 API 响应后可传递 `rate_limits.five_hour` / `seven_day` 的百分比与重置时间。插件若接入这种本机回调，不必自行读取 Cookie，但必须设置回调、保留已有状态栏行为、明确 CLI 来源与时间；该数据并不保证包含 Fable 分项或额度余额。当前版本没有自动改写 Claude Code 设置，也没有把它静默混入 Claude App 的账户数据。
 
 ## 开发维护
 

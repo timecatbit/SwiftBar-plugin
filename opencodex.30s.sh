@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.8.0</xbar.version>
+# <xbar.version>5.8.1</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -116,6 +116,7 @@ import swiftbar_config as connections
 import swiftbar_claude as claude_desktop
 import swiftbar_claude_usage as claude_records
 import swiftbar_claude_live as claude_live
+import swiftbar_terminal as terminal_jobs
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
@@ -1274,6 +1275,8 @@ def app_update_lines(data):
         else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail))
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
+    if terminal_jobs.latest_log(STATE_DIR,[r['id'] for r in rows]):
+        lines.append(item('查看最近 CLI 更新日志',level=1,sfimage='doc.text',**act('open-cli-update-log')))
     lines.append(item('选择 Harness…',level=1,sfimage='square.grid.2x2',**act('panel-modules')))
     hint='按 Harness 勾选及客户端联动规则检查'
     lines.append(item(hint,level=1,color=MUTED,size=10))
@@ -1933,7 +1936,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.8.0',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.8.1',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 
@@ -2062,6 +2065,9 @@ def module_connections():
                 if locations:children.insert(1,location_entry('读取目录' if any(os.path.exists(p) for p in locations) else '默认目录 · 尚未生成',locations))
                 if any(os.path.exists(p) for p in locations):children.insert(2,{'label':'在 Finder 中打开','symbol':'folder','action':['reveal-source',key],'children':[]})
             connections[key]={'label':label,'value':'已配置' if configured else '未配置','symbol':'folder','children':children}
+            if key=='codex':
+                children[0]['label']='来源 · 编程客户端的本机记录'
+                children.insert(1,{'label':'兼容桌面/CLI 编程会话，不含普通聊天','children':[]})
             if key=='claude':
                 children[0]['label']='来源 · Claude 桌面 App'
                 children.insert(1,{'label':'仅统计 App 登记的可读取会话','children':[]})
@@ -2666,7 +2672,14 @@ def dashboard_payload(data):
                 'cost':cost,'tokens':total,'requests':requests,'output':number(summary.get('outputTokens')),
                 'cache':min(1,cache/inputs) if inputs else None,'coverage':number(summary.get('coverageRatio')) if summary.get('coverageRatio') is not None else None,
                 'sessions':int(number(summary.get('sessions'))),'unpriced':unpriced,'models':model_rows,'history':history}
-    providers=[provider(k,label,u,('v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')) if k=='opencodex' else ('Claude App · 可读取会话' if k=='claude' else '本机记录 · 已排除代理重复项' if u.get('excludedProxyRequests') else '本机记录 · API 等值估算'),'运行正常' if k=='opencodex' and data.get('healthz') else '已同步') for k,label,u in selected]
+    providers=[]
+    for source,label,usage in selected:
+        subtitle='本机记录 · API 等值估算'
+        if source=='opencodex':subtitle='v'+str((data.get('healthz') or {}).get('version') or '—').lstrip('v')
+        elif source=='claude':subtitle='Claude App · 可读取会话'
+        elif source=='codex':subtitle='编程会话 · 已排除代理重复项' if usage.get('excludedProxyRequests') else '编程会话 · 本机记录'
+        status='运行正常' if source=='opencodex' and data.get('healthz') else '已同步'
+        providers.append(provider(source,label,usage,subtitle,status))
     # Codex local records and an active OpenCodex proxy can describe the same calls.
     # Keep both cards available, but use the proxy as the summary authority.
     proxy_available=any(p['id']=='opencodex' and p['available'] for p in providers)
@@ -2803,25 +2816,14 @@ def notify(message, subtitle=""):
 
 
 def terminal(command):
-    """在 SwiftBar 设置里指定的终端打开命令，默认退回系统 Terminal。"""
+    """在独立终端标签执行；Apple Events 不可用时保留文件降级方式。"""
     try:
         result = subprocess.run(["/usr/bin/defaults", "read", "com.ameba.SwiftBar", "Terminal"],
                                 capture_output=True, text=True, timeout=5)
         preferred = (result.stdout or "").strip()
     except Exception:
         preferred = ""
-    app = preferred if preferred in ("Terminal", "iTerm", "iTerm2") else "Terminal"
-    path = os.path.join(tempfile.gettempdir(), "opencodex-swiftbar.command")
-    body = "#!/bin/bash\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$HOME\"\n" + command + "\n"
-    try:
-        with open(path, "w") as handle:
-            handle.write(body)
-        os.chmod(path, 0o755)
-        opened = subprocess.run(["/usr/bin/open", "-a", app, path], capture_output=True, text=True)
-        if opened.returncode != 0 and app != "Terminal":
-            subprocess.run(["/usr/bin/open", "-a", "Terminal", path])
-    except OSError:
-        applescript('tell application "Terminal"\nactivate\ndo script ' + as_literal(command) + '\nend tell')
+    return terminal_jobs.launch(command,preferred,STATE_DIR)
 
 
 def ocx(args, timeout=240):
@@ -2934,7 +2936,11 @@ def run_action(name, extra):
         if not re.search(r'^\s+update(?:\s|\|)',helptext,re.M):
             applescript('display alert "当前版本不支持 update 命令" message "请通过官方安装方式更新。"');return
         refresh_url='swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))
-        terminal(shlex.join([binary,'update'])+'\nupdate_result=$?\n'+shlex.join(['/usr/bin/open','-g',refresh_url])+'\nexit "$update_result"')
+        terminal(terminal_jobs.update_command(binary,key,STATE_DIR,refresh_url))
+    elif name == 'open-cli-update-log':
+        if extra or not module_enabled('updates'):raise ValueError('invalid update log action')
+        path=terminal_jobs.latest_log(STATE_DIR,selected_update_ids())
+        if path:subprocess.run(['/usr/bin/open','-t',str(path)],check=True,timeout=5)
     elif name == 'reveal-source':
         key=extra[0] if len(extra)==1 else ''
         if key not in preferences.USAGE:raise ValueError('invalid source')
