@@ -25,7 +25,7 @@ USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbu
 
 
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': True, 'expandedProviders': [], 'revision': 0, 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': False, 'expandedProviders': [], 'revision': 0, 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
@@ -108,7 +108,7 @@ def update(directory, kind, key=None, value=None):
     elif kind == 'reset':
         current['visible'] = list(DEFAULT_VISIBLE)
         current['appearance'] = 'glass'
-        current['allowCollapse']=True;current['expandedProviders']=[]
+        current['allowCollapse']=False;current['expandedProviders']=[]
     elif kind == 'auto-path':
         if key not in USAGE:raise ValueError('invalid data source')
         current['paths'].pop('claude-app' if key=='claude' else key,None)

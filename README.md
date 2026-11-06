@@ -16,7 +16,17 @@ SwiftBar 菜单栏插件：在一个原生面板里查看各 AI 编程工具的 
 
 ## 安装
 
-需要 macOS 13+、[SwiftBar](https://github.com/swiftbar/SwiftBar) 和 Python 3.9+。先在 SwiftBar 里选好插件目录，然后在终端运行（版本号换成 [Releases](https://github.com/timecatbit/swiftbar-token-monitor/releases/latest) 上最新的）：
+需要 macOS 13+ 和 Python 3.9+。
+
+**第一步：安装 SwiftBar。** Token Monitor 是 SwiftBar 插件，先装好 SwiftBar：
+
+```sh
+brew install --cask swiftbar
+```
+
+没有 Homebrew 的话，从 [SwiftBar Releases](https://github.com/swiftbar/SwiftBar/releases/latest) 下载安装。第一次打开 SwiftBar 时，它会让你选一个插件目录（比如新建 `~/SwiftBar`），选好即可。
+
+**第二步：安装 Token Monitor。** 在终端运行（版本号换成 [Releases](https://github.com/timecatbit/swiftbar-token-monitor/releases/latest) 上最新的）：
 
 ```sh
 cd ~/Downloads
@@ -25,7 +35,7 @@ ditto -x -k token-monitor-5.12.0.zip .
 python3 token-monitor-5.12.0/install.py
 ```
 
-安装器会备份旧文件、保留你的设置，首次安装还会自动勾选检测到的工具。装好后发布包可以删除。
+安装器会自动找到 SwiftBar 的插件目录，备份旧文件、保留你的设置，首次安装还会自动勾选检测到的工具。装好后菜单栏会出现星星图标，发布包可以删除。
 
 如果是用浏览器下载、双击解压的，第一次打开面板时 macOS 可能提示无法验证开发者：到“系统设置 → 隐私与安全性”点一次“仍要打开”即可。
 
@@ -72,6 +82,11 @@ python3 scripts/package.py  # 打包发布 zip
 
 ## 致谢
 
+- [SwiftBar](https://github.com/swiftbar/SwiftBar)（MIT）：本插件运行在 SwiftBar 之上，菜单栏图标、右键菜单和定时刷新都由它提供。
 - [ccusage](https://github.com/ccusage/ccusage)（MIT）：用量统计规则与模型价格快照，许可见 [lib/CCUSAGE_LICENSE](lib/CCUSAGE_LICENSE)。
 - [CodexBar](https://github.com/steipete/CodexBar)（MIT）：Claude 用量查询的参考实现，许可见 [lib/CODEXBAR_LICENSE](lib/CODEXBAR_LICENSE)。
 - [LobeHub Icons](https://github.com/lobehub/lobe-icons)（MIT）：品牌图标，许可见 [assets/logos/LICENSE](assets/logos/LICENSE)；标志归各自所有者，仅用于标识服务。
+
+## 许可
+
+[MIT](LICENSE) © minicoke。第三方代码与图标按各自的许可证使用，见上方致谢。

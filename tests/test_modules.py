@@ -174,7 +174,8 @@ class ModuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'expanded','komari','true')
         with self.assertRaises(ValueError):preferences.update(self.m.STATE_DIR,'collapse','maybe')
         preferences.update(self.m.STATE_DIR,'reset')
-        self.assertTrue(preferences.read(self.m.STATE_DIR)['allowCollapse'])
+        # The default shows every card in full; folding is opt-in.
+        self.assertFalse(preferences.read(self.m.STATE_DIR)['allowCollapse'])
         self.assertEqual(preferences.read(self.m.STATE_DIR)['expandedProviders'],[])
     def test_only_visible_usage_headers_can_expand(self):
         snapshot={'schema':1,'dashboard':{'allowCollapse':True,'providers':[{'id':'claude'}]},'entries':[],'moduleOptions':self.m.module_options()}

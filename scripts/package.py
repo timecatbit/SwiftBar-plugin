@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRY = 'token-monitor.30s.sh'
 REPOSITORY = 'https://github.com/timecatbit/swiftbar-token-monitor'
 # The installer runs from the package root; the per-interpreter HTTP transport is still prepared on the user's Mac.
-CONTENTS = [ENTRY, 'lib', 'assets', 'config.example.sh', 'README.md', 'CHANGELOG.md',
+CONTENTS = [ENTRY, 'lib', 'assets', 'config.example.sh', 'README.md', 'CHANGELOG.md', 'LICENSE',
             'scripts/install.py', 'scripts/install_transport.py']
 APP = Path('build/OpenCodexPanel.app')
 
