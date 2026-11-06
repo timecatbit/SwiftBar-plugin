@@ -2890,7 +2890,8 @@ def run_action(name, extra):
     if name in ("panel", "panel-modules"):
         write_json_cache(cache_path("panel-open"), {"schema":1,"mode":"modules" if name=="panel-modules" else "home","createdAt":time.time()})
         if os.path.isdir(PANEL_APP):
-            subprocess.run(["/usr/bin/open", "-g", "-a", PANEL_APP, "--args",
+            # Not "-g": the panel opens active, so its glass and controls don't change look on the first click.
+            subprocess.run(["/usr/bin/open", "-a", PANEL_APP, "--args",
                             "--plugin", os.path.abspath(PLUGIN), "--snapshot", cache_path("panel-view")],
                            capture_output=True, timeout=5)
     elif name in ('set-module','set-appearance','reset-modules'):

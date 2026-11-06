@@ -823,7 +823,7 @@ final class HoverIntent {
 
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePickerDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var hintTask:DispatchWorkItem?;private var hintView:NSView?;private var managerOnly=false
+    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var hintTask:DispatchWorkItem?;private var hintView:NSView?;private var userApp:NSRunningApplication?;private var firstActivation=true;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
@@ -838,6 +838,10 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         snapshotPath=args[si+1];pluginPath=args[pi+1];setup(panel);panel.setAccessibilityLabel("AI 用量面板")
         observeSnapshot()
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(accessibilityChanged),name:NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,object:nil)
+        if let front=NSWorkspace.shared.frontmostApplication,front != NSRunningApplication.current{userApp=front}
+        NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didActivateApplicationNotification,object:nil,queue:.main){[weak self] note in
+            if let app=note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,app != NSRunningApplication.current{self?.userApp=app}
+        }
         NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingBegan(_:)),name:NSMenu.didBeginTrackingNotification,object:nil)
         NotificationCenter.default.addObserver(self,selector:#selector(rangeTrackingEnded(_:)),name:NSMenu.didEndTrackingNotification,object:nil)
         show()
@@ -856,7 +860,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             guard let self,!self.anchoredMenuOpen else{return}
             // SwiftBar routes right-click and Option-click to its native menu.
             // Only an ordinary left-click on the star retains the panel toggle.
-            if event.type == .rightMouseDown || event.modifierFlags.contains(.option) || !self.anchorRect.contains(NSEvent.mouseLocation){self.hide()}
+            if event.type == .rightMouseDown || event.modifierFlags.contains(.option) || !self.anchorRect.contains(NSEvent.mouseLocation){self.hide(returningFocus:false)}
         }){monitors.append(monitor)}
         if let monitor=NSEvent.addGlobalMonitorForEvents(matching:.mouseMoved,handler:{[weak self] _ in self?.checkPointer()}){monitors.append(monitor)}
         if let monitor=NSEvent.addLocalMonitorForEvents(matching:.mouseMoved,handler:{[weak self] event in self?.checkPointer();return event}){monitors.append(monitor)}
@@ -893,6 +897,13 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         try? FileManager.default.removeItem(at:request)
         return value["mode"] as? String=="modules"
     }
+    // Opening the app (the star) activates it. On launch that comes before the panel has been built, so
+    // the first activation is left alone; later, if it lands after the panel closed, focus goes straight
+    // back. A short wait tells a reopen that shows the panel from one that hides it.
+    func applicationDidBecomeActive(_ notification:Notification){
+        if firstActivation{firstActivation=false;return}
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.6){[weak self] in guard let self,!self.panel.isVisible else{return};self.returnFocus()}
+    }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool{let requested=requestedMode();if panel.isVisible && (requested == nil || requested==managerOnly){hide()}else{if let requested{managerOnly=requested};show()};return false}
     private func nativeMenuVisible()->Bool {
         let windows=CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []
@@ -903,8 +914,20 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             return (bounds["Width"] ?? 0)>80 && (bounds["Height"] ?? 0)>30
         }
     }
-    private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil);observeSnapshot();installPointerMonitors();publishVisibility(true);if !managerOnly{performAction(["refresh-view"])}}
-    private func hide(){hintTask?.cancel();hintView?.removeFromSuperview();hintView=nil;rangePicker?.menu?.cancelTracking();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
+    private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil);activateForPanel();observeSnapshot();installPointerMonitors();publishVisibility(true);if !managerOnly{performAction(["refresh-view"])}}
+    // Glass and controls draw their inactive, greyer style until the app is active, so the panel used to
+    // change colour on the first click. Opening the panel activates it; closing hands focus back.
+    private func activateForPanel(){
+        guard !NSApp.isActive else{return}
+        if #available(macOS 14.0,*){NSApp.activate()}else{NSApp.activate(ignoringOtherApps:true)}
+    }
+    // Deactivating alone leaves no app focused, so hand focus to the app the user was in. Not when the
+    // panel closed because they clicked another app or opened a web page: that app is coming forward.
+    private func returnFocus(){
+        guard NSApp.isActive,let app=userApp,!app.isTerminated else{return}
+        if #available(macOS 14.0,*){NSApp.yieldActivation(to:app);app.activate()}else{app.activate(options:[])}
+    }
+    private func hide(returningFocus:Bool=true){if returningFocus{returnFocus()};hintTask?.cancel();hintView?.removeFromSuperview();hintView=nil;rangePicker?.menu?.cancelTracking();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
     private func updatePresentation(){snapshot=interaction.displayed();layout()}
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
@@ -1101,7 +1124,11 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     private func activate(_ entry:Entry,row:Row,depth:Int){
         if entry.isModule,!row.configurationClick,let action=entry.action{performAction(action);return}
         if !entry.children.isEmpty{openFlyout(entry,row:row,depth:depth);return}
-        if let href=entry.href,let url=URL(string:href),["http","https","swiftbar"].contains(url.scheme ?? ""){hide();NSWorkspace.shared.open(url);return}
+        if let href=entry.href,let url=URL(string:href),["http","https","swiftbar"].contains(url.scheme ?? ""){
+            // Web pages come to the front; SwiftBar commands run without taking focus from the user's app.
+            let config=NSWorkspace.OpenConfiguration();config.activates=url.scheme != "swiftbar"
+            hide(returningFocus:!config.activates);NSWorkspace.shared.open(url,configuration:config);return
+        }
         if let action=entry.action{performAction(action)}
     }
     @objc private func rangeTrackingBegan(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuWillOpen(menu)}}
@@ -1203,7 +1230,10 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             actionTimeout?.cancel()
             if PanelInteraction.isPreference(action){let task=DispatchWorkItem{[weak self] in if self?.pendingAction==id{self?.abortAction()}};actionTimeout=task;DispatchQueue.main.asyncAfter(deadline:.now()+20,execute:task)}
             var url=URLComponents();url.scheme="swiftbar";url.host="refreshplugin";url.queryItems=[URLQueryItem(name:"name",value:URL(fileURLWithPath:pluginPath).lastPathComponent)]
-            if !NSWorkspace.shared.open(url.url!){abortAction()}
+            // Ask SwiftBar to refresh without activating it: activating SwiftBar took focus from the panel,
+            // which then drew its inactive, greyer look until the next click.
+            let quiet=NSWorkspace.OpenConfiguration();quiet.activates=false
+            NSWorkspace.shared.open(url.url!,configuration:quiet){[weak self] _,error in if error != nil{DispatchQueue.main.async{self?.abortAction()}}}
         }catch{abortAction()}
     }
 }
