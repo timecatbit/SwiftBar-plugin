@@ -127,6 +127,14 @@ final class ContentScrollView:NSScrollView {
         super.scrollWheel(with:event)
     }
 }
+// The panel never activates the app, and AppKit only shows tooltips for the active app, so header
+// buttons report hovering themselves (activeAlways) and the panel draws a short hint below them.
+final class HintButton:NSButton {
+    var hint="";var hovered:((HintButton,Bool)->Void)?;private var area:NSTrackingArea?
+    override func updateTrackingAreas(){super.updateTrackingAreas();if let area{removeTrackingArea(area)};area=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(area!)}
+    override func mouseEntered(with event:NSEvent){hovered?(self,true)}
+    override func mouseExited(with event:NSEvent){hovered?(self,false)}
+}
 final class DisclosureButton:NSButton {
     override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
     var invoke:(()->Void)?;var hovered:((Bool)->Void)?;private var area:NSTrackingArea?
@@ -815,7 +823,7 @@ final class HoverIntent {
 
 final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePickerDelegate {
     private let panel=Panel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var managerOnly=false
+    private var rangePicker:NSPopUpButton?;private var anchoredMenuOpen=false;private var toast:(text:String,until:Date)?;private var toastView:NSView?;private var hintTask:DispatchWorkItem?;private var hintView:NSView?;private var managerOnly=false
     private var snapshot:Snapshot?;private var snapshotPath="";private var pluginPath="";private var modified:Date?
     private var anchor:NSPoint = .zero;private var anchorRect:NSRect = .zero;private var scrollOffset:CGFloat=0
     private var fallbackTimer:Timer?;private let observer=SnapshotObserver();private var actionTimeout:DispatchWorkItem?;private var reloadTask:DispatchWorkItem?;private var monitors:[Any]=[];private var pendingAction:String?;private var pendingSince:Date?
@@ -896,7 +904,7 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         }
     }
     private func show(){if let requested=requestedMode(){managerOnly=requested};guard !nativeMenuVisible() else{hide();return};scrollOffset=0;anchor=NSEvent.mouseLocation;let screen=NSScreen.screens.first(where:{$0.frame.contains(anchor)}) ?? NSScreen.main!;anchorRect=NSRect(x:anchor.x-24,y:screen.visibleFrame.maxY,width:48,height:screen.frame.maxY-screen.visibleFrame.maxY+8);reload(force:true);panel.makeKeyAndOrderFront(nil);observeSnapshot();installPointerMonitors();publishVisibility(true);if !managerOnly{performAction(["refresh-view"])}}
-    private func hide(){rangePicker?.menu?.cancelTracking();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
+    private func hide(){hintTask?.cancel();hintView?.removeFromSuperview();hintView=nil;rangePicker?.menu?.cancelTracking();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0);panel.orderOut(nil);removePointerMonitors();reloadTask?.cancel();publishVisibility(false)}
     private func updatePresentation(){snapshot=interaction.displayed();layout()}
     private func reload(force:Bool=false){
         // Do not replace a button while the user is pressing it.
@@ -951,24 +959,24 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             }
             picker.menu=menu;menu.delegate=self;rangePicker=picker;content.addSubview(picker)
             // Refresh lives beside Summary in the same rounded bezel as the range menu; it dims while a refresh is running.
-            let refresh=NSButton(frame:NSRect(x:inner-145,y:7.5,width:28,height:25))
+            let refresh=HintButton(frame:NSRect(x:inner-145,y:7.5,width:28,height:25))
             refresh.bezelStyle = .rounded;refresh.controlSize = .small;refresh.title=""
             refresh.image=NSImage(systemSymbolName:"arrow.clockwise",accessibilityDescription:"刷新数据")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));refresh.imagePosition = .imageOnly
-            refresh.contentTintColor = .labelColor;refresh.toolTip="刷新数据";refresh.setAccessibilityLabel("刷新数据")
+            refresh.contentTintColor = .labelColor;refresh.hint="刷新数据";refresh.hovered={[weak self] in self?.hoverHint($0,$1)};refresh.setAccessibilityLabel("刷新数据")
             refresh.target=self;refresh.action=#selector(refreshData);refresh.isEnabled=interaction.active != ["refresh"]
             content.addSubview(refresh)
-            let share=NSButton(frame:NSRect(x:inner-177,y:7.5,width:28,height:25))
+            let share=HintButton(frame:NSRect(x:inner-177,y:7.5,width:28,height:25))
             share.bezelStyle = .rounded;share.controlSize = .small;share.title=""
             share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));share.imagePosition = .imageOnly
-            share.contentTintColor = .labelColor;share.toolTip="分享用量图";share.setAccessibilityLabel("分享用量图")
+            share.contentTintColor = .labelColor;share.hint="分享用量图";share.hovered={[weak self] in self?.hoverHint($0,$1)};share.setAccessibilityLabel("分享用量图")
             share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share)
             // Auto-detect is a rarely used setup action, so it is a plain icon like its neighbours; the
-            // tooltip and accessibility label name it, and it always asks before changing anything.
-            let detect=NSButton(frame:NSRect(x:inner-209,y:7.5,width:28,height:25))
+            // hover hint and accessibility label name it, and it always asks before changing anything.
+            let detect=HintButton(frame:NSRect(x:inner-209,y:7.5,width:28,height:25))
             detect.bezelStyle = .rounded;detect.controlSize = .small;detect.title=""
             detect.image=NSImage(systemSymbolName:"sparkle.magnifyingglass",accessibilityDescription:"自动检测")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));detect.imagePosition = .imageOnly
             detect.contentTintColor = .labelColor;detect.setAccessibilityLabel("自动检测")
-            detect.toolTip="自动检测：按本机已安装的工具重新选择主页模块。先列出将启用和取消的模块，确认后才生效。"
+            detect.hint="自动检测";detect.hovered={[weak self] in self?.hoverHint($0,$1)}
             detect.target=self;detect.action=#selector(detectModules);content.addSubview(detect)
         }
         scroll.documentView=content;scroll.configureScrolling();scroll.contentView.scroll(to:NSPoint(x:0,y:min(scrollOffset,max(0,contentHeight-scroll.frame.height))));surface.content.addSubview(scroll);panel.contentView=surface
@@ -1100,6 +1108,22 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     @objc private func rangeTrackingEnded(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuDidClose(menu)}}
     func menuWillOpen(_ menu:NSMenu){anchoredMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
     func menuDidClose(_ menu:NSMenu){anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
+    // A short label under a header button, 350 ms after the pointer settles on it.
+    private func hoverHint(_ button:HintButton,_ inside:Bool){
+        hintTask?.cancel();hintView?.removeFromSuperview();hintView=nil
+        guard inside,!button.hint.isEmpty else{return}
+        let task=DispatchWorkItem{[weak self,weak button] in
+            guard let self,let button,let surface=button.window?.contentView as? Surface else{return}
+            let label=NSTextField(labelWithString:button.hint);label.font = .systemFont(ofSize:11);label.textColor = .labelColor
+            let size=label.intrinsicContentSize,anchor=surface.convert(button.bounds,from:button),width=ceil(size.width)+16
+            let bubble=FlippedView(frame:NSRect(x:min(max(8,anchor.midX-width/2),surface.bounds.width-width-8),y:anchor.maxY+4,width:width,height:ceil(size.height)+8))
+            bubble.wantsLayer=true;bubble.layer?.cornerRadius=6;bubble.layer?.borderWidth=0.5
+            surface.effectiveAppearance.performAsCurrentDrawingAppearance{bubble.layer?.backgroundColor=background(surface).cgColor;bubble.layer?.borderColor=NSColor.separatorColor.cgColor}
+            label.frame=NSRect(x:8,y:4,width:ceil(size.width),height:ceil(size.height));bubble.addSubview(label)
+            surface.addSubview(bubble);self.hintView=bubble
+        }
+        hintTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:task)
+    }
     @objc private func refreshData(){performAction(["refresh"])}
     @objc private func detectModules(){performAction(["detect-modules"])}
     // The picture covers Summary and the Harness cards only; subscriptions, balances and keys stay private.
@@ -1184,6 +1208,5 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     }
 }
 // Application entry point. The interaction tests compile the declarations above without launching the app.
-// Header buttons are icons, so their tooltips appear after 350 ms instead of the system's ~1 s.
-UserDefaults.standard.setVolatileDomain(["AppleAccentColor":4,"AppleAquaColorVariant":1,"NSInitialToolTipDelay":350],forName:UserDefaults.argumentDomain)
+UserDefaults.standard.setVolatileDomain(["AppleAccentColor":4,"AppleAquaColorVariant":1],forName:UserDefaults.argumentDomain)
 let app=NSApplication.shared;app.setActivationPolicy(.accessory);let delegate=App();app.delegate=delegate;app.run()
