@@ -962,18 +962,12 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
             share.image=NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"分享用量图")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));share.imagePosition = .imageOnly
             share.contentTintColor = .labelColor;share.toolTip="分享用量图";share.setAccessibilityLabel("分享用量图")
             share.target=self;share.action=#selector(shareDashboard(_:));content.addSubview(share)
-            // Auto-detect carries its name, not just an icon, so people know what it does. It only
-            // shrinks to the icon when a long heading leaves no room; it always asks before changing anything.
-            let detectTitle="自动检测",detectFont=NSFont.systemFont(ofSize:11)
-            let heading=(dashboard.showSummary==false ? "Harness Token 用量" : "Summary") as NSString
-            let headingRight=12+ceil(heading.size(withAttributes:[.font:NSFont.systemFont(ofSize:14,weight:.semibold)]).width)+6
-            let labelled=ceil((detectTitle as NSString).size(withAttributes:[.font:detectFont]).width)+32
-            let detectWidth=inner-181-labelled>=headingRight ? labelled : 28
-            let detect=NSButton(frame:NSRect(x:inner-181-detectWidth,y:7.5,width:detectWidth,height:25))
-            detect.bezelStyle = .rounded;detect.controlSize = .small;detect.font=detectFont
-            detect.image=NSImage(systemSymbolName:"sparkle.magnifyingglass",accessibilityDescription:detectTitle)?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold))
-            detect.title=detectWidth==28 ? "" : detectTitle;detect.imagePosition=detectWidth==28 ? .imageOnly : .imageLeading
-            detect.contentTintColor = .labelColor;detect.setAccessibilityLabel(detectTitle)
+            // Auto-detect is a rarely used setup action, so it is a plain icon like its neighbours; the
+            // tooltip and accessibility label name it, and it always asks before changing anything.
+            let detect=NSButton(frame:NSRect(x:inner-209,y:7.5,width:28,height:25))
+            detect.bezelStyle = .rounded;detect.controlSize = .small;detect.title=""
+            detect.image=NSImage(systemSymbolName:"sparkle.magnifyingglass",accessibilityDescription:"自动检测")?.withSymbolConfiguration(.init(pointSize:11,weight:.semibold));detect.imagePosition = .imageOnly
+            detect.contentTintColor = .labelColor;detect.setAccessibilityLabel("自动检测")
             detect.toolTip="自动检测：按本机已安装的工具重新选择主页模块。先列出将启用和取消的模块，确认后才生效。"
             detect.target=self;detect.action=#selector(detectModules);content.addSubview(detect)
         }
@@ -1190,5 +1184,6 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     }
 }
 // Application entry point. The interaction tests compile the declarations above without launching the app.
-UserDefaults.standard.setVolatileDomain(["AppleAccentColor":4,"AppleAquaColorVariant":1],forName:UserDefaults.argumentDomain)
+// Header buttons are icons, so their tooltips appear after 350 ms instead of the system's ~1 s.
+UserDefaults.standard.setVolatileDomain(["AppleAccentColor":4,"AppleAquaColorVariant":1,"NSInitialToolTipDelay":350],forName:UserDefaults.argumentDomain)
 let app=NSApplication.shared;app.setActivationPolicy(.accessory);let delegate=App();app.delegate=delegate;app.run()
