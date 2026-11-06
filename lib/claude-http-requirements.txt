@@ -1,11 +1,12 @@
 # Installed privately with the plugin, never into global Python site-packages.
-# curl_cffi 0.13 supports Python 3.9 and browser-compatible TLS on macOS.
+# curl_cffi 0.13 supports Python 3.9 and browser-compatible TLS on macOS. Its cffi 2.0
+# has no Python 3.15 wheels, so 3.15+ takes curl_cffi 0.17 with cffi 2.1.1 instead.
 # Hashes cover every macOS or pure-Python wheel PyPI publishes for these pins;
 # pip then refuses any substituted artifact (hash-checking mode).
-curl_cffi==0.13.0 \
+curl_cffi==0.13.0 ; python_version < "3.15" \
     --hash=sha256:434cadbe8df2f08b2fc2c16dff2779fb40b984af99c06aa700af898e185bb9db \
     --hash=sha256:59afa877a9ae09efa04646a7d068eeea48915a95d9add0a29854e7781679fcd7
-cffi==2.0.0 \
+cffi==2.0.0 ; python_version < "3.15" \
     --hash=sha256:00bdf7acc5f795150faa6957054fbbca2439db2f775ce831222b66f192f03beb \
     --hash=sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44 \
     --hash=sha256:2de9a304e27f7596cd03d16f1b7c72219bd944e99cc52b84d0145aefb07cbd3c \
@@ -20,6 +21,12 @@ cffi==2.0.0 \
     --hash=sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49 \
     --hash=sha256:fc33c5141b55ed366cfaad382df24fe7dcbc686de5be719b207bb248e3053dc5 \
     --hash=sha256:fe562eb1a64e67dd297ccc4f5addea2501664954f2692b69a76449ec7913ecbf
+curl_cffi==0.17.0 ; python_version >= "3.15" \
+    --hash=sha256:a055f709029d2deaafed6a3a2a58c219d7ee2776a1d2357272d3ef230fb30c5c \
+    --hash=sha256:f8cf840646d3e57637b8caae7d0d93334dfed0bfbf6f160b36479a7d6069d547
+cffi==2.1.1 ; python_version >= "3.15" \
+    --hash=sha256:fb92203a88b3d3053034db775110081c49d28be6551923805e039924093761e4 \
+    --hash=sha256:2ae64be792b8966f2c69538199728b290e34726562896df1e5dc8ffd8d8188e8
 pycparser==2.23 \
     --hash=sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934
 certifi==2026.10.23 \
