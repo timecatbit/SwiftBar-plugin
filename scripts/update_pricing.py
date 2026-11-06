@@ -5,7 +5,8 @@ lib/codex-pricing.json keeps the OpenAI models Codex logs can name, with ccusage
 Codex aliases, tiers and fallbacks. lib/model-pricing.json keeps the other vendors'
 models that WorkBuddy, DeepSeek Harness, Gemini CLI and OpenCode may log. Prices are
 USD per million tokens; missing cache prices use ccusage's defaults (read 10%,
-write 125% of input). Run it before each release so new models get priced.
+write 125% of input). A daily GitHub Action runs it against the latest ccusage, and
+installed plugins download the committed tables, so users get new prices without upgrading.
 """
 import argparse
 import json
@@ -55,7 +56,9 @@ def main():
         multipliers[tier] = {name: value for name, value in sorted(exact.items()) if name in models}
     fallbacks = json.loads((repo / 'rust/adapters/codex/src/codex-auto-review-fallbacks.json').read_text())
     commit = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
-    source = {'project': 'ccusage', 'commit': commit, 'license': 'MIT'}
+    # The commit time orders tables: installed plugins keep whichever copy is newest.
+    committed = subprocess.run(['git', '-C', str(repo), 'log', '-1', '--format=%cI'], capture_output=True, text=True, check=True).stdout.strip()
+    source = {'project': 'ccusage', 'commit': commit, 'committedAt': committed, 'license': 'MIT'}
     result = {'source': source, 'aliases': aliases, 'autoReviewFallbacks': fallbacks, 'multipliers': multipliers, 'models': models}
     (ROOT / 'lib/codex-pricing.json').write_text(json.dumps(result, ensure_ascii=False, indent=1) + '\n')
     # Lower-case keys: harness logs spell vendor model names inconsistently.

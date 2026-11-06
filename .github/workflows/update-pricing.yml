@@ -1,0 +1,47 @@
+# Regenerates the price tables from the latest ccusage snapshot every day. Installed plugins
+# download the committed tables, so users get new model prices without reinstalling.
+name: Update price tables
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-pricing
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ccusage/ccusage
+          path: .ccusage
+          fetch-depth: 1
+      - name: Regenerate tables
+        run: python3 scripts/update_pricing.py .ccusage
+      - name: Validate tables
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          sys.path.insert(0, 'lib')
+          import swiftbar_sources as sources
+          for name in ('codex-pricing.json', 'model-pricing.json'):
+              if not sources.valid_pricing(name, json.load(open('lib/' + name))):
+                  sys.exit('invalid ' + name)
+          EOF
+      - name: Commit changes
+        run: |
+          if git diff --quiet -- lib/codex-pricing.json lib/model-pricing.json; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/codex-pricing.json lib/model-pricing.json
+          git commit -m 'chore(pricing): update price tables from ccusage'
+          git push

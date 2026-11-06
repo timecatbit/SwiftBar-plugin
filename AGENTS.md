@@ -51,7 +51,7 @@
 - 菜单展开期间不得重建范围下拉控件。只在跟踪结束后更新布局。
 - 使用 `python3 scripts/check.py` 验证，它同时扫描 `lib/`、`scripts/` 中未被引用的函数与导入。改动 Swift 代码时运行 `scripts/build.py`。
 - 插件主体在 `lib/swiftbar_plugin.py`，`token-monitor.30s.sh`（SwiftBar 中名为 token-monitor，元数据作者 minicoke、GitHub 指向本仓库）只加载配置并启动；不要把 Python 重新内嵌进入口脚本。菜单渲染只读缓存，网络请求与日志索引放在后台进程；一次渲染内的偏好与本机元数据使用同一份快照。
-- 价格表 `lib/codex-pricing.json`（OpenAI/Codex）与 `lib/model-pricing.json`（DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 官方模型名）均由 `python3 scripts/update_pricing.py <ccusage 检出目录>` 从 ccusage 价格快照生成，不要手改；每次发布前及用户反馈“费用待定价”时先拉取最新 ccusage 再运行，并在 README 记录快照提交。客户端自己记录的费用优先，仅缺失时按表估算；表中没有的名字（如 `default-model`）保持未计价，不按相近模型猜价。更新时同步 README 中的复核提交。
+- 价格表 `lib/codex-pricing.json`（OpenAI/Codex）与 `lib/model-pricing.json`（DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 官方模型名）均由 `python3 scripts/update_pricing.py <ccusage 检出目录>` 从 ccusage 价格快照生成，不要手改；`.github/workflows/update-pricing.yml` 每天用最新 ccusage 运行并提交；表中 `source.committedAt` 决定新旧。已安装插件每天后台 GET 一次本仓库 raw 地址的两张表（不带 Cookie/标识，`OCX_PRICING_UPDATES=0` 关闭），必须经 `valid_pricing` 逐项校验且更新于当前副本才写入 `SwiftBarToken/pricing/`；统计缓存键含价格快照提交，换表即重算。这是“未配置不发请求”的唯一例外。客户端自己记录的费用优先，仅缺失时按表估算；表中没有的名字（如 `default-model`）保持未计价，不按相近模型猜价。更新时同步 README 中的复核提交。
 - 日志索引的表结构或 ID 格式变化时提升文件名中的版本号，并同步 `CURRENT_INDEXES`，让旧索引被自动清理。时间字符串统一用 `swiftbar_time.parse_iso` 解析（独立复制的状态栏桥接脚本除外）。
 - 参考 ccusage 的适配逻辑保留 `lib/CCUSAGE_LICENSE`；Claude 用量先按 App 会话归属过滤并去重，再按日期筛选。日志未变化时复用规范化索引，改写/删除不能保留旧统计，任何情况下不以本机费用推算订阅百分比。
 - 界面改动安装后必须实际点击星星、打开受影响侧栏并查看截图，不能仅以编译通过作为视觉验证。

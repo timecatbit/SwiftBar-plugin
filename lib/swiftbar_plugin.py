@@ -72,6 +72,9 @@ VERSION = "5.12.0"
 PRODUCT = "Token Monitor"
 AUTHOR = "minicoke"
 REPOSITORY = "https://github.com/timecatbit/swiftbar-token-monitor"
+# The repository regenerates its price tables daily from ccusage; plugins fetch the committed copies.
+PRICING_URL = "https://raw.githubusercontent.com/timecatbit/swiftbar-token-monitor/main/lib/"
+PRICING_TABLES = ("codex-pricing.json", "model-pricing.json")
 
 
 # Runtime files are installed alongside this script; the source checkout is never needed.
@@ -99,6 +102,7 @@ KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
      os.path.join(HOME, 'Library', 'Application Support', 'SwiftBarToken')))
+sources.PRICING_OVERRIDE = os.path.join(STATE_DIR, 'pricing')
 
 # Set while one menu render runs, so it sees a single snapshot of settings and local metadata.
 RENDER_MEMO = None
@@ -1545,6 +1549,28 @@ def refresh_swiftbar():
     except (OSError,subprocess.SubprocessError):pass
 
 
+def pricing_due(now=None):
+    if os.environ.get('OCX_PRICING_UPDATES')=='0':return False
+    now=time.time() if now is None else now
+    return not 0<=now-read_cache('pricing-check').get('checkedAt',0)<86400
+
+
+def refresh_pricing(now=None):
+    """Once a day: a plain GET for each table, no cookies or identifiers. Only a valid table
+    newer than the one in use is kept; OCX_PRICING_UPDATES=0 in config.local.sh turns this off."""
+    if not pricing_due(now):return
+    write_json_cache(cache_path('pricing-check'),{'schema':1,'checkedAt':time.time() if now is None else now})
+    for name in PRICING_TABLES:
+        try:
+            req=urllib.request.Request(PRICING_URL+name,headers={'User-Agent':'TokenMonitor/'+VERSION,'Accept':'application/json'})
+            with urllib.request.urlopen(req,timeout=10) as response:body=response.read(4*1024*1024+1)
+            if len(body)>4*1024*1024:continue
+            data=json.loads(body.decode('utf-8'))
+        except (OSError,ValueError):continue
+        if sources.valid_pricing(name,data) and sources.committed(data)>sources.committed(sources.pricing(name)):
+            write_json_cache(os.path.join(sources.PRICING_OVERRIDE,name),data);sources.PRICING.pop(name,None)
+
+
 def background_refresh():
     """One worker at a time, even when the menu is refreshed repeatedly."""
     try:
@@ -1558,6 +1584,7 @@ def background_refresh():
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(loader) for name, loader in loaders.items() if loader_due(name)]
                 if cache_due(read_cache(range_cache_name()),refresh_ttl(60)):futures.append(pool.submit(range_usage_cached))
+                if pricing_due():futures.append(pool.submit(refresh_pricing))
                 for future in futures:
                     future.result()
             if ocx_configured() and (module_enabled('opencodex') or auto_update_state().get('status')=='running'):auto_update_opencodex()

@@ -29,3 +29,7 @@
 # export MINIMAX_PLATFORM_API_KEY_FILE="$HOME/.config/minimax/platform-key"
 # export GEMINI_API_KEY_FILE="$HOME/.config/gemini/api-key"  # GOOGLE_API_KEY(_FILE) is also recognized.
 # export MOONSHOT_API_KEY_FILE="$HOME/.config/moonshot/api-key"
+
+# Price tables update once a day from this project's GitHub repository (a plain GET with no
+# cookies or identifiers). Set to 0 to keep only the tables installed with the plugin.
+# export OCX_PRICING_UPDATES=0

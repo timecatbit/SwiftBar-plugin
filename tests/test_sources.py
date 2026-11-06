@@ -77,6 +77,24 @@ class SourceTests(unittest.TestCase):
         # A cost the client logged itself still wins over the table.
         logged=sources.aggregate([dict(event,timestamp=10,session='s',cost=0.5)],0,20,timezone.utc,price=sources.model_cost)
         self.assertAlmostEqual(logged['summary']['estimatedCostUsd'],0.5)
+    def test_price_tables_are_validated_and_the_newest_copy_wins(self):
+        bundled=json.loads((Path(sources.__file__).parent/'model-pricing.json').read_text())
+        self.assertTrue(sources.valid_pricing('model-pricing.json',bundled))
+        for broken in ({'deepseek-v4.1-flash':{'input':-1,'output':1,'cacheRead':0,'cacheWrite':0}},
+                       {'deepseek-v4.1-flash':{'input':True,'output':1,'cacheRead':0,'cacheWrite':0}},
+                       {'x'*300:{'input':1,'output':1,'cacheRead':0,'cacheWrite':0}}):
+            self.assertFalse(sources.valid_pricing('model-pricing.json',dict(bundled,models=broken)))
+        self.assertFalse(sources.valid_pricing('model-pricing.json',dict(bundled,source={'commit':'nope'})))
+        folder=Path(self.temp.name)/'pricing';folder.mkdir()
+        def install(stamp,price):
+            table=json.loads(json.dumps(bundled));table['source']['committedAt']=stamp
+            table['models']['deepseek-v4.1-flash']['input']=price
+            (folder/'model-pricing.json').write_text(json.dumps(table))
+        with patch.object(sources,'PRICING_OVERRIDE',str(folder)),patch.dict(sources.PRICING,clear=True):
+            install('2099-01-01T00:00:00Z',9.0)
+            self.assertEqual(sources.pricing('model-pricing.json')['models']['deepseek-v4.1-flash']['input'],9.0)
+            sources.PRICING.clear();install('2000-01-01T00:00:00Z',9.0)
+            self.assertEqual(sources.pricing('model-pricing.json')['models']['deepseek-v4.1-flash']['input'],bundled['models']['deepseek-v4.1-flash']['input'])
     def test_codex_cost_follows_ccusage_tiers_aliases_and_fallbacks(self):
         def cost(model,inputs=100000,cached=50000,output=10000,tier=None,when=1793000000):
             return sources.codex_cost({'model':model,'input':inputs,'cached':cached,'output':output,'writes':0,'tier':tier,'timestamp':when})

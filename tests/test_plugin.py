@@ -27,6 +27,26 @@ class PluginTests(unittest.TestCase):
             'schema':1, 'payload':payload, 'fetchedAt':time.time()-age,
             'day':self.m.datetime.now().strftime('%Y-%m-%d')})
 
+    def test_price_tables_update_daily_and_keep_only_newer_valid_copies(self):
+        sources=self.m.sources;bundled=sources.pricing('model-pricing.json')
+        newer=json.loads(json.dumps(bundled));newer['source']['committedAt']='2099-01-01T00:00:00Z'
+        bodies={'codex-pricing.json':b'{"not":"a table"}','model-pricing.json':json.dumps(newer).encode()}
+        def answer(req,timeout):
+            body=bodies[req.full_url.rsplit('/',1)[1]];response=Mock();response.read.return_value=body
+            response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False);return response
+        with patch.dict(sources.PRICING,clear=True),patch.object(self.m.urllib.request,'urlopen',side_effect=answer) as get:
+            self.m.refresh_pricing()
+            self.assertEqual(get.call_count,2)
+            self.assertTrue(all(c.args[0].full_url.startswith('https://raw.githubusercontent.com/') for c in get.call_args_list))
+            saved=Path(sources.PRICING_OVERRIDE)
+            self.assertTrue((saved/'model-pricing.json').is_file());self.assertFalse((saved/'codex-pricing.json').exists())
+            self.assertEqual(sources.pricing('model-pricing.json')['source']['committedAt'],'2099-01-01T00:00:00Z')
+            # Once a day only, and never when the user turns it off.
+            self.m.refresh_pricing();self.assertEqual(get.call_count,2)
+            self.m.write_json_cache(self.m.cache_path('pricing-check'),{'schema':1,'checkedAt':0})
+            with patch.dict(os.environ,{'OCX_PRICING_UPDATES':'0'}):self.m.refresh_pricing()
+            self.assertEqual(get.call_count,2)
+
     def test_cache_hit_avoids_network(self):
         self.record('usage_today', {'summary':{'requests':12}})
         loader=Mock(side_effect=AssertionError('network used'))

@@ -138,7 +138,7 @@ Claude 用量索引只保存规范化计数与 128 位哈希 ID；只追加新�
 ## 统计口径与隐私
 
 - 费用是已知价格的 API 等值估算，或客户端记录的费用，不是订阅账单。没有价格的数据会保留 Token 并标记未计价（如 WorkBuddy 的 `default-model` 不是真实模型名，不会被猜价）。
-- 价格表来自 ccusage 的 models.dev 价格快照（美元/百万 Token）：`lib/codex-pricing.json` 收录 OpenAI 模型及 Codex 规则，`lib/model-pricing.json` 收录 DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 的官方模型名，转售商前缀的价格不采用。维护者在每次发布前运行 `python3 scripts/update_pricing.py <ccusage 检出目录>` 更新两张表，当前快照为 ccusage `30b653f7`（2026-11-06）。
+- 价格表来自 ccusage 的 models.dev 价格快照（美元/百万 Token）：`lib/codex-pricing.json` 收录 OpenAI 模型及 Codex 规则，`lib/model-pricing.json` 收录 DeepSeek、GLM、Kimi、MiniMax、Qwen、Gemini、Grok 的官方模型名，转售商前缀的价格不采用。价格表自动更新：仓库的 GitHub Action 每天用最新 ccusage 运行 `scripts/update_pricing.py` 并提交两张表；已安装的插件每天在后台检查一次，从本仓库的 `raw.githubusercontent.com` 下载这两个 JSON（普通 GET，不带 Cookie 或任何标识），逐项校验格式与数值，只有比当前更新的快照才存到 `~/Library/Application Support/SwiftBarToken/pricing/` 使用，无需重装插件。表内 `source.commit` 记录所用 ccusage 快照。不想联网更新价格时，在 `config.local.sh` 加 `export OCX_PRICING_UPDATES=0`，只用安装时自带的表。
 - Claude 缓存写入区分 5 分钟/1 小时时长，存在明细时以明细为准。有效 `costUSD` 优先作为客户端记录费用，缺失时再按已知价格估算；未知价格不伪造零费用。`advisor_message` 按自身模型单独计入，普通迭代不重复相加。
 - 响应优先按 message/request ID 去重；缺少 request ID 时限制到会话和时间，真实响应 ID 跨流式内容块合并。侧链重放保留父响应，独立侧链回答正常统计。文件替换、删减、压缩或归档迁移会更新索引，避免残留旧统计。去重先于范围过滤，切换日期范围不重复解析日志。
 - 同时显示 OpenCodex 和 ChatGPT 本机用量时，OpenCodex 有可用数据则作为 Summary 的统计来源；ChatGPT 保留独立明细，避免同一调用跨代理和客户端重复相加。关闭 OpenCodex 后，ChatGPT 会计入 Summary。
