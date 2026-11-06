@@ -1,6 +1,6 @@
 # SwiftBar Token Monitor
 
-SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.10.1**。
+SwiftBar 菜单栏插件，使用原生 macOS 面板查看多个 AI 客户端的用量、余额、额度与 Komari 监控。当前版本 **5.10.2**。
 
 <p align="center">
   <img src="preview.png" width="360" alt="SwiftBar Token Monitor：全部范围 Summary、OpenCodex 与 Claude 用量、账户余额和更新提示">
@@ -146,6 +146,7 @@ SwiftBar 的 30 秒入口保留，但复用缓存：面板关闭时短周期数�
 - 在 Claude 订阅侧栏启用“本机用量回传…”会配置官方状态栏回调，仅写入 Claude 的 `settings.json` 中 `statusLine` 一项，原状态栏备份并继续执行，关闭后恢复；用户后来自行替换的状态栏不会被覆盖。桥接脚本存于插件的用户应用支持目录，独立于仓库路径。只保存百分比、重置时间与采样时间，不保存完整输入、对话、身份或凭据；回调按事件运行并节流，不自行调用模型或联网。客户端产生响应后才可能提供订阅数据，尚无回传时显示等待更新。
 - 模块连接设置里的“使用 App 登录查询一次…”是独立的可选方式，只有主动点击并授权才读取 App Cookie，向 `https://claude.ai/api/organizations/{组织}/usage` 发出一次只读请求。后台不使用 Cookie，不将它作为 OAuth 的自动兜底。OAuth 开启时主页仍只使用 Code 账户数据；切回本机来源后才显示 App 手动查询快照。
 - Codex CLI 的“最新版本”跟随实际安装渠道：官方 Homebrew Cask / Formula 使用对应 Homebrew 元数据，npm 安装使用 npm 版本。不拿 npm 发布抢先提示 Homebrew 用户更新；未知或自定义安装渠道明确显示待确认。执行仍为 `codex update`，终端保留完整日志和前后版本。
+- ChatGPT 桌面版同时读取客户端 Sparkle 已缓存的官方更新源与已下载安装包的版本信息，补足匿名公开渠道的分批发布差异；本机发现新版本立即废弃旧更新缓存，安装后清除提示。只读版本元数据，不读取登录、Cookie 或发送真实设备 ID；匿名渠道没有新版本时显示“公开渠道暂无更新”，不冒充账号已获推送渠道的完整检查结果。原生缓存目前适配 `com.openai.codex` 桌面版，无法读取时保留公开渠道结果。
 - DeepSeek 余额刷新期间保留主页金额，不追加“上次”；刷新进度、成功更新时间与失败状态放在余额侧栏。失败时明确说明正在保留最近余额。
 - OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI 已选中时显示官网更新入口，明确标记尚未接入自动版本检查；不会声称已是最新。关闭“应用更新”停止提醒和非 OpenCodex 检查；OpenCodex 仅在其 Harness 被选中时自动检查与更新。已启动的安装仅继续确认结果，不重复启动。
 

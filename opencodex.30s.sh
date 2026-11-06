@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>opencodex</xbar.title>
-# <xbar.version>5.10.1</xbar.version>
+# <xbar.version>5.10.2</xbar.version>
 # <xbar.desc>可选 AI 客户端用量、账户资源与 Komari 监控，使用原生 macOS 面板。</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # 星星打开原生数据面板；右键保留 SwiftBar 原菜单。
@@ -120,6 +120,7 @@ import swiftbar_claude_local as claude_local
 import swiftbar_claude_oauth as claude_oauth
 import swiftbar_terminal as terminal_jobs
 import swiftbar_update_channels as update_channels
+import swiftbar_desktop_updates as desktop_updates
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
     (os.path.join(os.environ['OCX_CACHE_DIR'], 'settings') if os.environ.get('OCX_CACHE_DIR') else
@@ -230,7 +231,13 @@ CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'chatgpt':['OCX_CHA
 def connection_fingerprint(name):
     parts=[]
     if name=='app_updates':
-        selected=selected_update_ids();parts.extend(selected);parts.extend([module_enabled('updates'),'channels-v2'])
+        selected=selected_update_ids();parts.extend(selected);parts.extend([module_enabled('updates'),'channels-v3'])
+        for key,name in (('claude','Claude'),('chatgpt','ChatGPT')):
+            if key not in selected:continue
+            info=app_info(name);parts.append(info)
+            if key=='chatgpt':
+                local=desktop_updates.chatgpt_release(HOME,info.get('CFBundleIdentifier'),sparkle_release) or {}
+                parts.append({k:local.get(k) for k in ('latest','build','releaseSource')})
         for key,command in (('claude-code','claude'),('codex-cli','codex')):
             if key not in selected:continue
             binary=shutil.which(command);parts.append(binary)
@@ -1052,6 +1059,26 @@ def sparkle_release(body):
         if release_version(version) and release_version(build):candidates.append((version,build))
     return max(candidates,key=lambda row:release_version(row[1])) if candidates else (None,None)
 
+def apply_chatgpt_release(row,info):
+    """A client-specific rollout or download takes precedence over anonymous metadata."""
+    if info.get('CFBundleIdentifier')!='com.openai.codex':return row
+    current=info.get('CFBundleShortVersionString');installed=info.get('CFBundleVersion')
+    row.update(current=current,currentBuild=installed)
+    local=desktop_updates.chatgpt_release(HOME,info['CFBundleIdentifier'],sparkle_release)
+    if local and newer_release(local['build'],installed):
+        if not row.get('build') or not newer_release(row['build'],local['build']):
+            row.update(local,available=True,status='有新版本',checkedAt=time.time())
+            row['channel']='已下载' if local['releaseSource']=='client-download' else '客户端更新源'
+    elif row.get('releaseSource') in ('client-feed','client-download'):
+        # The app was updated or its staged download disappeared. Don't retain an old alert.
+        row.update(available=False,status='等待检查')
+        for key in ('latest','build','releaseSource','channel'):row.pop(key,None)
+    if row.get('releaseSource')=='public':
+        row['available']=newer_release(row.get('build'),installed)
+        if '失败' not in row.get('status',''):
+            row['status']='有新版本' if row['available'] else '公开渠道暂无更新'
+    return row
+
 def app_update_probe(key):
     row={'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'checkedAt':time.time()}
     try:
@@ -1087,13 +1114,15 @@ def app_update_probe(key):
             query=urllib.parse.urlencode({'installation_id':ident,'arch':platform.machine(),'app_version':row['current'],
                 'beta':'false','os-version':platform.mac_ver()[0],'plan_type':'unknown'})
             latest,build=sparkle_release(release_body('https://updates.oaistatic.com/codex/app/appcast?'+query))
-            row.update(latest=latest or row['current'],build=build,currentBuild=info['CFBundleVersion'])
+            if not latest or not build:raise ValueError('no compatible release')
+            row.update(latest=latest,build=build,currentBuild=info['CFBundleVersion'],releaseSource='public')
         if release_version(row.get('latest')) is None or release_version(row.get('current')) is None:raise ValueError('invalid version')
         row['available']=newer_release(row['latest'],row['current'])
         if row.get('build'):row['available']=newer_release(row['build'],row['currentBuild'])
         row['status']='有新版本' if row['available'] else '已是最新'
     except Exception:
         row.update(status='检查失败，稍后重试',available=False)
+    if key=='chatgpt':row=apply_chatgpt_release(row,app_info('ChatGPT'))
     return row
 
 def app_updates_cached():
@@ -1226,6 +1255,7 @@ def update_rows(data):
                     row['available']=newer_release(row['latest'],row['current'])
                     if row.get('build'):row['available']=newer_release(row['build'],info['CFBundleVersion'])
                     if '失败' not in row.get('status',''):row['status']='有新版本' if row['available'] else '已是最新'
+                if row['id']=='chatgpt':row=apply_chatgpt_release(row,info)
     existing={row['id'] for row in rows}
     rows += [{'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'status':'等待检查','available':False}
              for key in selected if key!='opencodex' and key not in existing]
@@ -1987,7 +2017,7 @@ def unfiltered_management_lines(data, include_swiftbar=True):
               item('刷新所有插件',sfimage='arrow.clockwise',href='swiftbar://refreshallplugins'),
               '---',item('设置与插件库：右键星星 → SwiftBar',color=MUTED,size=11),
               item(('SwiftBar '+os.environ.get('SWIFTBAR_VERSION','')).rstrip(),color=MUTED,size=11),
-              item('SwiftBar Token Monitor v5.10.1',color=MUTED,size=11)]
+              item('SwiftBar Token Monitor v5.10.2',color=MUTED,size=11)]
     lines.extend(nest(swiftbar));return lines
 
 

@@ -69,6 +69,32 @@ class UpdateTests(unittest.TestCase):
   xml=b'''<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><s:shortVersionString>26.1029.61003</s:shortVersionString><s:version>24614</s:version><s:hardwareRequirements>arm64</s:hardwareRequirements></item><item><s:shortVersionString>99.0.0</s:shortVersionString><s:version>99999</s:version><s:hardwareRequirements>x64</s:hardwareRequirements></item></channel></rss>'''
   with patch.object(self.m.platform,'machine',return_value='arm64'):
    self.assertEqual(self.m.sparkle_release(xml),('26.1029.61003','24614'))
+ def test_chatgpt_native_rollout_overrides_anonymous_feed_and_network_failure(self):
+  info={'CFBundleIdentifier':'com.openai.codex','CFBundleShortVersionString':'26.1029.61003','CFBundleVersion':'24614'}
+  native={'latest':'26.1103.31037','build':'25241','releaseSource':'client-download','observedAt':time.time()}
+  with patch.object(self.m,'app_info',return_value=info),patch.object(self.m.desktop_updates,'chatgpt_release',return_value=native):
+   with patch.object(self.m,'release_body',return_value=b'<rss/>'),patch.object(self.m,'sparkle_release',return_value=('26.1029.61003','24614')):
+    row=self.m.app_update_probe('chatgpt')
+   self.assertTrue(row['available']);self.assertEqual(row['latest'],'26.1103.31037');self.assertEqual(row['channel'],'已下载')
+   self.assertEqual(self.m.update_indicator(row),'available')
+   with patch.object(self.m,'release_body',side_effect=TimeoutError):row=self.m.app_update_probe('chatgpt')
+   self.assertTrue(row['available']);self.assertEqual(row['status'],'有新版本')
+ def test_chatgpt_anonymous_or_empty_feed_never_claims_account_is_current(self):
+  info={'CFBundleIdentifier':'com.openai.codex','CFBundleShortVersionString':'26.1029.61003','CFBundleVersion':'24614'}
+  with patch.object(self.m,'app_info',return_value=info),patch.object(self.m.desktop_updates,'chatgpt_release',return_value=None),patch.object(self.m,'release_body',return_value=b'<rss/>'),patch.object(self.m,'sparkle_release',return_value=('26.1029.61003','24614')) as release:
+   row=self.m.app_update_probe('chatgpt');self.assertEqual(row['status'],'公开渠道暂无更新');self.assertEqual(self.m.update_indicator(row),'unknown')
+   release.return_value=(None,None);row=self.m.app_update_probe('chatgpt')
+   self.assertIn('失败',row['status']);self.assertFalse(row['available'])
+ def test_native_download_change_invalidates_update_cache_and_install_clears_alert(self):
+  self.select('codex')
+  info={'CFBundleIdentifier':'com.openai.codex','CFBundleShortVersionString':'26.1029.61003','CFBundleVersion':'24614'}
+  native={'latest':'26.1103.31037','build':'25241','releaseSource':'client-download'}
+  with patch.object(self.m,'app_info',return_value=info),patch.object(self.m.desktop_updates,'chatgpt_release',return_value=None) as local:
+   before=self.m.connection_fingerprint('app_updates');local.return_value=native
+   self.assertNotEqual(before,self.m.connection_fingerprint('app_updates'))
+   row=self.m.apply_chatgpt_release({'id':'chatgpt'},info);self.assertTrue(row['available'])
+   info.update(CFBundleShortVersionString='26.1103.31037',CFBundleVersion='25241')
+   self.assertFalse(self.m.apply_chatgpt_release(row,info)['available'])
  def test_installed_desktop_update_immediately_clears_old_alert(self):
   self.m.preferences.update(self.m.STATE_DIR,'module','codex','true')
   row=dict(self.row(),id='chatgpt',latest='4.16336.0')
