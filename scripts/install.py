@@ -28,6 +28,42 @@ def copy(source, target):
     else:
         shutil.copy2(source, target)
 
+def stage(destination, transport):
+    """Build every part the install replaces in a scratch folder beside the installed ones and check it,
+    so a bad helper or a failed copy leaves the running plugin untouched."""
+    staging = destination / '.opencodex-panel' / ('.install-' + uuid.uuid4().hex[:8])
+    staging.mkdir(parents=True)
+    try:
+        copy(ROOT / 'build/OpenCodexPanel.app', staging / 'OpenCodexPanel.app')
+        subprocess.run(['codesign', '--verify', '--deep', str(staging / 'OpenCodexPanel.app')], check=True)
+        copy(ROOT / 'assets', staging / 'assets')
+        shutil.copytree(ROOT / 'lib', staging / 'lib', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        copy(transport, staging / 'python' / transport.name)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return staging
+
+def remove(path):
+    if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+    elif path.exists() or path.is_symlink(): path.unlink()
+
+def swap(pairs, keep, moved):
+    """Rename each staged part into place, keeping the part it replaces under keep; moved records what to undo."""
+    for n, (new, target) in enumerate(pairs):
+        old = keep / ('replaced-%d' % n)
+        if target.exists() or target.is_symlink(): os.replace(target, old)
+        else: old = None
+        moved.append((target, old))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(new, target)
+
+def restore(moved):
+    """Put every replaced part back; a part that was new is removed."""
+    for target, old in reversed(moved):
+        remove(target)
+        if old is not None: os.replace(old, target)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plugin-dir', type=Path, help='Defaults to the folder configured in SwiftBar.')
@@ -70,32 +106,38 @@ def main():
         for relative in previous:
             copy(destination / relative, backup / relative)
         print('Backup:', backup)
+    staging = stage(destination, transport)
     # Only close an already running helper. Never launch SwiftBar via AppleScript.
     if not args.no_refresh:
         subprocess.run(['osascript', '-e',
                     'if application id "cc.opencodex.swiftbar.panel" is running then tell application id "cc.opencodex.swiftbar.panel" to quit'],
                    capture_output=True, timeout=8, check=False)
-    copy(ROOT / 'build/OpenCodexPanel.app', destination / relative_app)
-    subprocess.run(['codesign', '--verify', '--deep', str(destination / relative_app)], check=True)
-    if (destination / relative_assets).exists(): shutil.rmtree(destination / relative_assets)
-    copy(ROOT / 'assets', destination / relative_assets)
-    shutil.copytree(ROOT / 'lib', destination / '.opencodex-panel/lib', dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    copy(transport,destination/relative_transport)
-    migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
-    state=Path.home()/'Library/Application Support/SwiftBarToken'
-    # Update reminders used to live in SwiftBar's per-plugin data folder, which follows the file name.
-    old_data = Path.home() / 'Library/Application Support/SwiftBar/Plugins/opencodex.30s.sh'
-    for name in LEGACY_DATA:
-        if (old_data / name).is_file() and not (state / name).exists():
-            state.mkdir(parents=True, exist_ok=True, mode=0o700); shutil.copy2(old_data / name, state / name)
-    if claude_local.enabled(state):claude_local.install(state)
-    # Publish the script last; other plugins and runtime state are preserved.
-    destination.mkdir(parents=True, exist_ok=True)
-    temporary = destination / '.opencodex-install.tmp'
-    shutil.copyfile(ROOT / ENTRY, temporary)
-    temporary.chmod(0o755)
-    os.replace(temporary, destination / ENTRY)
+    # Each part goes in by rename. If any step up to publishing the entry fails, every part is put back,
+    # so the entry never runs beside a half-installed panel, library or helper.
+    moved = []
+    try:
+        swap([(staging / 'OpenCodexPanel.app', destination / relative_app), (staging / 'assets', destination / relative_assets),
+              (staging / 'lib', destination / '.opencodex-panel/lib'), (staging / 'python' / transport.name, destination / relative_transport)],
+             staging, moved)
+        migrate_config(destination, Path.home() / 'Library/Application Support/SwiftBarToken', args.config)
+        state=Path.home()/'Library/Application Support/SwiftBarToken'
+        # Update reminders used to live in SwiftBar's per-plugin data folder, which follows the file name.
+        old_data = Path.home() / 'Library/Application Support/SwiftBar/Plugins/opencodex.30s.sh'
+        for name in LEGACY_DATA:
+            if (old_data / name).is_file() and not (state / name).exists():
+                state.mkdir(parents=True, exist_ok=True, mode=0o700); shutil.copy2(old_data / name, state / name)
+        if claude_local.enabled(state):claude_local.install(state)
+        # Publish the script last; other plugins and runtime state are preserved.
+        temporary = destination / '.opencodex-install.tmp'
+        shutil.copyfile(ROOT / ENTRY, temporary)
+        temporary.chmod(0o755)
+        os.replace(temporary, destination / ENTRY)
+    except BaseException:
+        restore(moved)
+        print('Install failed; the previous version is back in place.', file=sys.stderr)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     # One plugin only: the old entry and visible assets are in the backup above.
     for relative in LEGACY:
         target = destination / relative
