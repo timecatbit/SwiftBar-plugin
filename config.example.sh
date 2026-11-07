@@ -17,10 +17,13 @@
 # export OCX_PYTHON="/path/to/python3"
 # export WORKBUDDY_USAGE_DIR="$HOME/.workbuddy-ai/projects"  # Default: both current and legacy WorkBuddy.
 # export GEMINI_USAGE_DIR="$HOME/.gemini"
+# export QODER_CONFIG_DIR="$HOME/.qoder"  # Qoder transcripts are read from its projects/ folder.
 # export XAI_MANAGEMENT_API_KEY_FILE="$HOME/.config/xai/management-key"
 # export XAI_TEAM_ID="your-team-id"  # Management key with billing read permission.
 # export MINIMAX_API_KEY_FILE="$HOME/.config/minimax/subscription-key"
 # export MINIMAX_REGION="international"  # Or "china".
+# export QODER_API_KEY_FILE="$HOME/.config/qoder/org-api-key"  # Teams/Enterprise organization API key.
+# export QODER_ORG_ID="your-organization-id"  # From qoder.com/organizations/<id>/settings.
 
 # API portal modules: identify configuration only; no automatic balance queries yet.
 # Membership keys and API platform keys are independent.

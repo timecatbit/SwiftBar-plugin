@@ -59,6 +59,28 @@ def xai_balance(data):
     except (KeyError,TypeError,InvalidOperation,ValueError):return {'state':'余额格式待检查'}
 
 
+def qoder_packages(fetch, org):
+    """Qoder Teams/Enterprise OpenAPI: the organization's shared add-on Credits still unspent.
+
+    Only active packages count; remainingValue is the package's nominal balance. Members' plan
+    Credits are separate quotas and are not added in."""
+    base='https://api.qoder.com/v1/organizations/'+urllib.parse.quote(org,safe='')+'/resource-packages?status=active&maxResults=100'
+    total=Decimal(0);count=0;token=None
+    for _ in range(10):
+        data=fetch(base+('&nextToken='+urllib.parse.quote(token,safe='') if token else ''))
+        rows=data.get('resourcePackages')
+        if not isinstance(rows,list):return {'state':'余额格式待检查'}
+        for row in rows:
+            if not isinstance(row,dict) or str(row.get('status','active')).lower()!='active':continue
+            try:value=Decimal(str(row['remainingValue']))
+            except (KeyError,InvalidOperation):return {'state':'余额格式待检查'}
+            if not value.is_finite() or value<0:return {'state':'余额格式待检查'}
+            total+=value;count+=1
+        token=data.get('nextToken')
+        if not token or not isinstance(token,str):break
+    return {'balance':float(total),'currency':'Credits','packages':count,'state':'已同步'}
+
+
 def moonshot_balance(data, currency):
     """available_balance already includes vouchers; a negative cash balance means arrears."""
     payload = data.get('data') if isinstance(data.get('data'), dict) else {}
@@ -185,6 +207,10 @@ def account(source,key=None,options=None):
             if not key or not team:return {'state':'未配置 xAI 管理密钥与 Team ID'}
             url='https://management-api.x.ai/v1/billing/teams/'+urllib.parse.quote(team,safe='')+'/prepaid/balance'
             return xai_balance(get_json(url,key))
+        if source=='qoder-api':
+            key=key or credential('QODER_API_KEY');org=str(options.get('org') or os.environ.get('QODER_ORG_ID','')).strip()
+            if not key or not org:return {'state':'未配置 Qoder 组织 API Key 与组织 ID'}
+            return qoder_packages(lambda url:get_json(url,key),org)
         if source=='minimax':
             key=credential('MINIMAX_API_KEY')
             if not key:return {'state':'未配置 MiniMax 套餐密钥','windows':[]}

@@ -7,6 +7,7 @@ import swiftbar_accounts as accounts
 import swiftbar_catalog as catalog
 import swiftbar_preferences as preferences
 import swiftbar_claude as claude_desktop
+import swiftbar_qoder as qoder
 from swiftbar_config import monitor_url
 
 
@@ -33,6 +34,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
     root=Path(paths.get('qoder') or os.environ.get('QODER_CONFIG_DIR') or home/'.qoder')
     if any((Path(r)/'Qoder.app').is_dir() for r in app_roots) or has_records(root/'projects'):found.add('qoder')
+    if qoder.snapshot(home):found.add('qoder-subscription')
     claude_root=Path(paths.get('claude') or claude_desktop.default_root(home))
     if any((Path(root)/'Claude.app').is_dir() for root in app_roots) or claude_desktop.registry_files(claude_root):found.add('claude')
     if claude_desktop.subscription(claude_root).get('windows'):found.add('claude-subscription')
@@ -65,6 +67,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
     if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
     if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
+    if accounts.credential('QODER_API_KEY') and os.environ.get('QODER_ORG_ID','').strip():found.add('qoder-api')
     for key in catalog.KEY_ONLY_APIS:
         if any(accounts.credential(name) for name in catalog.credential_names(key)):found.add(key)
     found.update(k for k in configured_subscriptions if k in catalog.MANUAL_SUBSCRIPTIONS)

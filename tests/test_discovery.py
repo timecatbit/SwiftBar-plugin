@@ -32,6 +32,14 @@ class DiscoveryTests(unittest.TestCase):
         self.put('.qoder/projects/slug/session.jsonl');self.assertIn('qoder',self.detect())
         apps=self.home/'Applications';(apps/'Qoder.app').mkdir(parents=True)
         self.assertIn('qoder',discovery.detect({},self.home/'empty',which=lambda _:None,app_roots=[apps]))
+        log=self.put('Library/Application Support/com.qoder.app.stable/logs/s1/main.log','[2099-01-01T00:00:00.000Z] [INFO] no summary\n')
+        self.assertNotIn('qoder-subscription',self.detect())
+        import time
+        stamp=time.strftime('%Y-%m-%dT%H:%M:%S.000Z',time.gmtime())
+        log.write_text('['+stamp+'] [INFO] [main] [Auth] [AccountUsage] '+json.dumps({'qoderUsage':{'userQuota':{'used':1,'total':2000}}})+'\n')
+        self.assertIn('qoder-subscription',self.detect())
+        self.assertNotIn('qoder-api',self.detect())
+        with patch.dict(os.environ,{'QODER_API_KEY':'k','QODER_ORG_ID':'org'}):self.assertIn('qoder-api',self.detect())
     def test_compressed_only_chatgpt_log_is_detected_without_executing_or_parsing(self):
         self.put('.codex/archived_sessions/day/one.jsonl.zst')
         self.assertIn('codex',self.detect())

@@ -22,9 +22,9 @@ class CatalogTests(unittest.TestCase):
         code=(ROOT/'lib/swiftbar_plugin.py').read_text()
         exec(compile(code,'plugin','exec'),self.m.__dict__)
     def test_catalog_exact_order_and_independent_service_ids(self):
-        self.assertEqual([s.brand for s in catalog.SERVICES if s.category=='订阅'],['ChatGPT','Claude','MiniMax','Gemini','Grok','Kimi'])
-        self.assertEqual([s.brand for s in catalog.SERVICES if s.category=='API'],['ChatGPT','Claude','DeepSeek','MiniMax','Gemini','Grok','Kimi'])
-        self.assertEqual(len(catalog.BY_KEY),13)
+        self.assertEqual([s.brand for s in catalog.SERVICES if s.category=='订阅'],['ChatGPT','Claude','MiniMax','Gemini','Grok','Kimi','Qoder'])
+        self.assertEqual([s.brand for s in catalog.SERVICES if s.category=='API'],['ChatGPT','Claude','DeepSeek','MiniMax','Gemini','Grok','Kimi','Qoder'])
+        self.assertEqual(len(catalog.BY_KEY),15)
         self.assertNotIn('codex-quota',preferences.KNOWN)
         self.assertEqual(next(label for k,label,g in preferences.MODULES if k=='codex'),'ChatGPT 本机用量')
     def test_upgrade_retains_proxy_source_and_other_preferences(self):

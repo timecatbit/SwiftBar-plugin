@@ -9,7 +9,7 @@ import swiftbar_catalog as catalog
 
 KEYS = {'OCX_HOME', 'OCX_BASE_URL', 'OCX_TOKEN_FILE', 'OCX_CHATGPT_HOME', 'KOMARI_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY_FILE',
         'XAI_MANAGEMENT_API_KEY', 'XAI_MANAGEMENT_API_KEY_FILE', 'XAI_TEAM_ID',
-        'MINIMAX_API_KEY', 'MINIMAX_API_KEY_FILE', 'MINIMAX_REGION', 'MOONSHOT_REGION'}
+        'MINIMAX_API_KEY', 'MINIMAX_API_KEY_FILE', 'MINIMAX_REGION', 'MOONSHOT_REGION', 'QODER_ORG_ID'}
 KEYS.update(name + suffix for key in catalog.API_KEYS for name in catalog.credential_names(key) for suffix in ('', '_FILE'))
 HEADER = '''# 本机高级设置：仅本用户可读，不随插件上传或覆盖。
 # 常用设置请在「主页模块」悬停对应来源；本机客户端默认自动读取。

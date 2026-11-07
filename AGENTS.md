@@ -9,8 +9,9 @@
 - ChatGPT 和 OpenCodex 连接可修改；通常只更改插件的目录/地址/文件引用。启用 Claude 本机回传时可单独设置 statusLine，必须备份、保留已有行为并支持恢复，其余客户端设置不变。
 - 主页模块管理使用 280pt 紧凑列表，各模块右侧保留配置状态圆点与文字；连接目录设置跟随模块，“外观与设置”紧接顶部“允许折叠”，模块分类在其后。复选框/名称点击切换显示，箭头点击只打开配置，复选框悬停不主动弹出侧栏，鼠标经过复选框进入已有侧栏时必须保持展开；配置状态不受显示勾选影响。
 - 订阅百分比全部统一为已用量，写作“已用 X%”（多窗口如“已用 本周 6% · Fable 0%”，多账户如“已用 main 76% · alt 20%”），与 API 的“本月已用”同为前缀写法，禁止混用“可用/剩余”；接口给剩余时按 100 减剩余换算。主页取最紧张的窗口，侧栏逐个窗口/账户显示；颜色统一为 <70 正常文字色、70–89 系统橙、>=90 系统红，刷新失败或数据过期时不着色。
-- 订阅固定为 ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi；API 为 ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi。独立 Codex 显示名称统一为 ChatGPT，但真实命令、路径、数据 ID、模型名称和 OpenCodex 名称保持兼容。
+- 订阅固定为 ChatGPT、Claude、MiniMax、Gemini、Grok、Kimi、Qoder；API 为 ChatGPT、Claude、DeepSeek、MiniMax、Gemini、Grok、Kimi、Qoder。独立 Codex 显示名称统一为 ChatGPT，但真实命令、路径、数据 ID、模型名称和 OpenCodex 名称保持兼容。
 - API 配置不能作为订阅证明；主页不写“官网查看”：未接入查询的模块显示实际已知状态（手动订阅“已标记”、API 的 Key 测试结果或“已配置”、Claude API 的“本月已用 $X”或“无花费权限”），能读到余额的写“余额 X”，手动标记明确声明未验证。禁止推算/伪造额度。有官方余额接口的 API（DeepSeek、Kimi、Grok 管理接口）显示余额；没有的（ChatGPT/Claude/Gemini API）只在保存 Key 或点击“测试 Key”时发一次只读校验，结果仅表示 Key 可用；Claude 个人 Key 返回“未绑定 Workspace”时视为有效，管理员 Key 用组织信息接口校验。Claude API 在 Key 有管理员权限时后台读取 Admin 花费报表（本月/今日 UTC，美分换算），只显示花费，不推算余额；403 时说明需要管理员 Key。
+- Qoder 没有个人用量接口：Qoder 订阅只读 Qoder App 自己写入 `~/Library/Application Support/com.qoder.app.stable/logs/<会话>/main.log` 的 account.getQuotaUsage 摘要（打开 App 右下角 Credits 用量时才写），只取套餐/加购 Credits 的已用、总量、剩余与到期时间，不读登录数据、不发网络请求、不保存日志原文；超过 7 天的摘要忽略。主页取最紧张的一项写“已用 X%”，摘要超过 10 分钟时在数值后写“截至 时间”且不着色，不以本机 Harness 的 Credits 推算当前用量。Qoder API 只用于 Teams/Enterprise：组织管理员创建的 OpenAPI Key + 组织 ID，后台 GET `https://api.qoder.com/v1/organizations/<组织 ID>/resource-packages?status=active`，合计有效资源包的 remainingValue 显示为“余额 X Credits”，侧栏注明是组织共享加购 Credits、不含成员套餐额度；个人账号没有 Qoder API。
 - 每个 API 可有多把命名 Key：密钥存 `keys/<API>/<id>.key`（700/600），`keys/index.json` 只存名称与站点/Team ID；经典单连接（config.local.sh/环境变量/选择的文件）作为“默认”Key。主页按币种合计余额或本月已用，侧栏逐把显示并支持测试、重命名、删除；每把 Key 单独缓存和查询。
 - API Key 可直接输入：存于用户应用支持目录 `keys/`（700/600），配置只记录路径；全部提示确认后才写入，清除或改选文件时只删除插件自己保存的副本。
 - ChatGPT 订阅来源不再单独选择：OpenCodex 被勾选且已配置时用 OpenCodex 账户，否则用本机 ChatGPT 登录；未勾选 OpenCodex 时不轮询其管理接口。

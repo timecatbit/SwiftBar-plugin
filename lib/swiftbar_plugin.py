@@ -60,7 +60,8 @@ DEEPSEEK_LOGO_FILE = os.path.join(ASSET_DIR, "deepseek-logo.svg")
 LOGO_DIR = os.path.join(ASSET_DIR, "logos")
 # Monochrome logos are template images so they follow light and dark menus.
 BRAND_LOGOS = {'ChatGPT': ('openai.svg', True), 'Claude': ('claude.svg', False), 'MiniMax': ('minimax.svg', False),
-               'Gemini': ('gemini.svg', False), 'Grok': ('grok.svg', True), 'Kimi': ('kimi.svg', True)}
+               'Gemini': ('gemini.svg', False), 'Grok': ('grok.svg', True), 'Kimi': ('kimi.svg', True),
+               'Qoder': ('qoder.svg', True)}
 
 HOME = os.path.expanduser("~")
 OCX_HOME = os.path.expanduser(os.environ.get("OCX_HOME") or os.path.join(HOME, ".opencodex"))
@@ -99,6 +100,7 @@ import swiftbar_terminal as terminal_jobs
 import swiftbar_update_channels as update_channels
 import swiftbar_desktop_updates as desktop_updates
 import swiftbar_keys as keystore
+import swiftbar_qoder as qoder
 from swiftbar_time import parse_iso
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
@@ -164,11 +166,11 @@ UPDATE_STATUS_CACHE = os.path.join(CACHE_DIR, "badge.json")
 # OpenCodex management endpoints are polled in the background; the health check gates the rest.
 OPENCODEX_ENDPOINTS = {"healthz": ("/healthz", False), "ready": ("/readyz", False), "quota": ("/api/codex-auth/quota", True),
                        "accounts": ("/api/codex-auth/accounts", True), "active": ("/api/codex-auth/active", True)}
-EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "self_update": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "claude-api": 1800, "claude_subscription":60}
+EXTERNAL_TTLS = {"provider_quotas": 300, "badge": 3600, "komari": 30, "app_updates": 21600, "self_update": 21600, "chatgpt": 300, "grok": 300, "minimax": 300, "kimi-api": 300, "qoder-api": 300, "claude-api": 1800, "claude_subscription":60, "qoder_subscription":60}
 # Provider accounts read with the user's own key: Grok/Kimi balances, the MiniMax plan and Claude API spend.
-ACCOUNT_SOURCES = ('grok', 'minimax', 'kimi-api', 'claude-api')
+ACCOUNT_SOURCES = ('grok', 'minimax', 'kimi-api', 'qoder-api', 'claude-api')
 # APIs whose named extra keys are queried one by one, each in its own cache.
-KEY_TTLS = {'deepseek': 300, 'kimi-api': 300, 'grok': 300, 'claude-api': 1800}
+KEY_TTLS = {'deepseek': 300, 'kimi-api': 300, 'grok': 300, 'qoder-api': 300, 'claude-api': 1800}
 EXTERNAL_TTLS.update({name: 30 for name in OPENCODEX_ENDPOINTS})
 PENDING_READ = "正在后台读取"
 
@@ -201,6 +203,7 @@ def connection_ready(key):
 
 def default_ready(key):
     if key=='claude-subscription':return view_settings()['claudeOAuthUsage'] or claude_local.enabled(STATE_DIR) or bool(claude_desktop.subscription(source_path('claude')).get('windows'))
+    if key=='qoder-subscription':return any(root.is_dir() for root in qoder.log_roots(HOME))
     if key in catalog.MANUAL_SUBSCRIPTIONS:return key in view_settings()['configuredSubscriptions']
     if key in catalog.PORTAL_APIS:return any(accounts.credential(name) for name in catalog.credential_names(key))
     if key=='chatgpt':return ocx_configured() if chatgpt_source()=='proxy' else chatgpt_configured()
@@ -214,6 +217,7 @@ def default_ready(key):
     if key=='grok':return bool(accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip())
     if key=='minimax':return bool(accounts.credential('MINIMAX_API_KEY'))
     if key=='kimi-api':return bool(accounts.credential('MOONSHOT_API_KEY'))
+    if key=='qoder-api':return bool(accounts.credential('QODER_API_KEY') and os.environ.get('QODER_ORG_ID','').strip())
     if key=='claude-api':return bool(accounts.credential('ANTHROPIC_API_KEY'))
     return False
 
@@ -241,10 +245,11 @@ def refresh_cadence():
     return False,bool(power.get('battery'))
 
 
-CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
+CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'qoder_subscription':[], 'chatgpt':['OCX_CHATGPT_HOME'], 'komari':['KOMARI_BASE_URL'], 'provider_quotas':['DEEPSEEK_API_KEY','DEEPSEEK_API_KEY_FILE'],
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
                  'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
+                 'qoder-api':['QODER_API_KEY','QODER_API_KEY_FILE','QODER_ORG_ID'],
                  'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
 
 def connection_fingerprint(name):
@@ -1452,6 +1457,7 @@ def resource_lines(data):
         if not module_enabled(key):continue
         if key=='chatgpt':lines.extend(chatgpt_lines(data))
         elif key=='claude-subscription':lines.extend(claude_subscription_lines(data))
+        elif key=='qoder-subscription':lines.extend(qoder_subscription_lines(data))
         elif service.category=='API':lines.extend(api_lines(key,data))
         elif key in ACCOUNT_SOURCES:lines.extend(provider_account_lines(key,data))
         else:lines.extend(portal_service_lines(key))
@@ -1547,6 +1553,44 @@ def claude_subscription_lines(data):
         rows.append(item('启用 Claude Code 登录查询…',level=1,sfimage='arrow.triangle.2.circlepath',paneldetail='主动获取订阅用量，不读取 Cookie',**act('set-claude-oauth','true')))
     rows.extend([item('打开 Claude',level=1,sfimage='macwindow',**act('open-claude')),
                  item('打开订阅用量',level=1,sfimage='arrow.up.right',href=catalog.BY_KEY['claude-subscription'].url)])
+    return rows
+
+
+def snapshot_time(stamp):
+    at=datetime.fromtimestamp(stamp,local_zone())
+    return at.strftime('%H:%M' if at.date()==datetime.now(local_zone()).date() else '%m/%d %H:%M')
+
+
+def credits_amount(value):
+    return '%g'%round(value,1) if value<1000 else '{:,.0f}'.format(value)
+
+
+def qoder_subscription_lines(data):
+    """Plan and add-on Credits from the Qoder app's last logged summary, with when it was logged."""
+    service=catalog.BY_KEY['qoder-subscription'];payload=data.get('qoder_subscription') or {}
+    error=data.get('qoder_subscription_error');failed=refresh_failed(error)
+    windows=[(name,q) for name,q in (('套餐 Credits',payload.get('plan')),('加购 Credits',payload.get('addOn'))) if isinstance(q,dict) and q.get('total')]
+    observed=payload.get('observedAt')
+    # The app only logs a summary when its Credits panel is opened; an older one is labelled, not passed off as current.
+    stale=not observed or time.time()-observed>600
+    most=max((100*q['used']/q['total'] for _,q in windows),default=None)
+    if windows:badge=used_text(most)+(' · 截至 '+snapshot_time(observed) if stale else '')
+    elif observed:badge='额度已用完' if payload.get('exceeded') else '无 Credits 额度'
+    else:badge='暂无本机记录' if connection_ready('qoder-subscription') else '未发现 Qoder App'
+    rows=[item(service.label,badge=with_failure(badge,bool(windows),failed),**brand_icon('qoder-subscription'),
+               panelusagelevel=usage_level(most,stale or failed) if windows else None),
+          item('来源 · Qoder App 本机记录',level=1,color=MUTED,size=10)]
+    for name,q in windows:
+        used=100*q['used']/q['total'];detail='%s / %s · 剩余 %s'%(credits_amount(q['used']),credits_amount(q['total']),credits_amount(q['remaining']))
+        if name=='套餐 Credits' and payload.get('resetsAt'):detail+='\n重置于 '+datetime.fromtimestamp(payload['resetsAt'],local_zone()).strftime('%m/%d %H:%M')
+        rows.append(item(name,badge=used_text(used),paneldetail=detail,level=1,panelusagelevel=usage_level(used,stale or failed)))
+    hint='在 Qoder App 右下角打开 Credits 用量后更新'
+    if failed:rows.append(item('更新时间',badge='刷新失败',paneldetail=str(error[1]),level=1,color=WARN,size=10))
+    elif observed:rows.append(item('更新时间',badge=freshness({'_fetchedAt':observed}),paneldetail=hint if stale else None,level=1,color=MUTED,size=10))
+    else:rows.append(item(hint,level=1,color=MUTED,size=10))
+    app=installed_app_path('Qoder')
+    if app:rows.append(item('打开 Qoder',level=1,sfimage='macwindow',href='file://'+urllib.parse.quote(app)))
+    rows.append(item('打开订阅用量',level=1,sfimage='arrow.up.right',href=service.url))
     return rows
 
 
@@ -1669,6 +1713,7 @@ def external_loaders():
     if module_enabled('updates') and live_app_update_ids():loaders['app_updates']=app_updates_cached
     if os.environ.get('OCX_SELF_UPDATES')!='0':loaders['self_update']=lambda:cached_fetch('self_update',self_update_load,EXTERNAL_TTLS['self_update'])
     if module_enabled('claude-subscription'):loaders['claude_subscription']=lambda:cached_fetch('claude_subscription',claude_subscription_load,60)
+    if module_enabled('qoder-subscription'):loaders['qoder_subscription']=lambda:cached_fetch('qoder_subscription',lambda:(qoder.snapshot(HOME) or {'empty':True},None),EXTERNAL_TTLS['qoder_subscription'])
     if module_enabled('chatgpt') and chatgpt_source()=='client' and chatgpt_configured():loaders['chatgpt']=lambda:cached_fetch('chatgpt',lambda:(sources.chatgpt_account(home=chatgpt_home()),None),EXTERNAL_TTLS['chatgpt'])
     for key in ACCOUNT_SOURCES:
         if module_enabled(key) and default_ready(key):loaders[key]=lambda key=key:cached_fetch(key,lambda:(accounts.account(key),None),EXTERNAL_TTLS[key])
@@ -1688,7 +1733,7 @@ def named_key_loaders():
 
 
 # Only these visible resources can request an immediate read from a flyout.
-RESOURCE_CACHES={'deepseek':'provider_quotas','chatgpt':'chatgpt','grok':'grok','minimax':'minimax','kimi-api':'kimi-api','komari':'komari','updates':'app_updates','claude-subscription':'claude_subscription'}
+RESOURCE_CACHES={'deepseek':'provider_quotas','chatgpt':'chatgpt','grok':'grok','minimax':'minimax','kimi-api':'kimi-api','qoder-api':'qoder-api','komari':'komari','updates':'app_updates','claude-subscription':'claude_subscription','qoder-subscription':'qoder_subscription'}
 
 def refresh_resource(source):
     if source not in RESOURCE_CACHES or not module_enabled(source):raise ValueError('invalid resource')
@@ -2312,6 +2357,11 @@ def ask_option(key,current=''):
             applescript('display alert "Team ID 无效" message "请填写 xAI 控制台中的 Team ID。"');return None
         return team
     if key=='minimax':return choose_region('MiniMax 套餐','选择密钥所属地区',('国际站','international'),('中国站','china'))
+    if key=='qoder-api':
+        org=text_dialog('Qoder 组织 ID（组织设置网址 qoder.com/organizations/<组织 ID>/settings 中的那一段）',current)
+        if org is not None and not re.fullmatch(r'[A-Za-z0-9_-]+',org):
+            applescript('display alert "组织 ID 无效" message "请填写 Qoder 组织设置网址中的组织 ID。"');return None
+        return org
     if key=='kimi-api':return choose_region('Kimi API','选择 Key 所属平台：中国站 platform.moonshot.cn，国际站 platform.moonshot.ai',('中国站','china'),('国际站','international'))
     return ''
 
@@ -2322,6 +2372,7 @@ def configure_connection(key,clear=False):
            'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
            'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
            'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
+           'qoder-api':['QODER_API_KEY','QODER_API_KEY_FILE','QODER_ORG_ID'],
            'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
     for api in catalog.PORTAL_APIS:
         names[api]=[name+suffix for name in catalog.credential_names(api) for suffix in ('','_FILE')]
@@ -2342,7 +2393,7 @@ def configure_connection(key,clear=False):
         filename=response.stdout.strip()
         if not os.path.isfile(filename):return
         values[names[key][1]]=filename
-        option=ask_option(key,os.environ.get('XAI_TEAM_ID',''))
+        option=ask_option(key,os.environ.get({'grok':'XAI_TEAM_ID','qoder-api':'QODER_ORG_ID'}.get(key,''),''))
         if option is None:return
         if option:values[names[key][2]]=option
     previous=[os.environ.get(name,'') for name in names[key] if name.endswith('_FILE')]
@@ -2370,13 +2421,13 @@ def add_api_key(provider):
     if not keystore.LABEL.fullmatch(name):
         applescript('display alert "名字无效" message "请填写 1–24 个字符的名字。"');return
     note='\n管理员 Key 权限很大，建议在控制台设置过期时间；插件只用它读取花费。' if provider=='claude-api' else ''
-    secret=text_dialog(('xAI 管理密钥（Management API Key）' if provider=='grok' else service.label+' Key')+'\n只保存在本机仅你可读的文件中，不会显示或上传。'+note,hidden=True,title='添加 Key')
+    secret=text_dialog({'grok':'xAI 管理密钥（Management API Key）','qoder-api':'Qoder 组织 API Key（组织管理员在 设置 → 高级 → API Keys 创建，仅 Teams/Enterprise）'}.get(provider,service.label+' Key')+'\n只保存在本机仅你可读的文件中，不会显示或上传。'+note,hidden=True,title='添加 Key')
     if secret is None:return
     if not connections.KEY_FORMAT.fullmatch(secret):
         applescript('display alert "Key 格式无效" message "请粘贴完整的 API Key，不含空格或换行。"');return
     option=ask_option(provider)
     if option is None:return
-    options={'grok':{'team':option},'kimi-api':{'region':option}}.get(provider,{})
+    options={'grok':{'team':option},'kimi-api':{'region':option},'qoder-api':{'org':option}}.get(provider,{})
     key_id=keystore.add(STATE_DIR,provider,name,secret,options)
     preferences.update(STATE_DIR,'module',provider,'true')
     if provider in accounts.KEY_CHECKS:test_api_key(provider,key_id)
@@ -2493,6 +2544,7 @@ def test_api_key(provider,key_id='default'):
 
 
 def money_text(amount,currency):
+    if currency=='Credits':return credits_amount(amount)+' Credits'
     return CURRENCY_SYMBOLS.get(currency,currency+' ')+'%.2f'%amount
 
 
@@ -2538,6 +2590,11 @@ def key_lines(provider,entry,data,level):
     for field,name in (('cash','现金'),('voucher','代金券')):
         if isinstance(payload.get(field),(int,float)):rows.append(item(name,level=level,badge=symbol(payload[field])))
     if isinstance(payload.get('todayCost'),(int,float)):rows.append(item('今日已用（UTC）',level=level,badge=money_text(payload['todayCost'],'USD')))
+    if isinstance(payload.get('packages'),int):
+        # The balance is the organization's shared add-on pool; members' plan Credits are separate.
+        rows.append(item('组织共享加购 Credits',level=level,badge='%d 个有效资源包'%payload['packages'],paneldetail='不含成员各自的套餐 Credits'))
+        if entry.get('options',{}).get('org') or (entry['id']=='default' and os.environ.get('QODER_ORG_ID')):
+            rows.append(item('组织 ID',level=level,badge=entry.get('options',{}).get('org') or os.environ.get('QODER_ORG_ID'),color=MUTED,size=10))
     if payload.get('permission') is False:
         rows.append(item(payload.get('state','没有查看花费的权限'),level=level,color=WARN,size=10,
                          paneldetail='需要管理员 Key（sk-ant-admin…），个人组织需先转为团队组织' if payload.get('reason')!='workspace' else '这把 Key 绑定了 Workspace，换用管理员 Key（sk-ant-admin…）'))
