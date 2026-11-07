@@ -45,6 +45,18 @@ class RangeTests(unittest.TestCase):
   self.assertEqual(self.m.selected_range(),'month')
   self.assertEqual(self.m.read_cache('panel-action-receipt')['status'],'done')
 
+ def test_qoder_card_uses_credits_when_no_tokens_are_recorded(self):
+  settings=self.m.preferences.read(self.m.STATE_DIR);settings['visible']=['summary','qoder'];self.m.preferences.write(self.m.STATE_DIR,settings)
+  qoder={'summary':{'requests':3,'totalTokens':0,'credits':2.73,'unpricedRequests':3,'sessions':1},
+         'models':[{'model':'qfmodel','totalTokens':0,'credits':2.0},{'model':'qmodel_38max','totalTokens':0,'credits':0.73}]}
+  d=self.m.dashboard_payload({'range_usage':{'range':'today','qoder':qoder}})
+  card=d['providers'][0]
+  self.assertEqual(card['id'],'qoder');self.assertEqual(card['credits'],2.73);self.assertIsNone(card['cost'])
+  self.assertEqual(card['status'],'已同步');self.assertEqual([m['name'] for m in card['models']],['qfmodel','qmodel_38max'])
+  self.assertAlmostEqual(card['models'][0]['share'],2/2.73,places=3);self.assertEqual(card['models'][0]['credits'],2.0)
+  other=self.m.dashboard_payload({'range_usage':{'range':'today','qoder':{'summary':{'requests':1,'totalTokens':10,'unpricedRequests':1},'models':[{'model':'x','totalTokens':10}]}}})['providers'][0]
+  self.assertIsNone(other['credits']);self.assertEqual(other['status'],'费用待定价');self.assertNotIn('credits',other['models'][0])
+
  def test_single_calendar_day_is_not_duplicated_in_chart(self):
   monday=datetime(2026,11,2,12,tzinfo=self.now.tzinfo)
   start,end=self.m.range_bounds('week',monday)

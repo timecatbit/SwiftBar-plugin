@@ -130,6 +130,7 @@ def source_path(key):
         'opencode': os.environ.get('OPENCODE_DATA_DIR') or os.path.join(os.path.expanduser(os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')), 'opencode'),
         'deepseek-harness': os.environ.get('DSH_SESSIONS_DIR') or '',
         'workbuddy': os.environ.get('WORKBUDDY_USAGE_DIR') or HOME,
+        'qoder': os.environ.get('QODER_CONFIG_DIR') or os.path.join(HOME,'.qoder'),
         'gemini': os.environ.get('GEMINI_USAGE_DIR') or os.path.join(HOME,'.gemini'),
     }
     return os.path.expanduser(custom or defaults.get(key) or '')
@@ -954,15 +955,16 @@ UPDATE_NAMES = {'opencodex':'OpenCodex', 'claude':'Claude', 'chatgpt':'ChatGPT',
 # Harness choices expand into related app/CLI checks. A configured OpenCodex
 # also includes ChatGPT and Codex without changing homepage selections.
 HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude', 'codex':'chatgpt',
-                   'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'gemini':'gemini'}
+                   'opencode':'opencode', 'deepseek-harness':'deepseek-harness', 'workbuddy':'workbuddy', 'qoder':'qoder', 'gemini':'gemini'}
 MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
                   'deepseek-harness':('DeepSeek Harness','https://github.com/deepseek-ai/deepseek-harness/releases'),
                   'workbuddy':('WorkBuddy','https://cloud.tencent.com/product/workbuddy'),
+                  'qoder':('Qoder','https://qoder.com/download'),
                   'gemini':('Gemini CLI','https://github.com/google-gemini/gemini-cli/releases')}
 UPDATE_NAMES.update({key:value[0] for key,value in MANUAL_UPDATES.items()})
 UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
 # Desktop apps update themselves: when installed, their rows open the app instead of a download page.
-UPDATE_APPS = {'claude':'Claude', 'chatgpt':'ChatGPT', 'workbuddy':'WorkBuddy'}
+UPDATE_APPS = {'claude':'Claude', 'chatgpt':'ChatGPT', 'workbuddy':'WorkBuddy', 'qoder':'Qoder'}
 
 def selected_update_ids():
     visible=set(view_settings()['visible'])
@@ -2137,6 +2139,7 @@ def source_locations(key):
         roots=[os.path.join(root,n) for n in ('sessions','archived_sessions') if os.path.isdir(os.path.join(root,n))]
         if roots:return roots
     if key=='gemini' and os.path.isdir(os.path.join(root,'tmp')):return [os.path.join(root,'tmp')]
+    if key=='qoder' and os.path.isdir(os.path.join(root,'projects')):return [os.path.join(root,'projects')]
     return [os.path.abspath(root)] if root else []
 
 
@@ -2688,10 +2691,13 @@ def dashboard_payload(data):
     # One shared bucket layout for both sources. Never mix a previous selection with the new heading.
     def provider(pid,label,usage,subtitle,status):
         summary=usage.get('summary') or {};available=bool(summary) and not usage.get('error')
-        total=number(summary.get('totalTokens'));models=usage.get('models') or []
-        model_rows=[{'name':str(row.get('model') or '未知模型'),'tokens':number(row.get('totalTokens')),
-                     'share':min(1,number(row.get('totalTokens'))/max(1,total))}
-                    for row in sorted(models,key=lambda r:number(r.get('totalTokens')),reverse=True)[:3]]
+        total=number(summary.get('totalTokens'));models=usage.get('models') or [];credits=number(summary.get('credits'))
+        # Qoder plan requests log Credits with no tokens; rank and share those models by Credits instead.
+        weight=(lambda r:number(r.get('totalTokens'))) if total or not credits else (lambda r:number(r.get('credits')))
+        scale=max(1e-9,sum(weight(r) for r in models)) if not total and credits else max(1,total)
+        model_rows=[dict({'name':str(row.get('model') or '未知模型'),'tokens':number(row.get('totalTokens')),
+                          'share':min(1,weight(row)/scale)},**({'credits':number(row.get('credits'))} if number(row.get('credits')) else {}))
+                    for row in sorted(models,key=weight,reverse=True)[:3]]
         points={int(row.get('timestamp',0)):number(row.get('totalTokens')) for row in usage.get('hours',[])} if short else {str(row.get('date',''))[:10]:number(row.get('totalTokens')) for row in usage.get('days',[])}
         history=[points.get(slot,0) for slot in slots]
         inputs=number(summary.get('inputTokens'));cache=number(summary.get('cacheReadInputTokens') or summary.get('cachedInputTokens'))
@@ -2701,8 +2707,8 @@ def dashboard_payload(data):
         if requests and unpriced>=requests:cost=None
         if not available:status=str(usage.get('error') or ('正在读取' if not bundle else '暂不可用'))
         elif usage.get('partial'):status='部分记录未读取'
-        elif unpriced>=requests and requests:status='费用待定价'
-        return {'id':pid,'name':label,'subtitle':subtitle,'status':status,'available':available,
+        elif unpriced>=requests and requests and not credits:status='费用待定价'
+        return {'id':pid,'name':label,'subtitle':subtitle,'status':status,'available':available,'credits':credits or None,
                 'cost':cost,'tokens':total,'requests':requests,'output':number(summary.get('outputTokens')),
                 'cache':min(1,cache/inputs) if inputs else None,'coverage':number(summary.get('coverageRatio')) if summary.get('coverageRatio') is not None else None,
                 'sessions':int(number(summary.get('sessions'))),'unpriced':unpriced,'models':model_rows,'history':history}

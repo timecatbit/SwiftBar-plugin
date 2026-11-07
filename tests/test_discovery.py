@@ -27,6 +27,11 @@ class DiscoveryTests(unittest.TestCase):
         found=self.detect({'deepseek-harness':str(dsh.parent.parent)})
         for key in ('claude','codex','workbuddy','gemini','opencode','deepseek-harness'):self.assertIn(key,found)
         self.assertNotIn('grok',found)
+    def test_qoder_is_detected_from_its_app_or_transcripts(self):
+        (self.home/'.qoder/projects').mkdir(parents=True);self.assertNotIn('qoder',self.detect())
+        self.put('.qoder/projects/slug/session.jsonl');self.assertIn('qoder',self.detect())
+        apps=self.home/'Applications';(apps/'Qoder.app').mkdir(parents=True)
+        self.assertIn('qoder',discovery.detect({},self.home/'empty',which=lambda _:None,app_roots=[apps]))
     def test_compressed_only_chatgpt_log_is_detected_without_executing_or_parsing(self):
         self.put('.codex/archived_sessions/day/one.jsonl.zst')
         self.assertIn('codex',self.detect())

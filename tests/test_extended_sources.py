@@ -29,6 +29,29 @@ class ExtendedSourcesTests(unittest.TestCase):
         self.assertEqual(result['summary']['cachedInputTokens'],80)
         self.assertEqual(result['summary']['unpricedRequests'],1)
         for f in self.cache.glob('*.sqlite3'):self.assertNotIn(b'PRIVATE',f.read_bytes())
+    def qoder(self,id,usage,model='qfmodel',session='s1',ts='2026-11-04T08:00:00.000Z'):
+        return {'type':'assistant','timestamp':ts,'uuid':'row-'+id,'sessionId':session,'cwd':'/tmp/p',
+                'message':{'id':id,'role':'assistant','model':model,'content':[{'type':'text','text':'PRIVATE'}],'usage':usage}}
+    def test_qoder_plan_credits_byok_tokens_rewrites_and_subagent_copies(self):
+        plan={'credits':0.73,'original_credits':0.9,'billable':False,'input_tokens':0,'output_tokens':0,'cache_read_input_tokens':0,'cache_creation_input_tokens':0}
+        byok={'input_tokens':100,'output_tokens':30,'cache_read_input_tokens':50,'cache_creation_input_tokens':20,'billable':True}
+        main=self.root/'projects/slug/s1.jsonl'
+        self.write(main,[{'type':'user','message':{'content':'PRIVATE'}},
+                         self.qoder('m1',dict(plan,credits=0.5)),self.qoder('m1',plan),
+                         self.qoder('m2',byok,model='qoder-custom-e603-42d2/glm-5.3-flash'),
+                         self.qoder('m3',{'input_tokens':0,'output_tokens':0}),self.qoder('m4',None,model='auto'),
+                         self.qoder('m5',plan,ts='not a time')])
+        self.write(self.root/'projects/slug/s1/subagents/agent-1.jsonl',[self.qoder('m1',plan),self.qoder('a1',dict(plan,credits=2))])
+        result=sources.jsonl_usage('qoder',self.root,self.cache,0,9999999999,timezone.utc)
+        summary=result['summary']
+        self.assertEqual(summary['requests'],3);self.assertAlmostEqual(summary['credits'],2.73)
+        self.assertEqual(summary['totalTokens'],200);self.assertEqual(summary['cachedInputTokens'],50)
+        models={m['model']:m for m in result['models']}
+        self.assertEqual(set(models),{'qfmodel','glm-5.3-flash'});self.assertAlmostEqual(models['qfmodel']['credits'],2.73)
+        self.assertEqual(models['qfmodel']['totalTokens'],0)
+        for f in self.cache.glob('*.sqlite3'):self.assertNotIn(b'PRIVATE',f.read_bytes())
+        # A config directory without projects/ is read as the projects folder itself.
+        self.assertEqual(sources.jsonl_usage('qoder',self.root/'projects',self.root/'other',0,9999999999,timezone.utc)['summary']['requests'],3)
     def gemini(self,id='one'):
         return {'id':id,'type':'gemini','timestamp':'2026-11-04T00:01:00Z','model':'gemini-test','tokens':{'input':100,'cached':60,'output':20,'thoughts':10,'tool':5,'total':135},'content':'PRIVATE'}
     def read_gemini(self):return sources.gemini_usage(self.root,self.cache,0,9999999999,timezone.utc)

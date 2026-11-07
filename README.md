@@ -8,7 +8,7 @@ SwiftBar 菜单栏插件：在一个原生面板里查看各 AI 编程工具的 
 
 ## 能看什么
 
-- **Harness 用量**：Claude 桌面 App、ChatGPT（Codex）、OpenCodex、OpenCode、DeepSeek Harness、WorkBuddy、Gemini CLI。显示 Token、请求、缓存命中、模型分布和趋势图，并按模型官方价估算 API 等值费用。范围可选当天、近 24 小时、近 7/30 天、本周、本月或全部。
+- **Harness 用量**：Claude 桌面 App、ChatGPT（Codex）、OpenCodex、OpenCode、DeepSeek Harness、WorkBuddy、Qoder、Gemini CLI。显示 Token、请求、缓存命中、模型分布和趋势图，并按模型官方价估算 API 等值费用；Qoder 套餐请求在本机只记 Credits、不记 Token，卡片按 Credits 显示。范围可选当天、近 24 小时、近 7/30 天、本周、本月或全部。
 - **订阅**：ChatGPT、Claude、MiniMax 显示已用百分比和重置时间，70% 起变橙、90% 起变红；Gemini、Grok、Kimi 可以手动标记。
 - **API**：DeepSeek、Kimi、Grok 显示余额；Claude 显示本月花费（需要管理员 Key）；ChatGPT、Gemini 可以测试 Key 是否可用。每个 API 可以保存多把 Key。
 - **Harness 更新**：已勾选客户端有新版本时提醒，Claude Code 和 Codex CLI 可一键在终端更新。

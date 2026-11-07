@@ -10,10 +10,10 @@ struct Entry: Decodable {
     var key:String {if isModule,let action{return action.prefix(2).joined(separator:"\u{001F}")}
         return action?.joined(separator:"\u{001F}") ?? href ?? label.components(separatedBy:" · ").first ?? label}
 }
-struct ModelUsage:Decodable {var name:String;var tokens:Double;var share:Double}
+struct ModelUsage:Decodable {var name:String;var tokens:Double;var share:Double;var credits:Double?}
 struct ProviderUsage:Decodable {
     var id:String;var name:String;var subtitle:String;var status:String;var available:Bool
-    var cost:Double?;var tokens:Double;var requests:Int;var output:Double;var cache:Double?;var coverage:Double?
+    var cost:Double?;var credits:Double?;var tokens:Double;var requests:Int;var output:Double;var cache:Double?;var coverage:Double?
     var sessions:Int;var unpriced:Int;var summaryIncluded:Bool?;var models:[ModelUsage];var history:[Double]
 }
 struct Dashboard:Decodable {var date:String;var dates:[String];var providers:[ProviderUsage];var rangeKey:String;var rangeLabel:String;var chartUnit:String;var chartSpan:String;var chartStatus:String;var chartPositions:[Double]?;var showSummary:Bool?;var allowCollapse:Bool?;var expandedProviders:[String]?}
@@ -26,6 +26,7 @@ func accent(_ id:String,_ view:NSView)->NSColor {
     if id=="codex" {return .systemPurple}
     if id=="opencode" {return .systemPink}
     if id=="workbuddy" {return .systemOrange}
+    if id=="qoder" {return .systemGreen}
     if id=="gemini" {return .systemTeal}
     if id=="deepseek-harness" {return .systemIndigo}
     return dark(view) ? NSColor(srgbRed:0.55,green:0.71,blue:0.94,alpha:1) : NSColor(srgbRed:0.32,green:0.51,blue:0.78,alpha:1)
@@ -66,6 +67,17 @@ func modelName(_ name:String)->String {
     return family.capitalized+" "+parts.dropFirst().joined(separator:".")
 }
 func money(_ value:Double?)->String {value.map{String(format:"$%.2f",$0)} ?? "—"}
+// Qoder plan requests log Qoder Credits and no tokens; Credits are never shown as dollars or tokens.
+func creditsText(_ value:Double)->String {String(format:value>=100 ? "%.0f Credits" : "%.1f Credits",value)}
+func headline(_ p:ProviderUsage)->String {
+    if p.cost==nil,let credits=p.credits {return creditsText(credits)}
+    return money(p.cost)
+}
+func tokenLine(_ p:ProviderUsage)->String {p.tokens==0 && p.credits != nil ? "Token 未记录" : tokens(p.tokens)+" Token"}
+func modelAmount(_ m:ModelUsage)->String {
+    if m.tokens==0,let credits=m.credits {return creditsText(credits)}
+    return tokens(m.tokens)
+}
 func text(_ value:String,x:CGFloat,y:CGFloat,w:CGFloat,size:CGFloat=11,color:NSColor = .labelColor,weight:NSFont.Weight = .regular,align:NSTextAlignment = .left,numeric:Bool=false) {
     let style=NSMutableParagraphStyle();style.alignment=align;style.lineBreakMode = .byTruncatingTail
     var font=numeric ? NSFont.monospacedDigitSystemFont(ofSize:size,weight:weight) : NSFont.systemFont(ofSize:size,weight:weight)
@@ -273,14 +285,14 @@ final class ShareCard:FlippedView {
                 NSColor.labelColor.withAlphaComponent(0.07).setFill();NSBezierPath(roundedRect:capsule,xRadius:8,yRadius:8).fill()
                 draw(tag,capsule.insetBy(dx:6,dy:2),tagFont,.secondaryLabelColor,.center)
             }
-            draw(money(p.cost),NSRect(x:right-130,y:y,width:130,height:20),font(15,.semibold,rounded:true),.labelColor,.right)
-            draw(tokens(p.tokens)+" Token"+(inSummary ? " · 占 "+share(p.tokens/sum) : ""),NSRect(x:left+18,y:y+21,width:width-18,height:15),font(11.5,.medium),.secondaryLabelColor)
+            draw(headline(p),NSRect(x:right-130,y:y,width:130,height:20),font(15,.semibold,rounded:true),.labelColor,.right)
+            draw(tokenLine(p)+(inSummary && p.tokens>0 ? " · 占 "+share(p.tokens/sum) : ""),NSRect(x:left+18,y:y+21,width:width-18,height:15),font(11.5,.medium),.secondaryLabelColor)
             draw(DashboardView.stats(p),NSRect(x:left+18,y:y+38,width:width-18,height:15),font(10.5,.regular),.secondaryLabelColor)
             var my=y+60
             if p.models.isEmpty{draw("此时段暂无模型调用",NSRect(x:left+18,y:my,width:width-18,height:15),font(11,.regular),.secondaryLabelColor)}
             for m in p.models{
                 draw(modelName(m.name),NSRect(x:left+18,y:my,width:width-150,height:15),font(11.5,.regular),.labelColor)
-                draw(tokens(m.tokens),NSRect(x:right-130,y:my,width:80,height:15),font(11.5,.medium,rounded:true),.labelColor,.right)
+                draw(modelAmount(m),NSRect(x:right-130,y:my,width:80,height:15),font(11.5,.medium,rounded:true),.labelColor,.right)
                 draw(share(m.share),NSRect(x:right-46,y:my,width:46,height:15),font(11,.regular),.secondaryLabelColor,.right)
                 let track=NSRect(x:left+18,y:my+16,width:width-18,height:2.5)
                 NSColor.labelColor.withAlphaComponent(0.06).setFill();NSBezierPath(roundedRect:track,xRadius:1.25,yRadius:1.25).fill()
@@ -371,8 +383,11 @@ final class DashboardView:FlippedView {
     }
     static func stats(_ p:ProviderUsage)->String {
         guard p.available else{return "等待可用数据"}
+        // Cache and output say nothing when only Credits were recorded.
+        if p.tokens==0,p.credits != nil {return "\(p.requests) 请求 · \(p.sessions) 会话"}
         var parts=["\(p.requests) 请求",p.cache.map{String(format:"缓存 %.1f%%",$0*100)} ?? "缓存 —","输出 \(tokens(p.output))"]
         if p.id=="opencodex"{if let coverage=p.coverage,coverage<1{parts.append(String(format:"已定价 %.0f%%",coverage*100))}}else{parts.append("\(p.sessions) 会话")}
+        if p.cost != nil,let credits=p.credits {parts.append(creditsText(credits))}
         return parts.joined(separator:" · ")
     }
     private func drawNote(_ p:ProviderUsage,y:CGFloat,right:CGFloat){
@@ -385,7 +400,7 @@ final class DashboardView:FlippedView {
         for (i,m) in p.models.enumerated(){
             let top=y+CGFloat(i)*18
             text(modelName(m.name),x:left,y:top,w:width-120,size:10.5)
-            text(tokens(m.tokens),x:right-115,y:top,w:72,size:10.5,align:.right,numeric:true)
+            text(modelAmount(m),x:right-115,y:top,w:72,size:10.5,align:.right,numeric:true)
             text(share(m.share),x:right-38,y:top,w:38,size:10,color:.secondaryLabelColor,align:.right,numeric:true)
             NSColor.quaternaryLabelColor.withAlphaComponent(0.12).setFill();NSRect(x:left,y:top+14,width:width,height:1.5).fill()
             c.withAlphaComponent(0.55).setFill();NSRect(x:left,y:top+14,width:width*CGFloat(m.share),height:1.5).fill()
@@ -400,8 +415,8 @@ final class DashboardView:FlippedView {
         let arrow=NSBezierPath(),x=right-5,cy=y+14
         arrow.move(to:NSPoint(x:x-3,y:cy-3));arrow.line(to:NSPoint(x:expanded ? x : x+0.5,y:cy));arrow.line(to:NSPoint(x:expanded ? x+3 : x-3,y:expanded ? cy-3 : cy+3))
         arrow.lineWidth=1.2;arrow.lineCapStyle = .round;arrow.lineJoinStyle = .round;NSColor.secondaryLabelColor.setStroke();arrow.stroke()
-        text(p.available ? money(p.cost) : "—",x:left+12,y:y+26,w:100,size:14,weight:.medium,numeric:true)
-        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+120,y:y+27,w:width-120,size:12,weight:.medium,align:.right,numeric:true)
+        text(p.available ? headline(p) : "—",x:left+12,y:y+26,w:100,size:14,weight:.medium,numeric:true)
+        text(p.available ? tokenLine(p) : "—",x:left+120,y:y+27,w:width-120,size:12,weight:.medium,align:.right,numeric:true)
         if expanded {
             text(Self.stats(p),x:left+12,y:y+50,w:width-12,size:10,color:.secondaryLabelColor)
             drawModels(p,y:y+70,left:left+12,right:right,color:c)
@@ -412,8 +427,8 @@ final class DashboardView:FlippedView {
         c.setFill();NSBezierPath(ovalIn:NSRect(x:left,y:y+14,width:5,height:5)).fill()
         text(p.name,x:left+12,y:y+8,w:width-170,size:12,weight:.semibold)
         drawNote(p,y:y+10,right:right+17)
-        text(p.available ? money(p.cost) : "—",x:left,y:y+26,w:width*0.43,size:19,weight:.medium,numeric:true)
-        text(p.available ? tokens(p.tokens)+" Token" : "—",x:left+width*0.43,y:y+28,w:width*0.57,size:16,weight:.medium,align:.right,numeric:true)
+        text(p.available ? headline(p) : "—",x:left,y:y+26,w:width*0.43,size:19,weight:.medium,numeric:true)
+        text(p.available ? tokenLine(p) : "—",x:left+width*0.43,y:y+28,w:width*0.57,size:16,weight:.medium,align:.right,numeric:true)
         text(Self.stats(p),x:left,y:y+54,w:width,size:10,color:.secondaryLabelColor)
         drawModels(p,y:y+74,left:left,right:right,color:c)
     }

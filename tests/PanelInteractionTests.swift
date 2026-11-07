@@ -168,6 +168,13 @@ expect(DashboardView.stats(card)=="731 请求 · 缓存 99.2% · 输出 810.0K �
 expect(DashboardView.note(card)==nil,"A synced provider shows no status text")
 card.subtitle="未计入 Summary";expect(DashboardView.note(card)?.0=="未计入 Summary","A note that changes how to read the totals is shown")
 card.status="部分记录未读取";expect(DashboardView.note(card)?.1==true,"Problems take the slot and are highlighted")
+// Qoder plan requests log Credits only: the card leads with Credits and never shows them as dollars or tokens.
+var qoder=ProviderUsage(id:"qoder",name:"Qoder",subtitle:"",status:"已同步",available:true,cost:nil,credits:2.73,tokens:0,requests:3,output:0,cache:nil,coverage:0,sessions:1,unpriced:3,summaryIncluded:true,models:[ModelUsage(name:"qfmodel",tokens:0,share:1,credits:2.73)],history:[])
+expect(headline(qoder)=="2.7 Credits" && tokenLine(qoder)=="Token 未记录","Credit-only cards lead with Credits")
+expect(DashboardView.stats(qoder)=="3 请求 · 1 会话" && modelAmount(qoder.models[0])=="2.7 Credits","Credit-only stats skip cache and output")
+qoder.cost=0.5;qoder.tokens=1200;qoder.output=300;qoder.cache=0.25
+expect(headline(qoder)=="$0.50" && DashboardView.stats(qoder).hasSuffix("2.7 Credits"),"Priced tokens lead; Credits move to the stats line")
+expect(creditsText(1234.4)=="1234 Credits","Large Credits drop decimals")
 // Turning folding back on folds every card at once; replaying saved settings does not.
 var folding=PanelInteraction(source:initial)
 _ = folding.submit(["set-expanded","claude","true"]);folding.finish(saved(40,["claude"]))

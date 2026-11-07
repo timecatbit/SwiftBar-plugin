@@ -14,6 +14,7 @@ MODULES = (
     ('opencode', 'OpenCode', 'Harness'),
     ('deepseek-harness', 'DeepSeek Harness', 'Harness'),
     ('workbuddy', 'WorkBuddy', 'Harness'),
+    ('qoder', 'Qoder', 'Harness'),
     ('gemini', 'Gemini CLI', 'Harness'),
 ) + tuple((s.key, s.label, s.category) for s in catalog.SERVICES) + (
     ('komari', 'Komari 监控', '其他'),
@@ -21,7 +22,7 @@ MODULES = (
 )
 DEFAULT_VISIBLE = ['summary', 'opencodex', 'claude', 'deepseek', 'chatgpt', 'komari', 'updates']
 KNOWN = {row[0] for row in MODULES}
-USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbuddy', 'gemini')
+USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbuddy', 'qoder', 'gemini')
 
 
 def read(directory):

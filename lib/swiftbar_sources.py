@@ -215,6 +215,9 @@ def _jsonl_files(root, source):
                 relative=str(path.relative_to(folder)).removesuffix('.zst')
                 chosen.setdefault(relative,path)
         return list(chosen.values())
+    if source == 'qoder':
+        # Main transcripts sort before their subagents/ folder, so a main copy is indexed first.
+        return sorted((root/'projects' if (root/'projects').is_dir() else root).rglob('*.jsonl'))
     if source == 'workbuddy':
         roots = [root/name/'projects' for name in ('.workbuddy-ai','.workbuddy') if (root/name/'projects').is_dir()]
         if not roots and root==Path.home():return []
@@ -257,7 +260,7 @@ def jsonl_usage(source, root, cache, start, end, zone, exclude_proxy=False):
         # Every copy of an event is kept per file and deduplicated when read, so a
         # vanished file (archive or compression move) only drops its own rows.
         conn.executescript('CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, inode INTEGER, size INTEGER, mtime INTEGER, offset INTEGER, state TEXT); CREATE TABLE IF NOT EXISTS events(id TEXT, file TEXT, ts REAL, data TEXT, PRIMARY KEY(id, file)); CREATE INDEX IF NOT EXISTS events_ts ON events(ts); CREATE INDEX IF NOT EXISTS events_file ON events(file);')
-        parser = {'codex':codex_event,'deepseek-harness':deepseek_event,'workbuddy':workbuddy_event}[source]
+        parser = {'codex':codex_event,'deepseek-harness':deepseek_event,'workbuddy':workbuddy_event,'qoder':qoder_event}[source]
         errors = 0
         paths = _jsonl_files(root, source)
         forget_missing(conn, {identity(str(path)) for path in paths})
@@ -339,7 +342,7 @@ def unique_events(conn, start, end):
 def aggregate(events, start, end, zone, exclude_proxy=False, price=None):
     def empty():
         return dict(totalTokens=0, inputTokens=0, outputTokens=0, cachedInputTokens=0,
-                    requests=0, estimatedCostUsd=0, unpricedRequests=0)
+                    requests=0, estimatedCostUsd=0, unpricedRequests=0, credits=0)
     summary = empty(); models = {}; days = {}; hours = {}; sessions = set(); first = None; excluded = 0
     for event in events:
         ts = event['timestamp']
@@ -347,7 +350,8 @@ def aggregate(events, start, end, zone, exclude_proxy=False, price=None):
         if exclude_proxy and str(event.get('provider', '')).lower() in ('opencodex', 'ocx'):
             excluded += 1; continue
         i, o, r, w = [number(event.get(k)) for k in ('input', 'output', 'cached', 'writes')]
-        if i + o + r + w <= 0: continue
+        credits = number(event.get('credits'))
+        if i + o + r + w <= 0 and credits <= 0: continue
         cost = event.get('cost')
         if cost is None and price: cost = price(event)
         first = ts if first is None else min(first, ts)
@@ -355,7 +359,7 @@ def aggregate(events, start, end, zone, exclude_proxy=False, price=None):
         sessions.add(event.get('session'))
         for target in [summary, models.setdefault(event['model'], empty()), days.setdefault(day, empty()), hours.setdefault(int(ts//3600)*3600, empty())]:
             target['totalTokens'] += i + o + r + w; target['inputTokens'] += i + r + w
-            target['outputTokens'] += o; target['cachedInputTokens'] += r; target['requests'] += 1
+            target['outputTokens'] += o; target['cachedInputTokens'] += r; target['requests'] += 1; target['credits'] += credits
             if cost is None: target['unpricedRequests'] += 1
             else: target['estimatedCostUsd'] += cost
     summary['sessions'] = len(sessions)
@@ -461,6 +465,34 @@ def workbuddy_event(row, state):
     if not response: return None
     event.update(id=identity('workbuddy', response), session=identity(row.get('sessionId') or state['session']),
                  timestamp=stamp(row['timestamp']), provider=provider.get('provider', ''))
+    return event
+
+
+def qoder_event(row, state):
+    """Qoder transcripts (~/.qoder/projects): Claude-style assistant rows. Plan-billed requests
+    record Qoder Credits with every token count at zero; Credits are Qoder's own unit, never USD
+    and never converted into tokens."""
+    if row.get('type') != 'assistant':
+        return None
+    message = row.get('message') or {}; usage = message.get('usage')
+    if not isinstance(usage, dict):
+        return None
+    credits = number(usage['credits']) if 'credits' in usage else number(usage.get('original_credits'))
+    model = str(message.get('model') or '')
+    # Bring-your-own-key models carry a qoder-custom-<id>/ prefix before the provider's model name.
+    if model.startswith('qoder-custom-') and '/' in model:
+        model = model.split('/', 1)[1]
+    event = metrics(model, usage.get('input_tokens'), usage.get('output_tokens'),
+                    usage.get('cache_read_input_tokens') or usage.get('cached_tokens'), usage.get('cache_creation_input_tokens'))
+    if event['input'] + event['output'] + event['cached'] + event['writes'] <= 0 and credits <= 0:
+        return None
+    session = str(row.get('sessionId') or state['session']); response = message.get('id') or row.get('uuid')
+    try: when = stamp(row.get('timestamp') or message.get('timestamp'))
+    except (TypeError, ValueError): return None
+    if not response:
+        return None
+    # A streamed reply is rewritten under the same message ID; the newest copy in a file wins.
+    event.update(id=identity('qoder', session, response), session=identity(session), credits=credits, timestamp=when)
     return event
 
 

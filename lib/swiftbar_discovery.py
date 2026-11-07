@@ -31,6 +31,8 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     for source,binary in (('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
         if which(binary):found.add(source)
     if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
+    root=Path(paths.get('qoder') or os.environ.get('QODER_CONFIG_DIR') or home/'.qoder')
+    if any((Path(r)/'Qoder.app').is_dir() for r in app_roots) or has_records(root/'projects'):found.add('qoder')
     claude_root=Path(paths.get('claude') or claude_desktop.default_root(home))
     if any((Path(root)/'Claude.app').is_dir() for root in app_roots) or claude_desktop.registry_files(claude_root):found.add('claude')
     if claude_desktop.subscription(claude_root).get('windows'):found.add('claude-subscription')
