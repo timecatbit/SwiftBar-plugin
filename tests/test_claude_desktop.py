@@ -113,6 +113,12 @@ class DesktopTests(unittest.TestCase):
    self.m.claude_subscription_load();self.assertFalse(fetch.call_args.kwargs['force'])
   rows='\n'.join(self.m.claude_subscription_lines({'claude_subscription':{'source':'claude-oauth','windows':[]}}))
   self.assertIn('param3=retry-claude-usage',rows)
+ def test_rendering_without_a_cache_never_reads_the_code_login(self):
+  preferences.update(self.m.STATE_DIR,'claude-oauth','true')
+  with patch.object(self.m.claude_oauth,'fetch',side_effect=AssertionError('rendering must not query or renew')):
+   head=self.m.panel_entries(self.m.claude_subscription_lines({}))[0]
+  self.assertEqual(head['value'],'正在读取')
+  self.assertIn('立即刷新用量',[c['label'] for c in head['children']])
  def test_refresh_failure_is_explained_once_not_on_every_row(self):
   limits={'limits':[{'kind':'weekly','percent':10,'resets_at':'2026-11-12T13:59:59Z'},{'percent':5,'scope':{'model':{'display_name':'Fable'}}}]}
   payload=dict(live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':2000,'used_credits':0})),source='claude-oauth')

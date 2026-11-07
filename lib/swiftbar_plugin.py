@@ -1517,7 +1517,11 @@ def used_text(percent):
 
 
 def claude_subscription_lines(data):
-    payload=data.get('claude_subscription') or claude_subscription_load()[0]
+    payload=data.get('claude_subscription')
+    if not payload:
+        # Rendering reads caches only. The Code login read, and a renewal that can wait ~30s for Claude Code,
+        # run in the background; only the local snapshots are read here.
+        payload={'source':'claude-oauth','state':'正在读取'} if view_settings()['claudeOAuthUsage'] else claude_subscription_load()[0]
     windows=payload.get('windows') or []
     live=payload.get('source') in ('live','claude-oauth');error=data.get('claude_subscription_error')
     if payload.get('fetchError'):error=(0,payload['fetchError'],None)
