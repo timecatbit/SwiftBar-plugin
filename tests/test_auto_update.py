@@ -39,6 +39,7 @@ class AutomaticUpdateTests(unittest.TestCase):
   self.assertEqual(self.m.auto_update_state()['status'],'running');self.notice.assert_not_called()
   self.current='2.98.0';self.m.auto_update_opencodex();self.m.auto_update_opencodex()
   self.assertEqual(self.m.auto_update_state()['status'],'succeeded');self.notice.assert_called_once()
+  self.assertTrue(self.notice.call_args.args[0].startswith('OpenCodex '),'The notice must name OpenCodex, not read as a Token Monitor update')
  def test_failure_backs_off_and_only_notifies_once(self):
   self.m.auto_update_opencodex();self.job['status']='failed';self.m.auto_update_opencodex();self.m.auto_update_opencodex()
   self.assertEqual(self.m.auto_update_state()['status'],'failed');self.assertEqual(len(self.posts()),1);self.notice.assert_called_once()

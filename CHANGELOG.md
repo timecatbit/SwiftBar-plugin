@@ -1,5 +1,9 @@
 # 更新记录
 
+## 5.13.1
+
+- 更新通知写明更新的是哪个程序：“插件已更新到 X”与“OpenCodex 已自动更新至 X”分开，不再像同一个更新执行了两遍。
+
 ## 5.13.0
 
 - 新增 Qoder CN（国内版）：Harness 统计本机记录，套餐请求按 Credits 显示（本机不记 Token）；订阅读取 Qoder CN App 记录的 Credits 用量；团队版/企业版组织可用 API Key 查看共享 Credits 余额。

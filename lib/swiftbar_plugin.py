@@ -1158,8 +1158,9 @@ def auto_update_opencodex():
             def finish(ok,message):
                 save(status='succeeded' if ok else 'failed',message=message,retryAt=0 if ok else now+3600)
                 notice_key=str(state.get('target'))+('::success' if ok else '::failure')
+                # Every notice is titled Token Monitor, so the body names the program it updated.
                 if module_enabled('opencodex') and state.get('noticeKey')!=notice_key:
-                    notify(message,subtitle='OpenCodex 自动更新');save(noticeKey=notice_key)
+                    notify('OpenCodex '+message,subtitle='OpenCodex 自动更新');save(noticeKey=notice_key)
                 invalidate_caches(['badge'])
             active=state.get('status')=='running'
             record=read_cache('badge');badge=record.get('payload') or {}
@@ -1418,13 +1419,13 @@ def self_update_worker(version):
             install_release(version,os.path.join(STATE_DIR,'logs','self-update.log'))
         except (SelfUpdateError,OSError,ValueError) as error:
             set_self_update_state(status='failed',version=version,reason=str(error) or '更新失败')
-            notify('更新失败：'+(str(error) or '未知原因'),'详情见 SwiftBarToken/logs/self-update.log')
+            notify('插件更新失败：'+(str(error) or '未知原因'),'详情见 SwiftBarToken/logs/self-update.log')
         else:
             set_self_update_state(status='done',version=version);invalidate_caches(['self_update'])
             # The running panel is the old build; it reopens from the new one on the next click.
             subprocess.run(['osascript','-e','if application id "cc.opencodex.swiftbar.panel" is running then tell application id "cc.opencodex.swiftbar.panel" to quit'],
                            capture_output=True,timeout=8,check=False)
-            notify('已更新到 '+version)
+            notify('插件已更新到 '+version,subtitle='Token Monitor 插件更新')
         refresh_swiftbar()
     return 0
 

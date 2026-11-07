@@ -38,6 +38,13 @@ class UpdateTests(unittest.TestCase):
   with patch.object(self.m,'app_info',return_value={'CFBundleShortVersionString':'4.4212.0'}),patch.object(self.m,'release_body',side_effect=TimeoutError):
    row=self.m.app_update_probe('claude')
   self.assertFalse(row['available']);self.assertIn('失败',row['status'])
+ def test_plugin_update_notices_say_it_was_the_plugin(self):
+  with patch.object(self.m,'install_release'),patch.object(self.m,'notify') as notice,patch.object(self.m.subprocess,'run'),patch.object(self.m,'refresh_swiftbar'):
+   self.m.self_update_worker('99.0.0')
+  self.assertEqual(notice.call_args.args[0],'插件已更新到 99.0.0');self.assertEqual(self.m.self_update_state()['status'],'done')
+  with patch.object(self.m,'install_release',side_effect=self.m.SelfUpdateError('安装包校验失败')),patch.object(self.m,'notify') as notice,patch.object(self.m,'refresh_swiftbar'):
+   self.m.self_update_worker('99.0.0')
+  self.assertTrue(notice.call_args.args[0].startswith('插件更新失败'))
  def test_plugin_release_row_appears_only_when_newer(self):
   import urllib.error
   def release(body=None,code=None):
