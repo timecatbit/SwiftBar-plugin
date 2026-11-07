@@ -43,7 +43,7 @@
 - 面向公开发布：OpenCodex 管理令牌只发往本机或 HTTPS；菜单文本中的远程名称开头连字符必须转义；“测试 Key”等无对话框的动作保持面板打开并就地显示进度与结果。
 - 深浅色使用动态语义颜色；左右键菜单不能同时存在。
 - 插件自身更新：后台每 6 小时 GET 一次本仓库 GitHub `releases/latest`（忽略草稿与预发布，`OCX_SELF_UPDATES=0` 关闭）。有更高版本时主页“Harness 更新”下方出现“Token Monitor · 可更新 X”一行，没有就不显示；Harness 更新模块隐藏时这一行仍保留。点“更新到 X…”须二次确认（默认取消），随后由脱离菜单进程的后台进程只下载 `releases/download/vX/token-monitor-X.zip`，按 API 的 SHA-256 digest 或同名 `.sha256` 校验，拒绝越出顶层目录的条目，用 ditto 解压后以 `--no-refresh` 运行包内 `install.py`。日志写入 `SwiftBarToken/logs/self-update.log`（600）；成功后只退出本插件面板并用 URL scheme 刷新 SwiftBar，失败在该行显示原因与重试。同一时间只运行一个更新，状态超过 15 分钟未回报视为结束。通知与确认框标题统一为 Token Monitor。
-- 更新列表、徽标、后台检查和通知跟随 Harness 的勾选；另一个联动来源是已配置 OpenCodex 时同时检查 ChatGPT 和 Codex CLI，无论 OpenCodex 是否显示在主页，不修改主页勾选。没有 OpenCodex 配置时只按勾选；订阅/API 勾选不触发应用更新。OpenCodex 仅选中其 Harness 时启动自动更新，已开始的更新继续确认结果；其他应用仅提醒，未接入自动检测的来源明确给出官网入口。检查范围变化立即废弃旧缓存，移出范围的项目不能再提醒；关闭应用更新仍停止 ChatGPT 检查与通知。
+- 更新列表、徽标、后台检查和通知跟随 Harness 的勾选；另一个联动来源是已配置 OpenCodex 时同时检查 ChatGPT 和 Codex CLI，无论 OpenCodex 是否显示在主页，不修改主页勾选。没有 OpenCodex 配置时只按勾选；订阅/API 勾选不触发应用更新。OpenCodex 仅选中其 Harness 时启动自动更新，已开始的更新继续确认结果；其他应用仅提醒，未接入自动检测的来源明确给出官网入口。Mac 桌面 App（Claude、ChatGPT、WorkBuddy）已安装时，点击其更新条目直接打开 App 由其自行更新（有新版本时说明“点击打开 App 更新”，WorkBuddy 状态为“在 App 内检查更新”），不跳转下载网页；未安装才用官网链接。CLI 与 OpenCode 等命令行来源保持原样。检查范围变化立即废弃旧缓存，移出范围的项目不能再提醒；关闭应用更新仍停止 ChatGPT 检查与通知。
 
 ## 实现与验证
 

@@ -10,6 +10,7 @@ class UpdateTests(unittest.TestCase):
   self.m=types.ModuleType('updates_test');exec(compile(CODE,str(SOURCE.parent/'lib/swiftbar_plugin.py'),'exec'),self.m.__dict__)
   configured=patch.object(self.m,'ocx_configured',return_value=False);configured.start();self.addCleanup(configured.stop)
   installed=patch.object(self.m,'app_info',return_value={});installed.start();self.addCleanup(installed.stop)
+  bundles=patch.object(self.m,'installed_app_path',return_value=None);bundles.start();self.addCleanup(bundles.stop)
  def row(self,version='4.16336.0'):
   return {'id':'claude','name':'Claude','latest':version,'current':'4.4212.0','available':True,'checkedAt':time.time()}
  def test_numeric_versions_and_unknown_values(self):
@@ -256,6 +257,22 @@ class UpdateTests(unittest.TestCase):
   self.assertEqual([r['id'] for r in rows],['opencode','gemini']);probe.assert_not_called()
   self.assertTrue(all(r['manual'] and not r['available'] for r in rows))
   self.assertNotIn('已是最新','\n'.join(self.m.app_update_lines({})))
+ def test_installed_desktop_apps_open_the_app_instead_of_a_download_page(self):
+  self.select('claude','workbuddy','gemini')
+  apps={'Claude':'/Applications/Claude.app','WorkBuddy':'/Users/me/Applications/Work Buddy.app'}
+  with patch.object(self.m,'installed_app_path',side_effect=apps.get):
+   rows={r['id']:r for r in self.m.update_rows({'app_updates':{'apps':[self.row()]}})}
+   self.assertEqual(rows['claude']['href'],'file:///Applications/Claude.app')
+   self.assertEqual(rows['workbuddy']['href'],'file:///Users/me/Applications/Work%20Buddy.app')
+   self.assertEqual(rows['workbuddy']['status'],'在 App 内检查更新')
+   self.assertTrue(rows['claude-code']['href'].startswith('https://'))
+   self.assertEqual(rows['gemini']['status'],'在官网查看更新')
+   entries=self.m.panel_entries(self.m.app_update_lines({'app_updates':{'apps':[dict(self.row(),status='有新版本')]}}))[0]['children']
+  claude=next(e for e in entries if e['label'].startswith('Claude ·'))
+  self.assertEqual(claude['href'],'file:///Applications/Claude.app');self.assertIn('点击打开 App 更新',claude['detail'])
+  with patch.object(self.m,'installed_app_path',return_value=None):
+   rows={r['id']:r for r in self.m.update_rows({})}
+  self.assertEqual(rows['claude']['href'],'https://claude.ai/download');self.assertEqual(rows['workbuddy']['status'],'在官网查看更新')
  def test_selection_changed_in_flight_cannot_publish_a_fresh_wrong_scope(self):
   self.select('claude')
   def change_while_loading(key):

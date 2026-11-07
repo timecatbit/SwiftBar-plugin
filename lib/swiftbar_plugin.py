@@ -961,6 +961,8 @@ MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
                   'gemini':('Gemini CLI','https://github.com/google-gemini/gemini-cli/releases')}
 UPDATE_NAMES.update({key:value[0] for key,value in MANUAL_UPDATES.items()})
 UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
+# Desktop apps update themselves: when installed, their rows open the app instead of a download page.
+UPDATE_APPS = {'claude':'Claude', 'chatgpt':'ChatGPT', 'workbuddy':'WorkBuddy'}
 
 def selected_update_ids():
     visible=set(view_settings()['visible'])
@@ -989,6 +991,13 @@ def newer_release(latest,current):
 
 def app_info(name):
     return memoized(('app',name),lambda:installed_app_info(name))
+
+
+def installed_app_path(name):
+    for base in ['/Applications', os.path.join(HOME,'Applications')]:
+        path=os.path.join(base,name+'.app')
+        if os.path.isdir(path):return path
+    return None
 
 
 def installed_app_info(name):
@@ -1225,7 +1234,9 @@ def update_rows(data):
     rows += [{'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'status':'等待检查','available':False}
              for key in selected if key!='opencodex' and key not in existing]
     for row in rows:
-        if row['id'] in MANUAL_UPDATES:row.update(status='在官网查看更新',available=False,manual=True)
+        app=installed_app_path(UPDATE_APPS[row['id']]) if row['id'] in UPDATE_APPS else None
+        if app:row.update(href='file://'+urllib.parse.quote(app),app=True)
+        if row['id'] in MANUAL_UPDATES:row.update(status='在 App 内检查更新' if app else '在官网查看更新',available=False,manual=True)
     by_id={row['id']:row for row in [oc]+rows}
     return [by_id[key] for key in selected]
 
@@ -1421,7 +1432,9 @@ def app_update_lines(data):
         if row.get('available') and row['id'] in ('claude-code','codex-cli'):
             detail+='\n点击运行 '+('claude update' if row['id']=='claude-code' else 'codex update')
             lines.append(item(label,level=1,paneldetail=detail,panelstatus=update_indicator(row),**act('update-cli',row['id'])))
-        else:lines.append(item(label,level=1,href=row['href'],paneldetail=detail,panelstatus=update_indicator(row)))
+        else:
+            if row.get('available') and row.get('app'):detail+='\n点击打开 App 更新'
+            lines.append(item(label,level=1,href=row['href'],paneldetail=detail,panelstatus=update_indicator(row)))
     lines.append('-----')
     if any(not r.get('manual') for r in rows):lines.append(item('立即检查更新',level=1,sfimage='arrow.clockwise',**act('check-app-updates')))
     if terminal_jobs.latest_log(STATE_DIR,[r['id'] for r in rows]):

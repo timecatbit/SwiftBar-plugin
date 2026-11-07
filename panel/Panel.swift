@@ -1126,6 +1126,10 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     private func activate(_ entry:Entry,row:Row,depth:Int){
         if entry.isModule,!row.configurationClick,let action=entry.action{performAction(action);return}
         if !entry.children.isEmpty{openFlyout(entry,row:row,depth:depth);return}
+        // Desktop app update rows link to the installed .app, which opens the app to update itself.
+        if let href=entry.href,let url=URL(string:href),url.isFileURL,url.pathExtension=="app"{
+            hide(returningFocus:false);NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration());return
+        }
         if let href=entry.href,let url=URL(string:href),["http","https","swiftbar"].contains(url.scheme ?? ""){
             // Web pages come to the front; SwiftBar commands run without taking focus from the user's app.
             let config=NSWorkspace.OpenConfiguration();config.activates=url.scheme != "swiftbar"
