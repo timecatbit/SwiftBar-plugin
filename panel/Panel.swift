@@ -1144,12 +1144,14 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         guard inside,!button.hint.isEmpty,!anchoredMenuOpen else{return}
         let task=DispatchWorkItem{[weak self,weak button] in
             guard let self,!self.anchoredMenuOpen,let button,let surface=button.window?.contentView as? Surface else{return}
-            let label=NSTextField(labelWithString:button.hint);label.font = .systemFont(ofSize:11);label.textColor = .labelColor
-            let size=label.intrinsicContentSize,anchor=surface.convert(button.bounds,from:button),width=ceil(size.width)+16
-            let bubble=FlippedView(frame:NSRect(x:min(max(8,anchor.midX-width/2),surface.bounds.width-width-8),y:anchor.maxY+4,width:width,height:ceil(size.height)+8))
+            // The bubble is sized from the drawn text and the label spans it centred, so both sides get the same space.
+            let label=NSTextField(labelWithString:button.hint);label.font = .systemFont(ofSize:11);label.textColor = .labelColor;label.alignment = .center
+            let text=(button.hint as NSString).size(withAttributes:[.font:label.font!]),height=ceil(label.intrinsicContentSize.height)
+            let anchor=surface.convert(button.bounds,from:button),width=ceil(text.width)+24
+            let bubble=FlippedView(frame:NSRect(x:min(max(8,anchor.midX-width/2),surface.bounds.width-width-8),y:anchor.maxY+4,width:width,height:height+8))
             bubble.wantsLayer=true;bubble.layer?.cornerRadius=6;bubble.layer?.borderWidth=0.5
             surface.effectiveAppearance.performAsCurrentDrawingAppearance{bubble.layer?.backgroundColor=background(surface).cgColor;bubble.layer?.borderColor=NSColor.separatorColor.cgColor}
-            label.frame=NSRect(x:8,y:4,width:ceil(size.width),height:ceil(size.height));bubble.addSubview(label)
+            label.frame=NSRect(x:0,y:4,width:width,height:height);bubble.addSubview(label)
             surface.addSubview(bubble);self.hintView=bubble
         }
         hintTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:task)
