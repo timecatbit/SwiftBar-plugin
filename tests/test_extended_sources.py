@@ -158,6 +158,9 @@ class ExtendedSourcesTests(unittest.TestCase):
             {'model_name':'not-in-plan','current_interval_total_count':0,'current_interval_status':3,'current_interval_remaining_percent':100,'current_weekly_total_count':0,'current_weekly_status':3,'current_weekly_remaining_percent':100}]})
         self.assertEqual([w['remaining'] for w in result['windows']],[10,70]);self.assertEqual(result['windows'][0]['resetsAt'],1800000000)
         self.assertFalse(accounts.minimax_quota({'base_resp':{'status_code':1004}})['windows'])
+        bounded=accounts.minimax_quota({'base_resp':{'status_code':0},'model_remains':[{'model_name':'general','current_interval_remaining_percent':60,'start_time':1799982000000,'end_time':1800000000000,
+                                       'current_weekly_remaining_percent':90,'weekly_start_time':1799395200,'weekly_end_time':1800000000}]})['windows']
+        self.assertEqual([(w['startsAt'],w['resetsAt']) for w in bounded],[(1799982000,1800000000),(1799395200,1800000000)])
     def test_account_requests_are_scoped_and_credentials_not_returned(self):
         with patch.dict(os.environ,{'XAI_MANAGEMENT_API_KEY':'private-key','XAI_TEAM_ID':'team/id'},clear=True),patch.object(accounts,'get_json',return_value={'total':{'val':'-100'}}) as fetch:
             value=accounts.account('grok');self.assertNotIn('private-key',json.dumps(value));self.assertEqual(fetch.call_args.args[0],'https://management-api.x.ai/v1/billing/teams/team%2Fid/prepaid/balance')

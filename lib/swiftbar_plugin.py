@@ -1511,6 +1511,31 @@ def usage_level(percent,stale=False):
     return 'critical' if percent>=90 else 'warning' if percent>=70 else 'normal'
 
 
+def pace_text(used,resets_at,span,now=None):
+    """Pace through a window: the share used less the share of the window gone by. Positive runs out before the
+    reset at this rate. None when the window's length or reset isn't known, or now is outside it."""
+    if not span or not resets_at:return None
+    now=time.time() if now is None else now;start=resets_at-span
+    if not start<=now<resets_at:return None
+    ahead=float(used)-100*(now-start)/span
+    if abs(ahead)<3:return '与匀速持平'
+    return '比匀速%s %d%%'%('多用' if ahead>0 else '少用',round(abs(ahead)))
+
+
+def window_detail(used,resets_at,span,read_at,failed=False):
+    """A window row's second line: when it resets, and its pace as of the reading while that is current
+    (under 10 minutes old and not followed by a failed refresh)."""
+    if not resets_at:return None
+    reset=datetime.fromtimestamp(resets_at,local_zone())
+    # The service often returns xx:59:59.999 for an xx:00 reset.
+    parts=['重置于 '+(reset+timedelta(seconds=30)).strftime('%m/%d %H:%M')]
+    if read_at and not failed and time.time()-read_at<=600:parts.append(pace_text(used,resets_at,span,read_at))
+    return ' · '.join(p for p in parts if p)
+
+
+CLAUDE_SPANS={'5 小时':5*3600}
+
+
 def used_text(percent):
     """Every subscription reports the share already used, worded like the API rows' 本月已用."""
     return '已用 %g%%'%round(min(100,max(0,float(percent))),1)
@@ -1534,14 +1559,12 @@ def claude_subscription_lines(data):
     rows=[item('Claude 订阅',badge=value,**brand_icon('claude-subscription'),panelusagelevel=usage_level(max((w['used'] for w in windows),default=0),stale or failed or not windows)),
           item('来源 · '+source,level=1,color=MUTED,size=10)]
     for w in windows:
-        reset=None
-        if w.get('resetsAt'):
-            try:
-                at=parse_iso(w['resetsAt']).astimezone(local_zone())
-                # The service often returns xx:59:59.999 for an xx:00 reset.
-                reset='重置于 '+(at+timedelta(seconds=30)).strftime('%m/%d %H:%M')
-            except ValueError:pass
-        rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=reset,level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
+        try:resets=parse_iso(w['resetsAt']).timestamp() if w.get('resetsAt') else None
+        except (ValueError,TypeError,OverflowError):resets=None
+        # Statusline and older cached readings carry no length; their labels still say it.
+        span=w.get('span') or CLAUDE_SPANS.get(w['label']) or (7*86400 if w['label'].endswith('本周') else None)
+        rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=window_detail(w['used'],resets,span,payload.get('updatedAt'),stale or failed),
+                         level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
     extra=payload.get('extraUsage')
     if isinstance(extra,dict) and extra.get('enabled'):
         symbol='$' if extra.get('currency','USD')=='USD' else extra['currency']+' '
@@ -2148,7 +2171,8 @@ def chatgpt_lines(data):
     for w in visible:
         minutes=w.get('minutes') or 0;span=('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
         window_name='ChatGPT' if str(w['name']).lower()=='codex' else str(w['name'])
-        lines.append(item(window_name+' · '+span,level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed)))
+        lines.append(item(window_name+' · '+span,level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed),
+                          paneldetail=window_detail(100-w['remaining'],w.get('resetsAt'),minutes*60,payload.get('_fetchedAt'),failed)))
     if not visible and not failed:lines.append(item(payload.get('state','未配置' if not chatgpt_configured() else '正在读取'),level=1,color=MUTED,size=10))
     if chatgpt_configured():lines.append(refresh_row(payload,error))
     lines.append(item('打开 ChatGPT',level=1,href='https://chatgpt.com',sfimage='arrow.up.right'))
@@ -2656,7 +2680,10 @@ def provider_account_lines(key,data):
     most=max((100-w['remaining'] for w in windows),default=None)
     badge=used_text(most) if windows else '待刷新' if payload.get('windows') else payload.get('state','正在读取') if connection_ready(key) else '未配置'
     rows=[item(service.label,badge=with_failure(badge,bool(windows),failed),**brand_icon(key),panelusagelevel=usage_level(most,failed) if windows else None)]
-    rows.extend(item(w['name'],level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed)) for w in windows)
+    for w in windows:
+        span=w['resetsAt']-w['startsAt'] if w.get('startsAt') and w.get('resetsAt') else 7*86400 if w['name'].endswith('本周额度') else None
+        rows.append(item(w['name'],level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed),
+                         paneldetail=window_detail(100-w['remaining'],w.get('resetsAt'),span,payload.get('_fetchedAt'),failed)))
     rows.append(refresh_row(payload,error) if connection_ready(key) else item('选择密钥文件…',level=1,**act('configure-connection',key)))
     rows.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
     return rows

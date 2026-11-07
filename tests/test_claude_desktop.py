@@ -134,6 +134,37 @@ class DesktopTests(unittest.TestCase):
   preferences.update(self.m.STATE_DIR,'claude-live','true')
   with patch.object(live,'live_subscription') as network:
    self.m.claude_subscription_load();network.assert_not_called()
+ def test_pace_compares_use_with_the_time_gone_and_needs_a_current_reading(self):
+  now=self.m.time.time();week=7*86400
+  self.assertEqual(self.m.pace_text(62,now+week/2,week,now),'比匀速多用 12%')
+  self.assertEqual(self.m.pace_text(42,now+week/2,week,now),'比匀速少用 8%')
+  self.assertEqual(self.m.pace_text(51,now+week/2,week,now),'与匀速持平')
+  for args in ((50,now+week/2,None),(50,None,week),(50,now-1,week),(50,now+week+60,week)):self.assertIsNone(self.m.pace_text(*args,now))
+  reset=lambda t:datetime.fromtimestamp(t,ZoneInfo('UTC')).isoformat()
+  limits={'limits':[{'kind':'weekly','percent':62,'resets_at':reset(now+week/2)},{'kind':'weekly','percent':5,'resets_at':reset(now+week/2),'scope':{'model':{'display_name':'Fable'}}},
+                    {'kind':'other','percent':5,'resets_at':reset(now+3600)}]}
+  payload=dict(live.parse_usage(limits,now=now),source='claude-oauth')
+  self.assertEqual([w.get('span') for w in payload['windows']],[week,week,None])
+  details=lambda p,error=None:{r['label']:r.get('detail') for r in self.m.panel_entries(self.m.claude_subscription_lines({'claude_subscription':p,'claude_subscription_error':error}))[0]['children']}
+  shown=details(payload)
+  self.assertTrue(shown['本周'].startswith('重置于 '));self.assertTrue(shown['本周'].endswith(' · 比匀速多用 12%'))
+  self.assertTrue(shown['Fable'].endswith(' · 比匀速少用 45%'));self.assertNotIn('匀速',shown['当前周期'])  # A length not known has no pace.
+  # A failed refresh or a reading over 10 minutes old keeps the reset but drops the pace.
+  self.assertNotIn('匀速',details(payload,(0,'网络错误',None))['本周'])
+  self.assertNotIn('匀速',details(dict(payload,updatedAt=now-700))['本周'])
+  # Statusline readings carry no length; the label tells it.
+  local={'source':'claude-code','updatedAt':now,'stale':False,'windows':[{'label':'5 小时','used':80,'resetsAt':reset(now+5*3600/2)}]}
+  self.assertTrue(details(local)['5 小时'].endswith('比匀速多用 30%'))
+ def test_chatgpt_and_minimax_windows_show_their_pace(self):
+  now=self.m.time.time()
+  minimax={'_fetchedAt':now,'windows':[{'name':'general · 滚动额度','remaining':20,'startsAt':now-9000,'resetsAt':now+9000},{'name':'general · 本周额度','remaining':90,'resetsAt':now+86400}]}
+  with patch.object(self.m,'connection_ready',return_value=True):
+   rows={r['label']:r.get('detail') for r in self.m.panel_entries(self.m.provider_account_lines('minimax',{'minimax':minimax}))[0]['children']}
+  self.assertTrue(rows['general · 滚动额度'].endswith('比匀速多用 30%'));self.assertTrue(rows['general · 本周额度'].endswith('比匀速少用 76%'))
+  chatgpt={'_fetchedAt':now,'windows':[{'name':'codex','minutes':300,'remaining':70,'resetsAt':now+9000}]}
+  with patch.object(self.m,'chatgpt_source',return_value='client'),patch.object(self.m,'chatgpt_configured',return_value=True):
+   rows={r['label']:r.get('detail') for r in self.m.panel_entries(self.m.chatgpt_lines({'chatgpt':chatgpt}))[0]['children']}
+  self.assertTrue(rows['ChatGPT · 5 小时'].endswith('比匀速少用 20%'))
  def test_extra_usage_shows_monthly_spend_from_oauth_cents(self):
   limits={'limits':[{'kind':'weekly','percent':12,'resets_at':'2026-11-12T13:59:59Z'}]}
   payload=live.parse_usage(dict(limits,extra_usage={'is_enabled':True,'monthly_limit':100000,'used_credits':1234.0,'utilization':1.2}))

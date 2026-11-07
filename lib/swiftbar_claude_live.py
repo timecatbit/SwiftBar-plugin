@@ -109,14 +109,18 @@ def request_json(client,session,resource):
     return data
 
 
+FIVE_HOURS=5*3600
+WEEK=7*86400
+
+
 def parse_usage(data,now=None):
     if not isinstance(data,dict):raise UsageError('用量格式尚未支持')
     windows=[];seen=set()
-    def add(label,percent,reset):
+    def add(label,percent,reset,span=None):
         if type(percent) not in (int,float) or not math.isfinite(percent) or not 0<=percent<=100:return
         if reset is not None and not isinstance(reset,str):return
         if not isinstance(label,str) or not label or (label,reset) in seen:return
-        seen.add((label,reset));windows.append({'label':label[:80],'used':percent,'resetsAt':reset})
+        seen.add((label,reset));windows.append(dict({'label':label[:80],'used':percent,'resetsAt':reset},**({'span':span} if span else {})))
     # New plan API exposes model/surface limits instead of fixed five_hour keys.
     limits=data.get('limits')
     if isinstance(limits,list):
@@ -126,14 +130,14 @@ def parse_usage(data,now=None):
             model=scope.get('model') if isinstance(scope.get('model'),dict) else {}
             surface=scope.get('surface') if isinstance(scope.get('surface'),dict) else {}
             label=model.get('display_name') or surface.get('display_name')
-            if not label:
-                group=str(row.get('group',''));kind=str(row.get('kind',''))
-                label='本周' if any(x in (group+' '+kind).lower() for x in ('week','seven_day')) else '当前周期'
-            add(label,row.get('percent'),row.get('resets_at'))
+            # The window's length, for the sidebar's pace; a kind not recognised has none.
+            kind=(str(row.get('group',''))+' '+str(row.get('kind',''))).lower()
+            span=WEEK if any(x in kind for x in ('week','seven_day')) else FIVE_HOURS if any(x in kind for x in ('five_hour','session')) else None
+            add(label or ('本周' if span==WEEK else '当前周期'),row.get('percent'),row.get('resets_at'),span)
     if not windows:
         for key,label in [('five_hour','5 小时'),('seven_day','本周'),('seven_day_opus','Opus 本周'),('seven_day_sonnet','Sonnet 本周')]:
             row=data.get(key)
-            if isinstance(row,dict):add(label,row.get('utilization'),row.get('resets_at'))
+            if isinstance(row,dict):add(label,row.get('utilization'),row.get('resets_at'),FIVE_HOURS if key=='five_hour' else WEEK)
     if not windows:raise UsageError('尚未返回可识别的订阅用量')
     result={'windows':windows,'updatedAt':time.time() if now is None else now,'stale':False,'state':'在线快照','source':'live'}
     extra=extra_usage(data)

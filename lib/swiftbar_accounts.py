@@ -164,7 +164,7 @@ def minimax_quota(data):
         model=str(row.get('model_name') or '套餐')
         if all(row.get('current_'+span+'_total_count')==0 and row.get('current_'+span+'_status')==3 for span in ('interval','weekly')):
             continue  # Not included in this plan, not 100% available.
-        for span,label,reset in [('interval','滚动额度','end_time'),('weekly','本周额度','weekly_end_time')]:
+        for span,label,start,reset in [('interval','滚动额度','start_time','end_time'),('weekly','本周额度','weekly_start_time','weekly_end_time')]:
             status=row.get('current_'+span+'_status');total=row.get('current_'+span+'_total_count')
             remaining=percent(row.get('current_'+span+'_remaining_percent'))
             if span=='weekly' and status==3:continue  # unlimited, no finite percentage
@@ -175,9 +175,10 @@ def minimax_quota(data):
                 if isinstance(total,(int,float)) and total>0 and isinstance(count,(int,float)) and 0<=count<=total:
                     remaining=100*count/total
             if remaining is None:continue
-            ends=row.get(reset)
-            ends=ends/1000 if isinstance(ends,(int,float)) and ends>1e11 else ends if isinstance(ends,(int,float)) else None
-            windows.append({'name':model+' · '+label,'remaining':remaining,'resetsAt':ends})
+            ends,starts=(v/1000 if isinstance(v,(int,float)) and v>1e11 else v if isinstance(v,(int,float)) and v>0 else None for v in (row.get(reset),row.get(start)))
+            window={'name':model+' · '+label,'remaining':remaining,'resetsAt':ends}
+            if starts and ends and ends>starts:window['startsAt']=starts  # The window's start, for the sidebar's pace.
+            windows.append(window)
     return {'state':'已同步' if windows else '暂无可读取的套餐额度','windows':windows}
 
 
