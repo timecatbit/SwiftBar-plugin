@@ -134,6 +134,8 @@ final class HintButton:NSButton {
     override func updateTrackingAreas(){super.updateTrackingAreas();if let area{removeTrackingArea(area)};area=NSTrackingArea(rect:bounds,options:[.mouseEnteredAndExited,.activeAlways,.inVisibleRect],owner:self,userInfo:nil);addTrackingArea(area!)}
     override func mouseEntered(with event:NSEvent){hovered?(self,true)}
     override func mouseExited(with event:NSEvent){hovered?(self,false)}
+    // A click hides the hint first, so it never sits under the menu the click opens.
+    override func mouseDown(with event:NSEvent){hovered?(self,false);super.mouseDown(with:event)}
 }
 final class DisclosureButton:NSButton {
     override func acceptsFirstMouse(for event:NSEvent?)->Bool{true}
@@ -1133,14 +1135,15 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
     }
     @objc private func rangeTrackingBegan(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuWillOpen(menu)}}
     @objc private func rangeTrackingEnded(_ notification:Notification){if let menu=notification.object as? NSMenu,menu === rangePicker?.menu{menuDidClose(menu)}}
-    func menuWillOpen(_ menu:NSMenu){anchoredMenuOpen=true;hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
+    func menuWillOpen(_ menu:NSMenu){anchoredMenuOpen=true;hideHint();hoverIntent.cancel();closeTask?.cancel();closeFlyouts(from:0)}
     func menuDidClose(_ menu:NSMenu){anchoredMenuOpen=false;DispatchQueue.main.async{[weak self] in self?.reload(force:true)}}
     // A short label under a header button, 350 ms after the pointer settles on it.
+    private func hideHint(){hintTask?.cancel();hintTask=nil;hintView?.removeFromSuperview();hintView=nil}
     private func hoverHint(_ button:HintButton,_ inside:Bool){
-        hintTask?.cancel();hintView?.removeFromSuperview();hintView=nil
-        guard inside,!button.hint.isEmpty else{return}
+        hideHint()
+        guard inside,!button.hint.isEmpty,!anchoredMenuOpen else{return}
         let task=DispatchWorkItem{[weak self,weak button] in
-            guard let self,let button,let surface=button.window?.contentView as? Surface else{return}
+            guard let self,!self.anchoredMenuOpen,let button,let surface=button.window?.contentView as? Surface else{return}
             let label=NSTextField(labelWithString:button.hint);label.font = .systemFont(ofSize:11);label.textColor = .labelColor
             let size=label.intrinsicContentSize,anchor=surface.convert(button.bounds,from:button),width=ceil(size.width)+16
             let bubble=FlippedView(frame:NSRect(x:min(max(8,anchor.midX-width/2),surface.bounds.width-width-8),y:anchor.maxY+4,width:width,height:ceil(size.height)+8))
@@ -1216,10 +1219,11 @@ final class App:NSObject,NSApplicationDelegate,NSMenuDelegate,NSSharingServicePi
         // Only in the gap after the heading; with a long heading the button alone carries the feedback.
         let heading=(snapshot?.dashboard?.showSummary==false ? "Harness Token 用量" : "Summary") as NSString
         let headingRight=surface.convert(NSPoint(x:12,y:0),from:row).x+ceil(heading.size(withAttributes:[.font:NSFont.systemFont(ofSize:14,weight:.semibold)]).width)+6
-        let x=anchor.minX-6-ceil(size.width)
+        // A little slack in the width keeps the last glyph from being clipped; the gap keeps it clear of the buttons.
+        let width=ceil(size.width)+4,x=anchor.minX-12-width
         NSAccessibility.post(element:shareButton ?? surface,notification:.announcementRequested,userInfo:[.announcement:current.text])
         guard x>=headingRight else{return}
-        label.frame=NSRect(x:x,y:anchor.midY-ceil(size.height)/2,width:ceil(size.width),height:ceil(size.height))
+        label.frame=NSRect(x:x,y:anchor.midY-ceil(size.height)/2,width:width,height:ceil(size.height))
         surface.addSubview(label);toastView=label
     }
     @objc private func chooseRange(_ item:NSMenuItem){if let action=item.representedObject as? [String]{performAction(action)}}
