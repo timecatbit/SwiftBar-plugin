@@ -101,6 +101,7 @@ import swiftbar_update_channels as update_channels
 import swiftbar_desktop_updates as desktop_updates
 import swiftbar_keys as keystore
 import swiftbar_qoder as qoder
+import swiftbar_alerts as alerts
 from swiftbar_time import parse_iso
 KOMARI_BASE_URL = connections.monitor_url(KOMARI_BASE_URL)
 STATE_DIR = os.path.expanduser(os.environ.get('OCX_STATE_DIR') or
@@ -1533,7 +1534,14 @@ def window_detail(used,resets_at,span,read_at,failed=False):
     return ' · '.join(p for p in parts if p)
 
 
-CLAUDE_SPANS={'5 小时':5*3600}
+def claude_span(w):
+    # Statusline and older cached readings carry no length; their labels still say it.
+    return w.get('span') or (5*3600 if w['label']=='5 小时' else 7*86400 if w['label'].endswith('本周') else None)
+
+
+def minimax_span(w):
+    if w.get('startsAt') and w.get('resetsAt'):return w['resetsAt']-w['startsAt']
+    return 7*86400 if w['name'].endswith('本周额度') else None
 
 
 def used_text(percent):
@@ -1561,9 +1569,7 @@ def claude_subscription_lines(data):
     for w in windows:
         try:resets=parse_iso(w['resetsAt']).timestamp() if w.get('resetsAt') else None
         except (ValueError,TypeError,OverflowError):resets=None
-        # Statusline and older cached readings carry no length; their labels still say it.
-        span=w.get('span') or CLAUDE_SPANS.get(w['label']) or (7*86400 if w['label'].endswith('本周') else None)
-        rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=window_detail(w['used'],resets,span,payload.get('updatedAt'),stale or failed),
+        rows.append(item(w['label'],badge=used_text(w['used']),paneldetail=window_detail(w['used'],resets,claude_span(w),payload.get('updatedAt'),stale or failed),
                          level=1,panelusagelevel=usage_level(w['used'],stale or failed)))
     extra=payload.get('extraUsage')
     if isinstance(extra,dict) and extra.get('enabled'):
@@ -1806,6 +1812,101 @@ def refresh_pricing(now=None):
             write_json_cache(os.path.join(sources.PRICING_OVERRIDE,name),data);sources.PRICING.pop(name,None)
 
 
+# A reading older than this is not current enough to alert on, or to clear an alert.
+FRESH_READING=900
+
+
+def reading_current(payload,error):
+    return bool(payload) and not refresh_failed(error) and time.time()-(payload.get('_fetchedAt') or 0)<=FRESH_READING
+
+
+def alert_windows(data):
+    """Every subscription window the homepage shows, as the usage alerts read it."""
+    out=[]
+    def add(source,name,window,used,resets_at,span,current):
+        out.append({'id':source+'|'+window,'name':name,'window':window,'used':float(used),'resetsAt':resets_at,'span':span,'current':current})
+    if module_enabled('claude-subscription'):
+        payload=data.get('claude_subscription') or {}
+        current=not payload.get('fetchError') and not refresh_failed(data.get('claude_subscription_error')) and not claude_usage_stale(payload)
+        for w in payload.get('windows') or []:
+            try:resets=parse_iso(w['resetsAt']).timestamp() if w.get('resetsAt') else None
+            except (ValueError,TypeError,OverflowError):resets=None
+            add('claude-subscription','Claude 订阅',w['label'],w['used'],resets,claude_span(w),current)
+    if module_enabled('chatgpt') and chatgpt_source()=='proxy':
+        current=reading_current(data.get('quota'),data.get('quota_error'))
+        for name,used,_ in account_usage(data):
+            if used is not None:add('chatgpt-account','ChatGPT 订阅',name,used,None,None,current)
+    elif module_enabled('chatgpt'):
+        payload=data.get('chatgpt') or {};current=reading_current(payload,data.get('chatgpt_error'))
+        for w in payload.get('windows') or []:
+            label=chatgpt_window_label(w)
+            add('chatgpt','ChatGPT 订阅',label[len('ChatGPT · '):] if label.startswith('ChatGPT · ') else label,
+                100-w['remaining'],w.get('resetsAt'),(w.get('minutes') or 0)*60 or None,current)
+    if module_enabled('minimax'):
+        payload=data.get('minimax') or {};current=reading_current(payload,data.get('minimax_error'))
+        for w in payload.get('windows') or []:add('minimax','MiniMax 订阅',w['name'],100-w['remaining'],w.get('resetsAt'),minimax_span(w),current)
+    if module_enabled('qoder-subscription'):
+        # The App writes its summary only when the user opens Credits usage; past 10 minutes it isn't current.
+        payload=data.get('qoder_subscription') or {};current=time.time()-(payload.get('observedAt') or 0)<=600
+        for field,window in (('plan','套餐 Credits'),('addOn','加购 Credits')):
+            part=payload.get(field)
+            if isinstance(part,dict) and part.get('total'):
+                add('qoder-subscription','Qoder CN 订阅',window,100*part['used']/part['total'],payload.get('resetsAt') if field=='plan' else None,None,current)
+    return out
+
+
+def alert_balances(data):
+    """One balance per account of each API with a balance alert, as the homepage total counts them."""
+    out=[]
+    for provider,line in view_settings()['balanceAlerts'].items():
+        if not module_enabled(provider):continue
+        counted=counted_values([v for v in api_values(provider,data)[1] if v.get('kind')=='balance'])
+        for v in counted:
+            # A key read as its own account goes by its name: its reading changes with every spend.
+            owner=v['label'] if v['account'][0]=='reading' else v['account'][0]+':'+v['account'][1]
+            out.append({'id':provider+'|'+owner,'name':catalog.BY_KEY[provider].label+(' · '+v['label'] if len(counted)>1 else ''),
+                        'amount':v['amount'],'currency':v['currency'],'line':line,
+                        'current':not v.get('failed') and time.time()-(v.get('at') or 0)<=FRESH_READING})
+    return out
+
+
+def alert_clock(at):
+    # The service often returns xx:59:59.999 for an xx:00 reset.
+    when=datetime.fromtimestamp(at+30,local_zone());days=(when.date()-datetime.now(local_zone()).date()).days
+    clock=when.strftime('%H:%M')
+    if days<=0:return clock
+    if days==1:return '明天 '+clock
+    if days<7:return '周'+'一二三四五六日'[when.weekday()]+' '+clock
+    return '%d月%d日 %s'%(when.month,when.day,clock)
+
+
+def alert_notice(alert):
+    """(subtitle, body) of one alert's notification; the title is always Token Monitor."""
+    if alert['kind']=='balance':
+        return '余额提醒','%s 余额 %s，已低于提醒线 %s'%(alert['name'],money_text(alert['amount'],alert['currency']),money_text(alert['line'],alert['currency']))
+    reset='，%s 重置'%alert_clock(alert['resetsAt']) if alert.get('resetsAt') else ''
+    used='%g%%'%round(alert['used'])
+    if alert['kind']=='renews':return '重置提醒','%s · %s 只用了 %s%s，记得用掉'%(alert['name'],alert['window'],used,reset)
+    return '用量提醒','%s · %s 已用 %s%s'%(alert['name'],alert['window'],used,reset)
+
+
+def post_notice(subtitle,body):
+    url='swiftbar://notify?'+urllib.parse.urlencode({'plugin':os.path.basename(PLUGIN),'title':PRODUCT,'subtitle':subtitle,'body':body,
+         'href':'swiftbar://refreshplugin?name='+urllib.parse.quote(os.path.basename(PLUGIN))})
+    try:return subprocess.run(['/usr/bin/open','-g',url],capture_output=True,timeout=5).returncode==0
+    except (OSError,subprocess.TimeoutExpired):return False
+
+
+def check_usage_alerts():
+    """Run by the background worker after its reads; only cached readings are looked at."""
+    settings=view_settings()
+    if not (settings['usageAlert'] or settings['resetReminder'] or settings['balanceAlerts']):return
+    data=cached_data();marks=alerts.load(STATE_DIR)
+    due=alerts.due(alert_windows(data),alert_balances(data),marks,settings['usageAlert'],settings['resetReminder'],time.time())
+    alerts.save(STATE_DIR,marks)
+    for alert in due[:5]:post_notice(*alert_notice(alert))
+
+
 def background_refresh():
     """One worker at a time, even when the menu is refreshed repeatedly."""
     try:
@@ -1824,6 +1925,7 @@ def background_refresh():
                     future.result()
             if ocx_configured() and (module_enabled('opencodex') or auto_update_state().get('status')=='running'):auto_update_opencodex()
             if module_enabled('updates'):notify_app_updates(update_rows({}))
+            check_usage_alerts()
             collect_cache_garbage()
         if futures:refresh_swiftbar()
         return 0
@@ -1869,8 +1971,12 @@ def schedule_background_refresh():
 
 def gather():
     """Rendering only reads caches; network and log reads run in the background worker."""
-    data = {}
     schedule_background_refresh()
+    return cached_data()
+
+
+def cached_data():
+    data = {}
     for name, ttl in EXTERNAL_TTLS.items():
         data[name], data[name + "_error"] = cache_result(read_cache(name), ttl)
     if not ocx_configured():
@@ -2146,6 +2252,12 @@ def management_lines(data):
     return result
 
 
+def chatgpt_window_label(w):
+    minutes=w.get('minutes') or 0
+    span='本周' if minutes==10080 else ('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
+    return ('ChatGPT' if str(w['name']).lower()=='codex' else str(w['name']))+' · '+span
+
+
 def chatgpt_lines(data):
     label=catalog.BY_KEY['chatgpt'].label
     if chatgpt_source()=='proxy':
@@ -2169,9 +2281,8 @@ def chatgpt_lines(data):
     lines=[item(label,badge=with_failure(badge,bool(visible),failed),**brand_icon('chatgpt'),panelusagelevel=usage_level(most,failed) if visible else None)]
     lines.append(item('来源 · 本机登录 · 编程工具额度',level=1,color=MUTED,size=10))
     for w in visible:
-        minutes=w.get('minutes') or 0;span=('%g 小时'%(minutes/60)) if minutes>=60 else ('%g 分钟'%minutes)
-        window_name='ChatGPT' if str(w['name']).lower()=='codex' else str(w['name'])
-        lines.append(item(window_name+' · '+span,level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed),
+        minutes=w.get('minutes') or 0
+        lines.append(item(chatgpt_window_label(w),level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed),
                           paneldetail=window_detail(100-w['remaining'],w.get('resetsAt'),minutes*60,payload.get('_fetchedAt'),failed)))
     if not visible and not failed:lines.append(item(payload.get('state','未配置' if not chatgpt_configured() else '正在读取'),level=1,color=MUTED,size=10))
     if chatgpt_configured():lines.append(refresh_row(payload,error))
@@ -2476,6 +2587,17 @@ def rename_api_key(provider,key_id):
     except ValueError:applescript('display alert "名字无效" message "请填写 1–24 个字符的名字。"')
 
 
+def set_balance_alert(provider):
+    """Ask for the amount under which this API's balance is told of; an empty answer turns it off."""
+    if provider not in catalog.BALANCE_APIS:raise ValueError('invalid balance alert')
+    line=view_settings()['balanceAlerts'].get(provider);currency=balance_currency(provider,api_values(provider,{})[1])
+    unit={'CNY':'元','USD':'美元'}.get(currency,currency)
+    answer=text_dialog('%s 余额降到多少%s以下时提醒？留空关闭。'%(catalog.BY_KEY[provider].label,unit),'%g'%line if line else '',title='余额提醒')
+    if answer is None:return
+    try:preferences.update(STATE_DIR,'balance-alert',provider,answer.strip().lstrip('¥$').replace(',',''))
+    except ValueError:applescript('display alert "金额无效" message "请填写大于 0 的数字，或留空关闭提醒。"')
+
+
 def remove_api_key(provider,key_id):
     entry=next((e for e in api_keys(provider) if e['id']==key_id),None)
     if entry is None:raise ValueError('unknown key')
@@ -2493,7 +2615,13 @@ def remove_api_key(provider,key_id):
 def module_options(data=None):
     settings=view_settings();connections=module_connections(data)
     settings_rows=[{'label':label,'checked':settings['appearance']==key,'radio':True,'action':['set-appearance',key],'children':[]} for key,label in [('glass','玻璃材质'),('solid','实色背景')]]
-    settings_rows.extend([{'label':'','separator':True,'children':[]},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
+    alert_rows=[{'label':'用到 %d%% 时'%level if level else '关闭','checked':settings['usageAlert']==level,'radio':True,'action':['set-usage-alert',str(level)],'children':[]}
+                for level in preferences.ALERT_LEVELS[1:]+(0,)]
+    alert_rows.extend([{'label':'','separator':True,'children':[]},
+                       {'label':'重置前提醒','detail':'每周窗口用了不到 %d%%，重置前 %d 小时提醒'%(alerts.REMINDER_UNDER,alerts.REMINDER_LEAD//3600),'checked':settings['resetReminder'],
+                        'action':['set-reset-reminder','false' if settings['resetReminder'] else 'true'],'children':[]}])
+    settings_rows.extend([{'label':'','separator':True,'children':[]},
+                          {'label':'用量提醒','symbol':'bell','value':'%d%%'%settings['usageAlert'] if settings['usageAlert'] else '关闭','children':alert_rows},{'label':'高级配置文件…','symbol':'doc.text','action':['open-settings'],'children':[]},{'label':'自动检测','symbol':'sparkle.magnifyingglass','children':detection_help_entries()},{'label':'恢复默认模块','action':['reset-modules'],'children':[]}])
     options=[{'label':'允许折叠','detail':'各模块独立展开，自动记住状态','checked':settings['allowCollapse'],'action':['set-collapse','false' if settings['allowCollapse'] else 'true'],'children':[]},
              {'label':'外观与设置','symbol':'slider.horizontal.3','children':settings_rows},
              {'label':'','separator':True,'children':[]}];group=None
@@ -2681,19 +2809,33 @@ def provider_account_lines(key,data):
     badge=used_text(most) if windows else '待刷新' if payload.get('windows') else payload.get('state','正在读取') if connection_ready(key) else '未配置'
     rows=[item(service.label,badge=with_failure(badge,bool(windows),failed),**brand_icon(key),panelusagelevel=usage_level(most,failed) if windows else None)]
     for w in windows:
-        span=w['resetsAt']-w['startsAt'] if w.get('startsAt') and w.get('resetsAt') else 7*86400 if w['name'].endswith('本周额度') else None
         rows.append(item(w['name'],level=1,badge=used_text(100-w['remaining']),panelusagelevel=usage_level(100-w['remaining'],failed),
-                         paneldetail=window_detail(100-w['remaining'],w.get('resetsAt'),span,payload.get('_fetchedAt'),failed)))
+                         paneldetail=window_detail(100-w['remaining'],w.get('resetsAt'),minimax_span(w),payload.get('_fetchedAt'),failed)))
     rows.append(refresh_row(payload,error) if connection_ready(key) else item('选择密钥文件…',level=1,**act('configure-connection',key)))
     rows.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
     return rows
 
 
-def api_lines(provider,data):
-    service=catalog.BY_KEY[provider];keys=api_keys(provider);values=[key_value(provider,e,data) for e in keys]
-    first={}
+def api_values(provider,data):
+    """Each key and what it shows, its figure tagged with the account it belongs to."""
+    keys=api_keys(provider);values=[key_value(provider,e,data) for e in keys]
     for entry,value in zip(keys,values):
-        if value.get('kind'):value['account']=key_account(provider,entry,data.get(entry['cache']) or {},value);first.setdefault(value['account'],entry)
+        value['label']=entry['label']
+        if value.get('kind'):value['account']=key_account(provider,entry,data.get(entry['cache']) or {},value)
+    return keys,values
+
+
+BALANCE_CURRENCIES={'deepseek':'CNY','grok':'USD','qoder-api':'Credits','kimi-api':'CNY'}
+
+
+def balance_currency(provider,values):
+    return next((v['currency'] for v in values if v.get('kind')=='balance'),BALANCE_CURRENCIES.get(provider,'USD'))
+
+
+def api_lines(provider,data):
+    service=catalog.BY_KEY[provider];keys,values=api_values(provider,data);first={}
+    for entry,value in zip(keys,values):
+        if value.get('account'):first.setdefault(value['account'],entry)
     rows=[item(service.label,badge=api_badge(values),**brand_icon(provider))]
     for entry,value in zip(keys,values):
         same=first.get(value.get('account'))
@@ -2703,6 +2845,10 @@ def api_lines(provider,data):
         rows.append(item(entry['label'],level=1,badge=value['text'],paneldetail=note))
         rows.extend(key_lines(provider,entry,data,2))
     rows.append(item('添加 Key…',level=1,sfimage='plus',**act('add-api-key',provider)))
+    if provider in catalog.BALANCE_APIS and keys:
+        line=view_settings()['balanceAlerts'].get(provider)
+        rows.append(item('余额提醒…',level=1,sfimage='bell',badge='低于 '+money_text(line,balance_currency(provider,values)) if line else '关闭',
+                         **act('set-balance-alert',provider)))
     rows.append(item('打开用量与账单',level=1,href=service.url,sfimage='arrow.up.right'))
     return rows
 
@@ -3047,6 +3193,11 @@ def run_action(name, extra):
     elif name == 'set-collapse':
         if len(extra)!=1:raise ValueError('invalid display action')
         preferences.update(STATE_DIR,'collapse',extra[0])
+    elif name in ('set-usage-alert','set-reset-reminder'):
+        if len(extra)!=1:raise ValueError('invalid alert setting')
+        preferences.update(STATE_DIR,'usage-alert' if name=='set-usage-alert' else 'reset-reminder',extra[0])
+    elif name == 'set-balance-alert':
+        set_balance_alert(extra[0] if len(extra)==1 else '')
     elif name == 'set-expanded':
         if len(extra)!=2:raise ValueError('invalid expansion action')
         preferences.update(STATE_DIR,'expanded',extra[0],extra[1])
@@ -3296,7 +3447,7 @@ def consume_panel_action():
                 allowed.append(node["action"])
                 # A persistent picker may queue another click before the previous refresh.
                 candidate=node['action']
-                if len(candidate)==2 and candidate[0]=='set-collapse':allowed.extend([['set-collapse',v] for v in ('true','false')])
+                if len(candidate)==2 and candidate[0] in ('set-collapse','set-reset-reminder'):allowed.extend([[candidate[0],v] for v in ('true','false')])
                 if len(candidate)==3 and candidate[0]=='set-module' and candidate[1] in preferences.KNOWN:
                     allowed.extend([['set-module',candidate[1],value] for value in ('true','false')])
             nodes.extend(node.get("children") or [])

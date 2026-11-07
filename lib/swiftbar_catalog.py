@@ -41,6 +41,7 @@ SERVICES = (
 BY_KEY = {s.key: s for s in SERVICES}
 MANUAL_SUBSCRIPTIONS = tuple(s.key for s in SERVICES if s.category == '订阅' and s.capability == 'portal')
 PORTAL_APIS = tuple(s.key for s in SERVICES if s.category == 'API' and s.capability == 'portal')
+BALANCE_APIS = tuple(s.key for s in SERVICES if s.category == 'API' and s.capability == 'balance')
 # A key alone configures these; DeepSeek can also come from OpenCodex, Grok needs a Team ID and Qoder CN an organization ID.
 KEY_ONLY_APIS = tuple(s.key for s in SERVICES if s.category == 'API' and s.key not in ('deepseek', 'grok', 'qoder-api'))
 API_KEYS = {s.key: s.credential for s in SERVICES if s.credential}

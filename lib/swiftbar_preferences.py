@@ -21,13 +21,23 @@ MODULES = (
     ('komari', 'Komari 监控', '其他'),
     ('updates', 'Harness 更新', '其他'),
 )
+ALERT_LEVELS = (0, 70, 80, 90)  # Usage alert: 0 is off.
 DEFAULT_VISIBLE = ['summary', 'opencodex', 'claude', 'deepseek', 'chatgpt', 'komari', 'updates']
 KNOWN = {row[0] for row in MODULES}
 USAGE = ('opencodex', 'claude', 'codex', 'opencode', 'deepseek-harness', 'workbuddy', 'qoder', 'gemini')
 
 
+def balance_line(value):
+    """A balance alert's amount: a positive finite number, given as a number or its text."""
+    if isinstance(value,bool):return False
+    try:number=float(value)
+    except (TypeError,ValueError):return False
+    return 0<number<1e9
+
+
 def read(directory):
-    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': False, 'expandedProviders': [], 'revision': 0, 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False}
+    defaults = {'schema': 1, 'visible': list(DEFAULT_VISIBLE), 'appearance': 'glass', 'paths': {}, 'allowCollapse': False, 'expandedProviders': [], 'revision': 0, 'configuredSubscriptions': [], 'claudeLiveUsage': False, 'claudeOAuthUsage': False,
+                'usageAlert': 90, 'resetReminder': False, 'balanceAlerts': {}}
     try:
         value = json.loads((Path(directory) / 'preferences.json').read_text())
         if not isinstance(value, dict) or value.get('schema') != 1:
@@ -44,6 +54,10 @@ def read(directory):
         if isinstance(value.get('allowCollapse'),bool):defaults['allowCollapse']=value['allowCollapse']
         if isinstance(value.get('claudeLiveUsage'),bool):defaults['claudeLiveUsage']=value['claudeLiveUsage']
         if isinstance(value.get('claudeOAuthUsage'),bool):defaults['claudeOAuthUsage']=value['claudeOAuthUsage']
+        if value.get('usageAlert') in ALERT_LEVELS and not isinstance(value['usageAlert'],bool):defaults['usageAlert']=value['usageAlert']
+        if isinstance(value.get('resetReminder'),bool):defaults['resetReminder']=value['resetReminder']
+        lines=value.get('balanceAlerts')
+        if isinstance(lines,dict):defaults['balanceAlerts']={k:v for k,v in lines.items() if k in catalog.BALANCE_APIS and balance_line(v)}
         expanded=value.get('expandedProviders')
         if isinstance(expanded,list):
             defaults['expandedProviders']=[k for k in USAGE if k in expanded]
@@ -90,6 +104,17 @@ def update(directory, kind, key=None, value=None):
     elif kind == 'claude-oauth':
         if key not in ('true','false'):raise ValueError('invalid Claude OAuth setting')
         current['claudeOAuthUsage']=key=='true'
+    elif kind == 'usage-alert':
+        if key not in [str(level) for level in ALERT_LEVELS]:raise ValueError('invalid usage alert')
+        current['usageAlert']=int(key)
+    elif kind == 'reset-reminder':
+        if key not in ('true','false'):raise ValueError('invalid reset reminder')
+        current['resetReminder']=key=='true'
+    elif kind == 'balance-alert':
+        if key not in catalog.BALANCE_APIS:raise ValueError('invalid balance alert')
+        if value in (None,'','0'):current['balanceAlerts'].pop(key,None)
+        elif balance_line(value):current['balanceAlerts'][key]=float(value)
+        else:raise ValueError('invalid balance alert')
     elif kind == 'subscription':
         if key not in catalog.MANUAL_SUBSCRIPTIONS or value not in ('true', 'false'): raise ValueError('invalid subscription')
         chosen = set(current['configuredSubscriptions'])
