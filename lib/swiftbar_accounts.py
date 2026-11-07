@@ -60,11 +60,11 @@ def xai_balance(data):
 
 
 def qoder_packages(fetch, org):
-    """Qoder Teams/Enterprise OpenAPI: the organization's shared add-on Credits still unspent.
+    """Qoder CN Teams/Enterprise OpenAPI: the organization's shared add-on Credits still unspent.
 
     Only active packages count; remainingValue is the package's nominal balance. Members' plan
     Credits are separate quotas and are not added in."""
-    base='https://api.qoder.com/v1/organizations/'+urllib.parse.quote(org,safe='')+'/resource-packages?status=active&maxResults=100'
+    base='https://api.qoder.com.cn/v1/organizations/'+urllib.parse.quote(org,safe='')+'/resource-packages?status=active&maxResults=100'
     total=Decimal(0);count=0;token=None
     for _ in range(10):
         data=fetch(base+('&nextToken='+urllib.parse.quote(token,safe='') if token else ''))
@@ -208,8 +208,8 @@ def account(source,key=None,options=None):
             url='https://management-api.x.ai/v1/billing/teams/'+urllib.parse.quote(team,safe='')+'/prepaid/balance'
             return xai_balance(get_json(url,key))
         if source=='qoder-api':
-            key=key or credential('QODER_API_KEY');org=str(options.get('org') or os.environ.get('QODER_ORG_ID','')).strip()
-            if not key or not org:return {'state':'未配置 Qoder 组织 API Key 与组织 ID'}
+            key=key or credential('QODER_CN_API_KEY');org=str(options.get('org') or os.environ.get('QODER_CN_ORG_ID','')).strip()
+            if not key or not org:return {'state':'未配置 Qoder CN 组织 API Key 与组织 ID'}
             return qoder_packages(lambda url:get_json(url,key),org)
         if source=='minimax':
             key=credential('MINIMAX_API_KEY')

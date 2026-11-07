@@ -469,7 +469,7 @@ def workbuddy_event(row, state):
 
 
 def qoder_event(row, state):
-    """Qoder transcripts (~/.qoder/projects): Claude-style assistant rows. Plan-billed requests
+    """Qoder CN transcripts (~/.qoder-cn/projects): Claude-style assistant rows. Plan-billed requests
     record Qoder Credits with every token count at zero; Credits are Qoder's own unit, never USD
     and never converted into tokens."""
     if row.get('type') != 'assistant':

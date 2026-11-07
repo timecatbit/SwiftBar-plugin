@@ -67,7 +67,7 @@ func modelName(_ name:String)->String {
     return family.capitalized+" "+parts.dropFirst().joined(separator:".")
 }
 func money(_ value:Double?)->String {value.map{String(format:"$%.2f",$0)} ?? "—"}
-// Qoder plan requests log Qoder Credits and no tokens; Credits are never shown as dollars or tokens.
+// Qoder CN plan requests log Qoder Credits and no tokens; Credits are never shown as dollars or tokens.
 func creditsText(_ value:Double)->String {String(format:value>=100 ? "%.0f Credits" : "%.1f Credits",value)}
 func headline(_ p:ProviderUsage)->String {
     if p.cost==nil,let credits=p.credits {return creditsText(credits)}

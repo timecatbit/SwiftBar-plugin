@@ -61,7 +61,7 @@ LOGO_DIR = os.path.join(ASSET_DIR, "logos")
 # Monochrome logos are template images so they follow light and dark menus.
 BRAND_LOGOS = {'ChatGPT': ('openai.svg', True), 'Claude': ('claude.svg', False), 'MiniMax': ('minimax.svg', False),
                'Gemini': ('gemini.svg', False), 'Grok': ('grok.svg', True), 'Kimi': ('kimi.svg', True),
-               'Qoder': ('qoder.svg', True)}
+               'Qoder CN': ('qoder.svg', True)}
 
 HOME = os.path.expanduser("~")
 OCX_HOME = os.path.expanduser(os.environ.get("OCX_HOME") or os.path.join(HOME, ".opencodex"))
@@ -132,7 +132,7 @@ def source_path(key):
         'opencode': os.environ.get('OPENCODE_DATA_DIR') or os.path.join(os.path.expanduser(os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')), 'opencode'),
         'deepseek-harness': os.environ.get('DSH_SESSIONS_DIR') or '',
         'workbuddy': os.environ.get('WORKBUDDY_USAGE_DIR') or HOME,
-        'qoder': os.environ.get('QODER_CONFIG_DIR') or os.path.join(HOME,'.qoder'),
+        'qoder': os.environ.get('QODERCN_CONFIG_DIR') or os.path.join(HOME,'.qoder-cn'),
         'gemini': os.environ.get('GEMINI_USAGE_DIR') or os.path.join(HOME,'.gemini'),
     }
     return os.path.expanduser(custom or defaults.get(key) or '')
@@ -217,7 +217,7 @@ def default_ready(key):
     if key=='grok':return bool(accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip())
     if key=='minimax':return bool(accounts.credential('MINIMAX_API_KEY'))
     if key=='kimi-api':return bool(accounts.credential('MOONSHOT_API_KEY'))
-    if key=='qoder-api':return bool(accounts.credential('QODER_API_KEY') and os.environ.get('QODER_ORG_ID','').strip())
+    if key=='qoder-api':return bool(accounts.credential('QODER_CN_API_KEY') and os.environ.get('QODER_CN_ORG_ID','').strip())
     if key=='claude-api':return bool(accounts.credential('ANTHROPIC_API_KEY'))
     return False
 
@@ -249,7 +249,7 @@ CONNECTION_KEYS={'app_updates':[], 'claude_subscription':[], 'qoder_subscription
                  'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
                  'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
                  'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
-                 'qoder-api':['QODER_API_KEY','QODER_API_KEY_FILE','QODER_ORG_ID'],
+                 'qoder-api':['QODER_CN_API_KEY','QODER_CN_API_KEY_FILE','QODER_CN_ORG_ID'],
                  'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
 
 def connection_fingerprint(name):
@@ -964,12 +964,12 @@ HARNESS_UPDATES = {'opencodex':'opencodex', 'claude':'claude', 'codex':'chatgpt'
 MANUAL_UPDATES = {'opencode':('OpenCode','https://opencode.ai'),
                   'deepseek-harness':('DeepSeek Harness','https://github.com/deepseek-ai/deepseek-harness/releases'),
                   'workbuddy':('WorkBuddy','https://cloud.tencent.com/product/workbuddy'),
-                  'qoder':('Qoder','https://qoder.com/download'),
+                  'qoder':('Qoder CN','https://qoder.cn/download'),
                   'gemini':('Gemini CLI','https://github.com/google-gemini/gemini-cli/releases')}
 UPDATE_NAMES.update({key:value[0] for key,value in MANUAL_UPDATES.items()})
 UPDATE_LINKS.update({key:value[1] for key,value in MANUAL_UPDATES.items()})
 # Desktop apps update themselves: when installed, their rows open the app instead of a download page.
-UPDATE_APPS = {'claude':'Claude', 'chatgpt':'ChatGPT', 'workbuddy':'WorkBuddy', 'qoder':'Qoder'}
+UPDATE_APPS = {'claude':('Claude',), 'chatgpt':('ChatGPT',), 'workbuddy':('WorkBuddy',), 'qoder':('Qoder CN','QoderCN')}
 
 def selected_update_ids():
     visible=set(view_settings()['visible'])
@@ -998,6 +998,10 @@ def newer_release(latest,current):
 
 def app_info(name):
     return memoized(('app',name),lambda:installed_app_info(name))
+
+
+def update_app_path(key):
+    return next((path for path in map(installed_app_path,UPDATE_APPS.get(key,())) if path),None)
 
 
 def installed_app_path(name):
@@ -1241,7 +1245,7 @@ def update_rows(data):
     rows += [{'id':key,'name':UPDATE_NAMES[key],'href':UPDATE_LINKS[key],'status':'等待检查','available':False}
              for key in selected if key!='opencodex' and key not in existing]
     for row in rows:
-        app=installed_app_path(UPDATE_APPS[row['id']]) if row['id'] in UPDATE_APPS else None
+        app=update_app_path(row['id'])
         if app:row.update(href='file://'+urllib.parse.quote(app),app=True)
         if row['id'] in MANUAL_UPDATES:row.update(status='在 App 内检查更新' if app else '在官网查看更新',available=False,manual=True)
     by_id={row['id']:row for row in [oc]+rows}
@@ -1566,7 +1570,7 @@ def credits_amount(value):
 
 
 def qoder_subscription_lines(data):
-    """Plan and add-on Credits from the Qoder app's last logged summary, with when it was logged."""
+    """Plan and add-on Credits from the Qoder CN app's last logged summary, with when it was logged."""
     service=catalog.BY_KEY['qoder-subscription'];payload=data.get('qoder_subscription') or {}
     error=data.get('qoder_subscription_error');failed=refresh_failed(error)
     windows=[(name,q) for name,q in (('套餐 Credits',payload.get('plan')),('加购 Credits',payload.get('addOn'))) if isinstance(q,dict) and q.get('total')]
@@ -1576,20 +1580,20 @@ def qoder_subscription_lines(data):
     most=max((100*q['used']/q['total'] for _,q in windows),default=None)
     if windows:badge=used_text(most)+(' · 截至 '+snapshot_time(observed) if stale else '')
     elif observed:badge='额度已用完' if payload.get('exceeded') else '无 Credits 额度'
-    else:badge='暂无本机记录' if connection_ready('qoder-subscription') else '未发现 Qoder App'
+    else:badge='暂无本机记录' if connection_ready('qoder-subscription') else '未发现 Qoder CN'
     rows=[item(service.label,badge=with_failure(badge,bool(windows),failed),**brand_icon('qoder-subscription'),
                panelusagelevel=usage_level(most,stale or failed) if windows else None),
-          item('来源 · Qoder App 本机记录',level=1,color=MUTED,size=10)]
+          item('来源 · Qoder CN 本机记录',level=1,color=MUTED,size=10)]
     for name,q in windows:
         used=100*q['used']/q['total'];detail='%s / %s · 剩余 %s'%(credits_amount(q['used']),credits_amount(q['total']),credits_amount(q['remaining']))
         if name=='套餐 Credits' and payload.get('resetsAt'):detail+='\n重置于 '+datetime.fromtimestamp(payload['resetsAt'],local_zone()).strftime('%m/%d %H:%M')
         rows.append(item(name,badge=used_text(used),paneldetail=detail,level=1,panelusagelevel=usage_level(used,stale or failed)))
-    hint='在 Qoder App 右下角打开 Credits 用量后更新'
+    hint='在 Qoder CN 窗口右下角打开 Credits 用量后更新'
     if failed:rows.append(item('更新时间',badge='刷新失败',paneldetail=str(error[1]),level=1,color=WARN,size=10))
     elif observed:rows.append(item('更新时间',badge=freshness({'_fetchedAt':observed}),paneldetail=hint if stale else None,level=1,color=MUTED,size=10))
     else:rows.append(item(hint,level=1,color=MUTED,size=10))
-    app=installed_app_path('Qoder')
-    if app:rows.append(item('打开 Qoder',level=1,sfimage='macwindow',href='file://'+urllib.parse.quote(app)))
+    app=update_app_path('qoder')
+    if app:rows.append(item('打开 Qoder CN',level=1,sfimage='macwindow',href='file://'+urllib.parse.quote(app)))
     rows.append(item('打开订阅用量',level=1,sfimage='arrow.up.right',href=service.url))
     return rows
 
@@ -2358,9 +2362,9 @@ def ask_option(key,current=''):
         return team
     if key=='minimax':return choose_region('MiniMax 套餐','选择密钥所属地区',('国际站','international'),('中国站','china'))
     if key=='qoder-api':
-        org=text_dialog('Qoder 组织 ID（组织设置网址 qoder.com/organizations/<组织 ID>/settings 中的那一段）',current)
+        org=text_dialog('Qoder CN 组织 ID（组织设置网址 qoder.cn/organizations/<组织 ID>/settings 中的那一段）',current)
         if org is not None and not re.fullmatch(r'[A-Za-z0-9_-]+',org):
-            applescript('display alert "组织 ID 无效" message "请填写 Qoder 组织设置网址中的组织 ID。"');return None
+            applescript('display alert "组织 ID 无效" message "请填写 Qoder CN 组织设置网址中的组织 ID。"');return None
         return org
     if key=='kimi-api':return choose_region('Kimi API','选择 Key 所属平台：中国站 platform.moonshot.cn，国际站 platform.moonshot.ai',('中国站','china'),('国际站','international'))
     return ''
@@ -2372,7 +2376,7 @@ def configure_connection(key,clear=False):
            'grok':['XAI_MANAGEMENT_API_KEY','XAI_MANAGEMENT_API_KEY_FILE','XAI_TEAM_ID'],
            'minimax':['MINIMAX_API_KEY','MINIMAX_API_KEY_FILE','MINIMAX_REGION'],
            'kimi-api':['MOONSHOT_API_KEY','MOONSHOT_API_KEY_FILE','MOONSHOT_REGION'],
-           'qoder-api':['QODER_API_KEY','QODER_API_KEY_FILE','QODER_ORG_ID'],
+           'qoder-api':['QODER_CN_API_KEY','QODER_CN_API_KEY_FILE','QODER_CN_ORG_ID'],
            'claude-api':['ANTHROPIC_API_KEY','ANTHROPIC_API_KEY_FILE']}
     for api in catalog.PORTAL_APIS:
         names[api]=[name+suffix for name in catalog.credential_names(api) for suffix in ('','_FILE')]
@@ -2393,7 +2397,7 @@ def configure_connection(key,clear=False):
         filename=response.stdout.strip()
         if not os.path.isfile(filename):return
         values[names[key][1]]=filename
-        option=ask_option(key,os.environ.get({'grok':'XAI_TEAM_ID','qoder-api':'QODER_ORG_ID'}.get(key,''),''))
+        option=ask_option(key,os.environ.get({'grok':'XAI_TEAM_ID','qoder-api':'QODER_CN_ORG_ID'}.get(key,''),''))
         if option is None:return
         if option:values[names[key][2]]=option
     previous=[os.environ.get(name,'') for name in names[key] if name.endswith('_FILE')]
@@ -2421,7 +2425,7 @@ def add_api_key(provider):
     if not keystore.LABEL.fullmatch(name):
         applescript('display alert "名字无效" message "请填写 1–24 个字符的名字。"');return
     note='\n管理员 Key 权限很大，建议在控制台设置过期时间；插件只用它读取花费。' if provider=='claude-api' else ''
-    secret=text_dialog({'grok':'xAI 管理密钥（Management API Key）','qoder-api':'Qoder 组织 API Key（组织管理员在 设置 → 高级 → API Keys 创建，仅 Teams/Enterprise）'}.get(provider,service.label+' Key')+'\n只保存在本机仅你可读的文件中，不会显示或上传。'+note,hidden=True,title='添加 Key')
+    secret=text_dialog({'grok':'xAI 管理密钥（Management API Key）','qoder-api':'Qoder CN 组织 API Key（组织管理员在 设置 → 高级 → API 密钥 创建，仅团队版/企业版）'}.get(provider,service.label+' Key')+'\n只保存在本机仅你可读的文件中，不会显示或上传。'+note,hidden=True,title='添加 Key')
     if secret is None:return
     if not connections.KEY_FORMAT.fullmatch(secret):
         applescript('display alert "Key 格式无效" message "请粘贴完整的 API Key，不含空格或换行。"');return
@@ -2593,8 +2597,8 @@ def key_lines(provider,entry,data,level):
     if isinstance(payload.get('packages'),int):
         # The balance is the organization's shared add-on pool; members' plan Credits are separate.
         rows.append(item('组织共享加购 Credits',level=level,badge='%d 个有效资源包'%payload['packages'],paneldetail='不含成员各自的套餐 Credits'))
-        if entry.get('options',{}).get('org') or (entry['id']=='default' and os.environ.get('QODER_ORG_ID')):
-            rows.append(item('组织 ID',level=level,badge=entry.get('options',{}).get('org') or os.environ.get('QODER_ORG_ID'),color=MUTED,size=10))
+        if entry.get('options',{}).get('org') or (entry['id']=='default' and os.environ.get('QODER_CN_ORG_ID')):
+            rows.append(item('组织 ID',level=level,badge=entry.get('options',{}).get('org') or os.environ.get('QODER_CN_ORG_ID'),color=MUTED,size=10))
     if payload.get('permission') is False:
         rows.append(item(payload.get('state','没有查看花费的权限'),level=level,color=WARN,size=10,
                          paneldetail='需要管理员 Key（sk-ant-admin…），个人组织需先转为团队组织' if payload.get('reason')!='workspace' else '这把 Key 绑定了 Workspace，换用管理员 Key（sk-ant-admin…）'))
@@ -2749,7 +2753,7 @@ def dashboard_payload(data):
     def provider(pid,label,usage,subtitle,status):
         summary=usage.get('summary') or {};available=bool(summary) and not usage.get('error')
         total=number(summary.get('totalTokens'));models=usage.get('models') or [];credits=number(summary.get('credits'))
-        # Qoder plan requests log Credits with no tokens; rank and share those models by Credits instead.
+        # Qoder CN plan requests log Credits with no tokens; rank and share those models by Credits instead.
         weight=(lambda r:number(r.get('totalTokens'))) if total or not credits else (lambda r:number(r.get('credits')))
         scale=max(1e-9,sum(weight(r) for r in models)) if not total and credits else max(1,total)
         model_rows=[dict({'name':str(row.get('model') or '未知模型'),'tokens':number(row.get('totalTokens')),

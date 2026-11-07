@@ -32,8 +32,8 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     for source,binary in (('codex','codex'),('opencode','opencode'),('gemini','gemini'),('deepseek-harness','dsh')):
         if which(binary):found.add(source)
     if any((Path(root)/'WorkBuddy.app').is_dir() for root in app_roots):found.add('workbuddy')
-    root=Path(paths.get('qoder') or os.environ.get('QODER_CONFIG_DIR') or home/'.qoder')
-    if any((Path(r)/'Qoder.app').is_dir() for r in app_roots) or has_records(root/'projects'):found.add('qoder')
+    root=Path(paths.get('qoder') or os.environ.get('QODERCN_CONFIG_DIR') or home/'.qoder-cn')
+    if which('qodercn') or any((Path(r)/name).is_dir() for r in app_roots for name in ('Qoder CN.app','QoderCN.app')) or has_records(root/'projects'):found.add('qoder')
     if qoder.snapshot(home):found.add('qoder-subscription')
     claude_root=Path(paths.get('claude') or claude_desktop.default_root(home))
     if any((Path(root)/'Claude.app').is_dir() for root in app_roots) or claude_desktop.registry_files(claude_root):found.add('claude')
@@ -67,7 +67,7 @@ def detect(paths, home=None, configured_proxy=False, komari_url='', which=shutil
     if accounts.credential('DEEPSEEK_API_KEY') or official and provider.get('apiKey'):found.add('deepseek')
     if accounts.credential('MINIMAX_API_KEY'):found.add('minimax')
     if accounts.credential('XAI_MANAGEMENT_API_KEY') and os.environ.get('XAI_TEAM_ID','').strip():found.add('grok')
-    if accounts.credential('QODER_API_KEY') and os.environ.get('QODER_ORG_ID','').strip():found.add('qoder-api')
+    if accounts.credential('QODER_CN_API_KEY') and os.environ.get('QODER_CN_ORG_ID','').strip():found.add('qoder-api')
     for key in catalog.KEY_ONLY_APIS:
         if any(accounts.credential(name) for name in catalog.credential_names(key)):found.add(key)
     found.update(k for k in configured_subscriptions if k in catalog.MANUAL_SUBSCRIPTIONS)

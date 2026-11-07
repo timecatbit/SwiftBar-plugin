@@ -1,9 +1,9 @@
-"""Qoder plan Credits from the desktop app's own log. Read-only; no network, no login data.
+"""Qoder CN plan Credits from the desktop app's own log. Read-only; no network, no login data.
 
-Qoder has no personal usage API. When its Credits panel is opened, the app writes an
+Qoder CN has no personal usage API. When its Credits panel is opened, the app writes an
 account.getQuotaUsage summary to logs/<session>/main.log. Only the Credits fields of that
 summary are kept, never the rest of the line or the log. Format as observed by TokenTracker
-(MIT) for Qoder 0.4.x.
+(MIT) for Qoder CN 0.4.x (com.qodercn.app.stable).
 """
 import json
 import re
@@ -22,7 +22,7 @@ NO_RESET = 4102444800
 
 def log_roots(home):
     base = Path(home) / 'Library' / 'Application Support'
-    return [base / 'com.qoder.app.stable' / 'logs', base / 'Qoder' / 'logs']
+    return [base / 'com.qodercn.app.stable' / 'logs', base / 'QoderCN' / 'logs']
 
 
 def log_files(home, now):
