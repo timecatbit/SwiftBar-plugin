@@ -5,6 +5,7 @@ import tempfile
 import time
 from pathlib import Path
 import swiftbar_catalog as catalog
+import swiftbar_files as files
 
 MODULES = (
     ('summary', 'Summary', '概览'),
@@ -66,6 +67,8 @@ def write(directory, value):
     try:
         with os.fdopen(fd, 'w') as handle:
             json.dump(value, handle, ensure_ascii=False)
+        # read() fell back to defaults for a file it couldn't use; keep the user's original before replacing it.
+        files.keep_unreadable(root / 'preferences.json')
         os.replace(temporary, root / 'preferences.json')
     finally:
         if os.path.exists(temporary):

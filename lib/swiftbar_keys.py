@@ -7,6 +7,7 @@ import secrets
 import tempfile
 
 from swiftbar_config import KEY_FORMAT
+import swiftbar_files as files
 
 LABEL = re.compile(r'[^\x00-\x1f\x7f|]{1,24}')
 EMPTY = {'schema': 1, 'providers': {}, 'labels': {}}
@@ -44,6 +45,8 @@ def load(state):
 
 
 def save(state, data):
+    # load() reads a damaged index as empty; keep the original names and options before replacing it.
+    files.keep_unreadable(root(state) / 'index.json')
     write_private(root(state) / 'index.json', json.dumps(data, ensure_ascii=False))
 
 

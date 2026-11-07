@@ -29,6 +29,24 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual((Path(self.m.STATE_DIR)/'preferences.json').stat().st_mode & 0o777,0o600)
         preferences.update(self.m.STATE_DIR,'reset')
         self.assertIn('komari',preferences.read(self.m.STATE_DIR)['visible'])
+    def test_unreadable_state_files_are_kept_before_being_replaced(self):
+        root=Path(self.m.STATE_DIR);root.mkdir(parents=True,exist_ok=True)
+        broken='{"schema":1,"visible":["komari",'
+        (root/'preferences.json').write_text(broken)
+        self.toggle('deepseek',True)
+        kept=list(root.glob('preferences.unreadable-*.json'))
+        self.assertEqual([p.read_text() for p in kept],[broken]);self.assertEqual(kept[0].stat().st_mode&0o777,0o600)
+        self.assertTrue(preferences.read(self.m.STATE_DIR)['revision'])
+        self.toggle('deepseek',False)  # A readable file is replaced as before, with no further copy.
+        self.assertEqual(len(list(root.glob('preferences.unreadable-*'))),1)
+        index=root/'keys/index.json';index.parent.mkdir(mode=0o700);index.write_text('{"schema":2}')
+        self.m.keystore.add(self.m.STATE_DIR,'kimi-api','新','sk-'+'a'*24)
+        self.assertEqual([p.read_text() for p in index.parent.glob('index.unreadable-*.json')],['{"schema":2}'])
+        def refuse(*args):raise PermissionError('read-only')
+        with patch('swiftbar_files.os',types.SimpleNamespace(open=refuse,O_WRONLY=0,O_CREAT=0,O_EXCL=0)):
+            (root/'preferences.json').write_text('not json')
+            with self.assertRaises(PermissionError):self.toggle('deepseek',True)
+        self.assertEqual((root/'preferences.json').read_text(),'not json')  # No copy, no write.
     def test_one_render_reads_a_single_settings_snapshot(self):
         self.toggle('komari',True)
         self.m.RENDER_MEMO={}
